@@ -79,7 +79,7 @@ cmd_check() {
 
     write_update_status "CHECKING" "$branch" "$local_ver" "-" "Checking GitHub repository..."
 
-    raw_ver=$(curl -fsSL --connect-timeout 5 --max-time 10 "${REPO_RAW}/${branch}/version.txt" 2>/dev/null | tr -d ' \t\r\n' || true)
+    raw_ver=$(curl -fsSL --connect-timeout 5 --max-time 10 "${REPO_RAW}/${branch}/version.txt?_=$(date +%s)" 2>/dev/null | tr -d ' \t\r\n' || true)
 
     if [ -z "$raw_ver" ]; then
         echo "Error: Failed to fetch version info from ${REPO_RAW}/${branch}/version.txt"
@@ -126,19 +126,20 @@ cmd_apply() {
     # 1. Download updated scripts, webui, and version.txt from raw GitHub
     echo "[*] Downloading scripts from branch '${branch}'..."
     failed=0
+    cb=$(date +%s)
     for f in apply_config.sh sync_nodes.sh unifi-bridge.sh update.sh watchdog.sh; do
-        if ! curl -fsSL --connect-timeout 8 --max-time 20 "${REPO_RAW}/${branch}/scripts/${f}" -o "${tmp_dir}/${f}"; then
+        if ! curl -fsSL --connect-timeout 8 --max-time 20 "${REPO_RAW}/${branch}/scripts/${f}?_=${cb}" -o "${tmp_dir}/${f}"; then
             echo "[!] Failed downloading scripts/${f}"
             failed=1
         fi
     done
 
-    if ! curl -fsSL --connect-timeout 8 --max-time 20 "${REPO_RAW}/${branch}/webui/unifi-bridge.asp" -o "${tmp_dir}/unifi-bridge.asp"; then
+    if ! curl -fsSL --connect-timeout 8 --max-time 20 "${REPO_RAW}/${branch}/webui/unifi-bridge.asp?_=${cb}" -o "${tmp_dir}/unifi-bridge.asp"; then
         echo "[!] Failed downloading webui/unifi-bridge.asp"
         failed=1
     fi
 
-    if ! curl -fsSL --connect-timeout 8 --max-time 20 "${REPO_RAW}/${branch}/version.txt" -o "${tmp_dir}/version.txt"; then
+    if ! curl -fsSL --connect-timeout 8 --max-time 20 "${REPO_RAW}/${branch}/version.txt?_=${cb}" -o "${tmp_dir}/version.txt"; then
         echo "[!] Failed downloading version.txt"
         failed=1
     fi
