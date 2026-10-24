@@ -79,10 +79,21 @@ cmd_check() {
 
     write_update_status "CHECKING" "$branch" "$local_ver" "-" "Checking GitHub repository..."
 
-    raw_ver=$(curl -fsSL --connect-timeout 5 --max-time 10 "${REPO_RAW}/${branch}/version.txt?_=$(date +%s)" 2>/dev/null | tr -d ' \t\r\n' || true)
+    raw_ver=""
+    if [ "$branch" = "main" ]; then
+        # Query latest official release tag via redirect (instant, zero rate limit)
+        rel_tag=$(curl -sI --connect-timeout 4 --max-time 6 "${REPO_RELEASES}/latest" 2>/dev/null | grep -i '^Location:' | awk -F'/' '{print $NF}' | tr -d ' \t\r\n' || true)
+        if [ -n "$rel_tag" ]; then
+            raw_ver="$rel_tag"
+        fi
+    fi
 
     if [ -z "$raw_ver" ]; then
-        echo "Error: Failed to fetch version info from ${REPO_RAW}/${branch}/version.txt"
+        raw_ver=$(curl -fsSL --connect-timeout 5 --max-time 10 "${REPO_RAW}/${branch}/version.txt" 2>/dev/null | tr -d ' \t\r\n' || true)
+    fi
+
+    if [ -z "$raw_ver" ]; then
+        echo "Error: Failed to fetch version info from GitHub"
         write_update_status "ERROR" "$branch" "$local_ver" "-" "Unable to reach GitHub to check version"
         return 1
     fi
