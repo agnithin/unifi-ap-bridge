@@ -205,6 +205,14 @@ func (p *AsusProvider) GetVAPs(wlanMapping map[string]string) ([]telemetry.VAP, 
 
 		vapIndex++
 
+		var vapTxBytes, vapRxBytes, vapTxPackets, vapRxPackets int64
+		for _, s := range stations {
+			vapTxBytes += s.TxBytes
+			vapRxBytes += s.RxBytes
+			vapTxPackets += s.TxPackets
+			vapRxPackets += s.RxPackets
+		}
+
 		vap := telemetry.VAP{
 			Name:      vapName,
 			Radio:     band,
@@ -217,6 +225,10 @@ func (p *AsusProvider) GetVAPs(wlanMapping map[string]string) ([]telemetry.VAP, 
 			Up:        true,
 			IsGuest:   false,
 			NumSta:    len(stations),
+			TxBytes:   vapTxBytes,
+			RxBytes:   vapRxBytes,
+			TxPackets: vapTxPackets,
+			RxPackets: vapRxPackets,
 			StaTable:  stations,
 		}
 
@@ -293,18 +305,71 @@ func (p *AsusProvider) getStationsForIface(iface, vapName, bssid, ssid string, c
 	return stations
 }
 
-func (p *AsusProvider) GetRadioStats() ([]telemetry.RadioStat, error) {
-	radios, err := p.GetRadios()
-	if err != nil {
-		return nil, err
+func (p *AsusProvider) parseChanimStats(iface string) (cuTotal int, cuSelfRx int, cuSelfTx int) {
+	raw, err := p.wlCmd(iface, "chanim_stats")
+	if err != nil || len(raw) == 0 {
+		return 0, 0, 0
 	}
+	lines := strings.Split(raw, "\n")
+	var headerIdx map[string]int
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		if fields[0] == "chanspec" {
+			headerIdx = make(map[string]int)
+			for i, h := range fields {
+				headerIdx[h] = i
+			}
+			continue
+		}
+		if headerIdx != nil && strings.HasPrefix(fields[0], "0x") {
+			if txIdx, ok := headerIdx["tx"]; ok && txIdx < len(fields) {
+				if v, err := strconv.Atoi(fields[txIdx]); err == nil {
+					cuSelfTx = v
+				}
+			}
+			if rxIdx, ok := headerIdx["inbss"]; ok && rxIdx < len(fields) {
+				if v, err := strconv.Atoi(fields[rxIdx]); err == nil {
+					cuSelfRx = v
+				}
+			}
+			if idleIdx, ok := headerIdx["idle"]; ok && idleIdx < len(fields) {
+				if v, err := strconv.Atoi(fields[idleIdx]); err == nil {
+					cuTotal = 100 - v
+					if cuTotal < 0 {
+						cuTotal = 0
+					} else if cuTotal > 100 {
+						cuTotal = 100
+					}
+				}
+			}
+			break
+		}
+	}
+	return cuTotal, cuSelfRx, cuSelfTx
+}
 
-	stats := make([]telemetry.RadioStat, 0, len(radios))
-	for _, r := range radios {
+func (p *AsusProvider) GetRadioStats() ([]telemetry.RadioStat, error) {
+	ifaces := p.getRadioInterfaces()
+	stats := make([]telemetry.RadioStat, 0, len(ifaces))
+
+	for _, iface := range ifaces {
+		chanspecRaw, _ := p.wlCmd(iface, "chanspec")
+		channel, _ := ParseChanspec(chanspecRaw)
+		band := BandForChannel(channel)
+		radioName := "wifi-" + band
+
+		cuTotal, cuSelfRx, cuSelfTx := p.parseChanimStats(iface)
+
 		stats = append(stats, telemetry.RadioStat{
-			Name:    r.Name,
-			Channel: r.Channel,
-			NumSta:  0, // Populated dynamically by bridge daemon based on active VAPs
+			Name:     radioName,
+			Channel:  channel,
+			NumSta:   0, // Populated dynamically by bridge daemon based on active VAPs
+			CuTotal:  cuTotal,
+			CuSelfRx: cuSelfRx,
+			CuSelfTx: cuSelfTx,
 		})
 	}
 	return stats, nil

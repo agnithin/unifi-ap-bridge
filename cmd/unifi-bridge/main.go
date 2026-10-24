@@ -93,11 +93,15 @@ func updateWebUIStatus(host *providers.HostInfo, modelProfile models.ModelProfil
 
 	sta2G := 0
 	sta5G := 0
+	cuTotal2G := 0
+	cuTotal5G := 0
 	for _, rs := range radioStats {
 		if rs.Channel <= 14 {
 			sta2G += rs.NumSta
+			cuTotal2G = rs.CuTotal
 		} else {
 			sta5G += rs.NumSta
+			cuTotal5G = rs.CuTotal
 		}
 	}
 
@@ -132,6 +136,8 @@ func updateWebUIStatus(host *providers.HostInfo, modelProfile models.ModelProfil
 		"total_stations": totalStations,
 		"stations_2g":    sta2G,
 		"stations_5g":    sta5G,
+		"cu_total_2g":    cuTotal2G,
+		"cu_total_5g":    cuTotal5G,
 		"radio_stats":    radioStats,
 		"recent_logs":    logsCopy,
 	}
@@ -245,20 +251,27 @@ func main() {
 			return fmt.Errorf("failed to get vaps: %w", err)
 		}
 
-		// Calculate radio stats per radio
-		radioStats = make([]telemetry.RadioStat, 0, len(radios))
-		for _, r := range radios {
+		// Retrieve radio stats including RF channel utilization and airtime metrics
+		radioStats, err = provider.GetRadioStats()
+		if err != nil || len(radioStats) == 0 {
+			radioStats = make([]telemetry.RadioStat, 0, len(radios))
+			for _, r := range radios {
+				radioStats = append(radioStats, telemetry.RadioStat{
+					Name:    r.Name,
+					Channel: r.Channel,
+				})
+			}
+		}
+
+		// Calculate station count per radio
+		for i := range radioStats {
 			staCount := 0
 			for _, v := range vaps {
-				if v.Radio == r.Radio {
+				if radioStats[i].Name == v.RadioName || radioStats[i].Name == ("wifi-"+v.Radio) {
 					staCount += v.NumSta
 				}
 			}
-			radioStats = append(radioStats, telemetry.RadioStat{
-				Name:    r.Name,
-				Channel: r.Channel,
-				NumSta:  staCount,
-			})
+			radioStats[i].NumSta = staCount
 		}
 
 		for _, v := range vaps {

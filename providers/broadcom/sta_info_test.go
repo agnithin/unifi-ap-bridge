@@ -89,3 +89,72 @@ func TestParseStaInfo_Generations(t *testing.T) {
 		})
 	}
 }
+
+func TestParseStaInfo_Counters(t *testing.T) {
+	raw := `[VER 8] STA CA:9D:36:FB:0B:53:
+	 chanspec 161/80 (0xe39b)
+	 aid:11 
+	 rateset [ 6 9 12 18 24 36 48 54 ]
+	 idle 4 seconds
+	 in network 5595 seconds
+	 state: AUTHENTICATED ASSOCIATED AUTHORIZED
+	 flags 0x51e03b: BRCM WME N_CAP VHT_CAP HE_CAP AMPDU AMSDU
+	 HE caps 0xf629: LDPC HE-HTC SU&MU-BFE
+	 tx total pkts: 3022160
+	 tx total bytes: 698409158
+	 tx ucast pkts: 99951
+	 tx ucast bytes: 111671620
+	 tx failures: 22
+	 rx data pkts: 162193
+	 rx data bytes: 100968148
+	 rx ucast pkts: 161988
+	 rx ucast bytes: 100933896
+	 rate of last tx pkt: 816660 kbps - 408330 kbps
+	 rate of last rx pkt: 720580 kbps
+	 tx pkts retries: 16301
+	 per antenna rssi of last rx data frame: -68 -71 -68 -67
+	 per antenna noise floor: -90 -89 -88 -90
+smoothed rssi: -67`
+
+	parsed := ParseStaInfo(raw, "na")
+	if parsed.TxBytes != 111671620 {
+		t.Errorf("TxBytes got %d, want %d", parsed.TxBytes, 111671620)
+	}
+	if parsed.RxBytes != 100933896 {
+		t.Errorf("RxBytes got %d, want %d", parsed.RxBytes, 100933896)
+	}
+	if parsed.TxPackets != 99951 {
+		t.Errorf("TxPackets got %d, want %d", parsed.TxPackets, 99951)
+	}
+	if parsed.RxPackets != 161988 {
+		t.Errorf("RxPackets got %d, want %d", parsed.RxPackets, 161988)
+	}
+	if parsed.TxRetries != 16301 {
+		t.Errorf("TxRetries got %d, want %d", parsed.TxRetries, 16301)
+	}
+	if parsed.TxRate != 816660 {
+		t.Errorf("TxRate got %d, want %d", parsed.TxRate, 816660)
+	}
+	if parsed.RxRate != 720580 {
+		t.Errorf("RxRate got %d, want %d", parsed.RxRate, 720580)
+	}
+	if parsed.Uptime != 5595 {
+		t.Errorf("Uptime got %d, want %d", parsed.Uptime, 5595)
+	}
+	if parsed.IdleTime != 4 {
+		t.Errorf("IdleTime got %d, want %d", parsed.IdleTime, 4)
+	}
+
+	sta := telemetry.Station{MAC: "ca:9d:36:fb:0b:53"}
+	EnrichStation(&sta, parsed)
+
+	if sta.TxBytes != 111671620 || sta.RxBytes != 100933896 || sta.TxPackets != 99951 || sta.RxPackets != 161988 {
+		t.Errorf("EnrichStation traffic counter mismatch: %+v", sta)
+	}
+	if sta.TxRate != 816660 || sta.RxRate != 720580 {
+		t.Errorf("EnrichStation rate mismatch: tx=%d, rx=%d", sta.TxRate, sta.RxRate)
+	}
+	if sta.Uptime != 5595 || sta.IdleTime != 4 {
+		t.Errorf("EnrichStation time mismatch: uptime=%d, idle=%d", sta.Uptime, sta.IdleTime)
+	}
+}

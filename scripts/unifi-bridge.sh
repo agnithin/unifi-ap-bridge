@@ -75,10 +75,14 @@ cmd_status() {
     total_sta=0
     sta_2g=0
     sta_5g=0
+    load_2g=""
+    load_5g=""
     if [ -f "$STATUS_JS" ]; then
         total_sta=$(grep '"total_stations":' "$STATUS_JS" | head -n 1 | awk -F':' '{print $2}' | tr -d ' \t\r\n,')
         sta_2g=$(grep '"stations_2g":' "$STATUS_JS" | head -n 1 | awk -F':' '{print $2}' | tr -d ' \t\r\n,')
         sta_5g=$(grep '"stations_5g":' "$STATUS_JS" | head -n 1 | awk -F':' '{print $2}' | tr -d ' \t\r\n,')
+        load_2g=$(grep '"cu_total_2g":' "$STATUS_JS" | head -n 1 | awk -F':' '{print $2}' | tr -d ' \t\r\n,')
+        load_5g=$(grep '"cu_total_5g":' "$STATUS_JS" | head -n 1 | awk -F':' '{print $2}' | tr -d ' \t\r\n,')
     fi
 
     if [ -z "$total_sta" ] || [ "$total_sta" -eq 0 ]; then
@@ -95,9 +99,17 @@ cmd_status() {
     fi
 
     echo "-----------------------------------------------------"
-    printf "Live Associated Stations:\n"
-    printf "  - 2.4 GHz Band (IoT/Prime) : %s clients\n" "${sta_2g:-0}"
-    printf "  - 5 GHz High-Speed Band    : %s clients\n" "${sta_5g:-0}"
+    printf "Live Associated Stations & Channel Utilization:\n"
+    if [ -n "$load_2g" ] && [ "$load_2g" -gt 0 ] 2>/dev/null; then
+        printf "  - 2.4 GHz Band (IoT/Prime) : %s clients [Channel Load: %s%%]\n" "${sta_2g:-0}" "$load_2g"
+    else
+        printf "  - 2.4 GHz Band (IoT/Prime) : %s clients\n" "${sta_2g:-0}"
+    fi
+    if [ -n "$load_5g" ] && [ "$load_5g" -gt 0 ] 2>/dev/null; then
+        printf "  - 5 GHz High-Speed Band    : %s clients [Channel Load: %s%%]\n" "${sta_5g:-0}" "$load_5g"
+    else
+        printf "  - 5 GHz High-Speed Band    : %s clients\n" "${sta_5g:-0}"
+    fi
     printf "  ${C_BOLD}Total Wireless Stations    : %s clients${C_RESET}\n" "${total_sta:-0}"
 
     # CPU Temperature if available

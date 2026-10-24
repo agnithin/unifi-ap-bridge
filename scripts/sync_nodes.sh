@@ -64,6 +64,8 @@ main_running="false"
 main_total=0
 main_2g=0
 main_5g=0
+main_cu_2g=0
+main_cu_5g=0
 main_model="UniFi 6 Mesh (U6M)"
 main_mode="GCM"
 main_heartbeat="-"
@@ -73,6 +75,8 @@ if [ -f "$main_status_js" ]; then
     main_total=$(grep '"total_stations":' "$main_status_js" | head -n 1 | awk -F':' '{print $2}' | tr -d ' \t\r\n,')
     main_2g=$(grep '"stations_2g":' "$main_status_js" | head -n 1 | awk -F':' '{print $2}' | tr -d ' \t\r\n,')
     main_5g=$(grep '"stations_5g":' "$main_status_js" | head -n 1 | awk -F':' '{print $2}' | tr -d ' \t\r\n,')
+    main_cu_2g=$(grep '"cu_total_2g":' "$main_status_js" | head -n 1 | awk -F':' '{print $2}' | tr -d ' \t\r\n,')
+    main_cu_5g=$(grep '"cu_total_5g":' "$main_status_js" | head -n 1 | awk -F':' '{print $2}' | tr -d ' \t\r\n,')
     m_val=$(grep '"model":' "$main_status_js" | head -n 1 | awk -F'"' '{print $4}')
     [ -n "$m_val" ] && main_model="$m_val"
     m_mode=$(grep '"mode":' "$main_status_js" | head -n 1 | awk -F'"' '{print $4}')
@@ -102,6 +106,8 @@ nodes_json="${nodes_json}
       \"total_clients\": ${main_total:-0},
       \"clients_2g\": ${main_2g:-0},
       \"clients_5g\": ${main_5g:-0},
+      \"cu_2g\": ${main_cu_2g:-0},
+      \"cu_5g\": ${main_cu_5g:-0},
       \"mode\": \"${main_mode}\",
       \"temp\": \"${main_temp}\",
       \"last_heartbeat\": \"${main_heartbeat}\",
@@ -122,6 +128,8 @@ for node_ip in $NODE_IPS; do
     node_total=0
     node_2g=0
     node_5g=0
+    node_cu_2g=0
+    node_cu_5g=0
     node_mode="-"
     node_temp="-"
     node_hb="-"
@@ -172,6 +180,12 @@ for node_ip in $NODE_IPS; do
             r_5g=$(echo "$remote_raw" | grep '"stations_5g":' | head -n 1 | awk -F':' '{print $2}' | tr -d ' \t\r\n,')
             [ -n "$r_5g" ] && node_5g="$r_5g"
 
+            r_cu_2g=$(echo "$remote_raw" | grep '"cu_total_2g":' | head -n 1 | awk -F':' '{print $2}' | tr -d ' \t\r\n,')
+            [ -n "$r_cu_2g" ] && node_cu_2g="$r_cu_2g"
+
+            r_cu_5g=$(echo "$remote_raw" | grep '"cu_total_5g":' | head -n 1 | awk -F':' '{print $2}' | tr -d ' \t\r\n,')
+            [ -n "$r_cu_5g" ] && node_cu_5g="$r_cu_5g"
+
             r_mode=$(echo "$remote_raw" | grep '"mode":' | head -n 1 | awk -F'"' '{print $4}')
             [ -n "$r_mode" ] && node_mode="$r_mode"
 
@@ -211,6 +225,8 @@ for node_ip in $NODE_IPS; do
       \"total_clients\": ${node_total:-0},
       \"clients_2g\": ${node_2g:-0},
       \"clients_5g\": ${node_5g:-0},
+      \"cu_2g\": ${node_cu_2g:-0},
+      \"cu_5g\": ${node_cu_5g:-0},
       \"mode\": \"${node_mode}\",
       \"temp\": \"${node_temp}\",
       \"last_heartbeat\": \"${node_hb}\",

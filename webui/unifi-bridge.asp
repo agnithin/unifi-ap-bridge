@@ -185,6 +185,24 @@ function updateUI(st) {
   document.getElementById("stat_2g").textContent = st.stations_2g !== undefined ? st.stations_2g : "-";
   document.getElementById("stat_5g").textContent = st.stations_5g !== undefined ? st.stations_5g : "-";
 
+  var elLoad2G = document.getElementById("load_2g");
+  if (elLoad2G) {
+    if (st.cu_total_2g !== undefined && st.cu_total_2g > 0) {
+      elLoad2G.innerHTML = 'Channel Load: <strong style="color:#f39c12;">' + st.cu_total_2g + '%</strong>';
+    } else {
+      elLoad2G.textContent = 'Channel Load: -';
+    }
+  }
+
+  var elLoad5G = document.getElementById("load_5g");
+  if (elLoad5G) {
+    if (st.cu_total_5g !== undefined && st.cu_total_5g > 0) {
+      elLoad5G.innerHTML = 'Channel Load: <strong style="color:#3498db;">' + st.cu_total_5g + '%</strong>';
+    } else {
+      elLoad5G.textContent = 'Channel Load: -';
+    }
+  }
+
   if (st.recent_logs && st.recent_logs.length > 0) {
     var logBox = document.getElementById("console_box");
     logBox.textContent = st.recent_logs.join("\n");
@@ -227,7 +245,8 @@ function updateClusterUI(cl) {
     html += '<td class="settingvalue"><code style="color:#2ecc71;">' + (n.version || "1.0.0") + '</code></td>';
     html += '<td class="settingvalue"><code>' + n.ip + '</code></td>';
     html += '<td class="settingvalue">' + statusBadge + '</td>';
-    html += '<td class="settingvalue">' + n.total_clients + ' <span style="font-size:10px; color:#bdc3c7;">(' + n.clients_2g + 'G / ' + n.clients_5g + 'A)</span></td>';
+    var loadTag = (n.cu_2g || n.cu_5g) ? ' <span style="font-size:10px; color:#f39c12;">[' + (n.cu_2g || 0) + '% / ' + (n.cu_5g || 0) + '% load]</span>' : '';
+    html += '<td class="settingvalue">' + n.total_clients + ' <span style="font-size:10px; color:#bdc3c7;">(' + n.clients_2g + 'G / ' + n.clients_5g + 'A)</span>' + loadTag + '</td>';
     html += '<td class="settingvalue">' + syncBadge + '</td>';
     html += '</tr>';
   }
@@ -571,10 +590,12 @@ function initial(){
                       <div class="stat_card">
                         <div class="stat_label">2.4 GHz (IoT / Prime)</div>
                         <div class="stat_num" style="color:#f39c12;" id="stat_2g">-</div>
+                        <div class="stat_sub" id="load_2g" style="font-size:11px; color:#bdc3c7; margin-top:4px;">Channel Load: -</div>
                       </div>
                       <div class="stat_card">
                         <div class="stat_label">5 GHz (High-Speed)</div>
                         <div class="stat_num" style="color:#3498db;" id="stat_5g">-</div>
+                        <div class="stat_sub" id="load_5g" style="font-size:11px; color:#bdc3c7; margin-top:4px;">Channel Load: -</div>
                       </div>
                     </div>
 

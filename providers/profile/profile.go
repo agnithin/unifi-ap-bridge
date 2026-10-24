@@ -103,12 +103,29 @@ func (p *ProfileProvider) GetVAPs(wlanMapping map[string]string) ([]telemetry.VA
 				Noise:      -90,
 				Authorized: true,
 				IsGuest:    false,
+				TxBytes:    104857600,
+				RxBytes:    52428800,
+				TxPackets:  95000,
+				RxPackets:  62000,
+				TxRetries:  120,
+				TxRate:     816660,
+				RxRate:     720580,
+				Uptime:     3600,
+				IdleTime:   0,
 			})
 		}
 
 		wlanID := vc.WlanID
 		if mapped, ok := wlanMapping[vc.SSID]; ok && len(mapped) == 24 {
 			wlanID = mapped
+		}
+
+		var vapTxBytes, vapRxBytes, vapTxPackets, vapRxPackets int64
+		for _, s := range stations {
+			vapTxBytes += s.TxBytes
+			vapRxBytes += s.RxBytes
+			vapTxPackets += s.TxPackets
+			vapRxPackets += s.RxPackets
 		}
 
 		vaps = append(vaps, telemetry.VAP{
@@ -124,6 +141,10 @@ func (p *ProfileProvider) GetVAPs(wlanMapping map[string]string) ([]telemetry.VA
 			IsGuest:   false,
 			NumSta:    len(stations),
 			WlanID:    wlanID,
+			TxBytes:   vapTxBytes,
+			RxBytes:   vapRxBytes,
+			TxPackets: vapTxPackets,
+			RxPackets: vapRxPackets,
 			StaTable:  stations,
 		})
 	}
@@ -133,7 +154,7 @@ func (p *ProfileProvider) GetVAPs(wlanMapping map[string]string) ([]telemetry.VA
 
 func (p *ProfileProvider) GetRadioStats() ([]telemetry.RadioStat, error) {
 	return []telemetry.RadioStat{
-		{Name: "wifi-ng", Channel: 6, NumSta: 0},
-		{Name: "wifi-na", Channel: 161, NumSta: 1},
+		{Name: "wifi-ng", Channel: 6, NumSta: 0, CuTotal: 42, CuSelfRx: 3, CuSelfTx: 8},
+		{Name: "wifi-na", Channel: 161, NumSta: 1, CuTotal: 18, CuSelfRx: 4, CuSelfTx: 10},
 	}, nil
 }

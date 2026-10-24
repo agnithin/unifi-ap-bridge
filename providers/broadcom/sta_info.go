@@ -9,9 +9,23 @@ import (
 )
 
 var (
-	rssiRegex  = regexp.MustCompile(`(?i)(?:rssi|signal):\s*(-?\d+)`)
-	noiseRegex = regexp.MustCompile(`(?i)noise:\s*(-?\d+)`)
-	rateRegex  = regexp.MustCompile(`(?i)(?:rate|rate_mbps):\s*(\d+)`)
+	rssiRegex       = regexp.MustCompile(`(?i)(?:rssi|signal):\s*(-?\d+)`)
+	noiseRegex      = regexp.MustCompile(`(?i)noise(?:\s*floor)?:\s*(-?\d+)`)
+	txRateKbpsRegex = regexp.MustCompile(`(?i)rate of last tx pkt:\s*(\d+)\s*kbps`)
+	rxRateKbpsRegex = regexp.MustCompile(`(?i)rate of last rx pkt:\s*(\d+)\s*kbps`)
+	legacyRateRegex = regexp.MustCompile(`(?i)legacy rate\s*(\d+)\s*mbps`)
+	genericRateRegex= regexp.MustCompile(`(?i)(?:rate|rate_mbps):\s*(\d+)`)
+	txUcastBytesRegex = regexp.MustCompile(`(?i)tx ucast bytes:\s*(\d+)`)
+	txTotalBytesRegex = regexp.MustCompile(`(?i)tx total bytes:\s*(\d+)`)
+	rxUcastBytesRegex = regexp.MustCompile(`(?i)rx ucast bytes:\s*(\d+)`)
+	rxDataBytesRegex  = regexp.MustCompile(`(?i)rx (?:data|total) bytes:\s*(\d+)`)
+	txUcastPktsRegex  = regexp.MustCompile(`(?i)tx ucast pkts:\s*(\d+)`)
+	txTotalPktsRegex  = regexp.MustCompile(`(?i)tx total pkts:\s*(\d+)`)
+	rxUcastPktsRegex  = regexp.MustCompile(`(?i)rx ucast pkts:\s*(\d+)`)
+	rxDataPktsRegex   = regexp.MustCompile(`(?i)rx (?:data|total) pkts:\s*(\d+)`)
+	txRetriesRegex  = regexp.MustCompile(`(?i)tx (?:pkts retries|data pkts retried):\s*(\d+)`)
+	uptimeRegex     = regexp.MustCompile(`(?i)in network\s*(\d+)\s*seconds`)
+	idleRegex       = regexp.MustCompile(`(?i)idle\s*(\d+)\s*seconds`)
 )
 
 type ParsedStaInfo struct {
@@ -24,7 +38,13 @@ type ParsedStaInfo struct {
 	Is11n      bool
 	TxRate     int
 	RxRate     int
-	Uptime     int
+	Uptime     int64
+	IdleTime   int64
+	TxBytes    int64
+	RxBytes    int64
+	TxPackets  int64
+	RxPackets  int64
+	TxRetries  int64
 }
 
 // ParseStaInfo parses the text output of `wl sta_info <mac>`.
@@ -82,9 +102,80 @@ func ParseStaInfo(output string, fallbackBand string) ParsedStaInfo {
 		info.RSSI = snr
 	}
 
-	if match := rateRegex.FindStringSubmatch(output); len(match) > 1 {
+	// Rates
+	if match := txRateKbpsRegex.FindStringSubmatch(output); len(match) > 1 {
+		if val, err := strconv.Atoi(match[1]); err == nil {
+			info.TxRate = val
+		}
+	} else if match := genericRateRegex.FindStringSubmatch(output); len(match) > 1 {
 		if val, err := strconv.Atoi(match[1]); err == nil {
 			info.TxRate = val * 1000 // Convert Mbps to kbps
+		}
+	}
+
+	if match := rxRateKbpsRegex.FindStringSubmatch(output); len(match) > 1 {
+		if val, err := strconv.Atoi(match[1]); err == nil {
+			info.RxRate = val
+		}
+	} else if match := legacyRateRegex.FindStringSubmatch(output); len(match) > 1 {
+		if val, err := strconv.Atoi(match[1]); err == nil {
+			info.RxRate = val * 1000 // Convert Mbps to kbps
+		}
+	}
+
+	// Traffic & Packet Counters
+	if match := txUcastBytesRegex.FindStringSubmatch(output); len(match) > 1 {
+		if val, err := strconv.ParseInt(match[1], 10, 64); err == nil {
+			info.TxBytes = val
+		}
+	} else if match := txTotalBytesRegex.FindStringSubmatch(output); len(match) > 1 {
+		if val, err := strconv.ParseInt(match[1], 10, 64); err == nil {
+			info.TxBytes = val
+		}
+	}
+
+	if match := rxUcastBytesRegex.FindStringSubmatch(output); len(match) > 1 {
+		if val, err := strconv.ParseInt(match[1], 10, 64); err == nil {
+			info.RxBytes = val
+		}
+	} else if match := rxDataBytesRegex.FindStringSubmatch(output); len(match) > 1 {
+		if val, err := strconv.ParseInt(match[1], 10, 64); err == nil {
+			info.RxBytes = val
+		}
+	}
+
+	if match := txUcastPktsRegex.FindStringSubmatch(output); len(match) > 1 {
+		if val, err := strconv.ParseInt(match[1], 10, 64); err == nil {
+			info.TxPackets = val
+		}
+	} else if match := txTotalPktsRegex.FindStringSubmatch(output); len(match) > 1 {
+		if val, err := strconv.ParseInt(match[1], 10, 64); err == nil {
+			info.TxPackets = val
+		}
+	}
+
+	if match := rxUcastPktsRegex.FindStringSubmatch(output); len(match) > 1 {
+		if val, err := strconv.ParseInt(match[1], 10, 64); err == nil {
+			info.RxPackets = val
+		}
+	} else if match := rxDataPktsRegex.FindStringSubmatch(output); len(match) > 1 {
+		if val, err := strconv.ParseInt(match[1], 10, 64); err == nil {
+			info.RxPackets = val
+		}
+	}
+	if match := txRetriesRegex.FindStringSubmatch(output); len(match) > 1 {
+		if val, err := strconv.ParseInt(match[1], 10, 64); err == nil {
+			info.TxRetries = val
+		}
+	}
+	if match := uptimeRegex.FindStringSubmatch(output); len(match) > 1 {
+		if val, err := strconv.ParseInt(match[1], 10, 64); err == nil {
+			info.Uptime = val
+		}
+	}
+	if match := idleRegex.FindStringSubmatch(output); len(match) > 1 {
+		if val, err := strconv.ParseInt(match[1], 10, 64); err == nil {
+			info.IdleTime = val
 		}
 	}
 
@@ -104,4 +195,13 @@ func EnrichStation(sta *telemetry.Station, info ParsedStaInfo) {
 	sta.Is11n = info.Is11n
 	sta.Authorized = true
 	sta.IsGuest = false
+	sta.TxBytes = info.TxBytes
+	sta.RxBytes = info.RxBytes
+	sta.TxPackets = info.TxPackets
+	sta.RxPackets = info.RxPackets
+	sta.TxRetries = info.TxRetries
+	sta.TxRate = info.TxRate
+	sta.RxRate = info.RxRate
+	sta.Uptime = info.Uptime
+	sta.IdleTime = info.IdleTime
 }

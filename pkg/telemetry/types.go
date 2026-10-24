@@ -16,6 +16,16 @@ type Station struct {
 	Is11ax     bool   `json:"is_11ax,omitempty"`
 	Is11ac     bool   `json:"is_11ac,omitempty"`
 	Is11n      bool   `json:"is_11n,omitempty"`
+	// Traffic & Airtime Telemetry
+	TxBytes   int64 `json:"tx_bytes"`
+	RxBytes   int64 `json:"rx_bytes"`
+	TxPackets int64 `json:"tx_packets"`
+	RxPackets int64 `json:"rx_packets"`
+	TxRetries int64 `json:"tx_retries,omitempty"`
+	TxRate    int   `json:"tx_rate,omitempty"` // in kbps (e.g. 58500)
+	RxRate    int   `json:"rx_rate,omitempty"` // in kbps (e.g. 54000)
+	Uptime    int64 `json:"uptime,omitempty"`  // seconds connected
+	IdleTime  int64 `json:"idletime,omitempty"`// seconds idle
 }
 
 type VAP struct {
@@ -31,6 +41,10 @@ type VAP struct {
 	IsGuest   bool      `json:"is_guest"`
 	NumSta    int       `json:"num_sta"`
 	WlanID    string    `json:"id,omitempty"` // Legacy 24-hex controller ObjectId
+	TxBytes   int64     `json:"tx_bytes"`
+	RxBytes   int64     `json:"rx_bytes"`
+	TxPackets int64     `json:"tx_packets"`
+	RxPackets int64     `json:"rx_packets"`
 	StaTable  []Station `json:"sta_table"`
 }
 
@@ -50,9 +64,12 @@ type Radio struct {
 }
 
 type RadioStat struct {
-	Name    string `json:"name"`
-	Channel int    `json:"channel"`
-	NumSta  int    `json:"num_sta"`
+	Name     string `json:"name"`
+	Channel  int    `json:"channel"`
+	NumSta   int    `json:"num_sta"`
+	CuTotal  int    `json:"cu_total"`   // Total channel utilization % (0-100)
+	CuSelfRx int    `json:"cu_self_rx"` // AP receive airtime % (0-100)
+	CuSelfTx int    `json:"cu_self_tx"` // AP transmit airtime % (0-100)
 }
 
 type InformPayload struct {

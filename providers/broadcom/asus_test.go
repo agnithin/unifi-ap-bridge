@@ -33,7 +33,11 @@ func TestAsusProvider(t *testing.T) {
 		case strings.Contains(full, "wl -i eth6 assoclist"):
 			return "assoclist 16:ae:f6:a7:ee:2b", nil
 		case strings.Contains(full, "wl -i eth6 sta_info"):
-			return "flags: 0x1\nrates: 1201 Mbps (11ax 80MHz 2ss)\nrssi: -71\nnoise: -90", nil
+			return "flags: 0x1\nrates: 1201 Mbps (11ax 80MHz 2ss)\nrssi: -71\nnoise: -90\ntx ucast bytes: 1048576\nrx ucast bytes: 524288\ntx ucast pkts: 1000\nrx ucast pkts: 500", nil
+		case strings.Contains(full, "wl -i eth4 chanim_stats"):
+			return "version: 3\nchanspec tx inbss obss nocat nopkt doze txop goodtx badtx glitch badplcp knoise idle timestamp\n0x1006 12 2 35 11 6 0 28 1 4 1317 42 -91 36 -1193366231", nil
+		case strings.Contains(full, "wl -i eth6 chanim_stats"):
+			return "version: 3\nchanspec tx inbss obss nocat nopkt doze txop goodtx badtx glitch badplcp knoise idle timestamp\n0xe39b 5 3 2 1 1 0 80 1 1 10 5 -90 75 -1172933938", nil
 		default:
 			return "", nil
 		}
@@ -83,5 +87,28 @@ func TestAsusProvider(t *testing.T) {
 	}
 	if sta.Signal != -71 || sta.RSSI != 19 {
 		t.Errorf("signal/rssi mismatch: signal=%d, rssi=%d", sta.Signal, sta.RSSI)
+	}
+	if sta.TxBytes != 1048576 || sta.RxBytes != 524288 || sta.TxPackets != 1000 || sta.RxPackets != 500 {
+		t.Errorf("sta traffic counters mismatch: %+v", sta)
+	}
+	if vap5G.TxBytes != 1048576 || vap5G.RxBytes != 524288 || vap5G.TxPackets != 1000 || vap5G.RxPackets != 500 {
+		t.Errorf("vap traffic counters mismatch: %+v", vap5G)
+	}
+
+	// Verify Radio Stats (RF Channel Utilization)
+	rStats, err := provider.GetRadioStats()
+	if err != nil {
+		t.Fatalf("GetRadioStats failed: %v", err)
+	}
+	if len(rStats) != 2 {
+		t.Fatalf("expected 2 radio stats, got %d", len(rStats))
+	}
+	// eth4 (2.4 GHz, Ch 6): idle=36 -> cu_total=64, cu_self_tx=12, cu_self_rx=2
+	if rStats[0].CuTotal != 64 || rStats[0].CuSelfTx != 12 || rStats[0].CuSelfRx != 2 {
+		t.Errorf("2.4G radio stats mismatch: %+v", rStats[0])
+	}
+	// eth6 (5 GHz, Ch 161): idle=75 -> cu_total=25, cu_self_tx=5, cu_self_rx=3
+	if rStats[1].CuTotal != 25 || rStats[1].CuSelfTx != 5 || rStats[1].CuSelfRx != 3 {
+		t.Errorf("5G radio stats mismatch: %+v", rStats[1])
 	}
 }
