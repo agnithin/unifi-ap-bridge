@@ -1,0 +1,60 @@
+{
+  "provenance": "Independent Node crypto/zlib generator; not a UCG or real-AP capture",
+  "key_hex": "000102030405060708090a0b0c0d0e0f",
+  "iv_hex": "101112131415161718191a1b1c1d1e1f",
+  "mac": "02:00:00:00:10:01",
+  "payload": {
+    "_type": "noop",
+    "interval": 10
+  },
+  "vectors": [
+    {
+      "version": 0,
+      "mode": "CBC",
+      "compressed": false,
+      "packet_hex": "544e4255000000000200000010010001101112131415161718191a1b1c1d1e1f000000010000002041ea329a2a56dc1e4b19f20b6e96ce0df5411b8ff164edc4dff30e9392b8f1cd"
+    },
+    {
+      "version": 0,
+      "mode": "CBC",
+      "compressed": true,
+      "packet_hex": "544e4255000000000200000010010003101112131415161718191a1b1c1d1e1f000000010000003031d4bd9d1e98682423a3db4a33601d17db789db165fc99b1dfa068bc2e667fe8acfc3cc5c2c9f8f05618088aeb81bc5f"
+    },
+    {
+      "version": 0,
+      "mode": "GCM",
+      "compressed": false,
+      "packet_hex": "544e4255000000000200000010010009101112131415161718191a1b1c1d1e1f000000010000002ebebca8c204c241aaec3aadedce5f0dfbd7944eeb0874d199c5a4bda7733e3cff9611e6d5806b822370a891f1a363"
+    },
+    {
+      "version": 0,
+      "mode": "GCM",
+      "compressed": true,
+      "packet_hex": "544e425500000000020000001001000b101112131415161718191a1b1c1d1e1f0000000100000036bd025ce0f79d8da49e4d71d06be4e0f8a52f7155a12deed583cd4bc7f17147482624f57eeb110c2bf340db9948827308e6f95be664bf"
+    },
+    {
+      "version": 1,
+      "mode": "CBC",
+      "compressed": false,
+      "packet_hex": "544e4255000000010200000010010001101112131415161718191a1b1c1d1e1f000000010000002041ea329a2a56dc1e4b19f20b6e96ce0df5411b8ff164edc4dff30e9392b8f1cd"
+    },
+    {
+      "version": 1,
+      "mode": "CBC",
+      "compressed": true,
+      "packet_hex": "544e4255000000010200000010010003101112131415161718191a1b1c1d1e1f000000010000003031d4bd9d1e98682423a3db4a33601d17db789db165fc99b1dfa068bc2e667fe8acfc3cc5c2c9f8f05618088aeb81bc5f"
+    },
+    {
+      "version": 1,
+      "mode": "GCM",
+      "compressed": false,
+      "packet_hex": "544e4255000000010200000010010009101112131415161718191a1b1c1d1e1f000000010000002ebebca8c204c241aaec3aadedce5f0dfbd7944eeb0874d199c5a4bda7733e0f002295527c53dbfc7b8b3c33898990"
+    },
+    {
+      "version": 1,
+      "mode": "GCM",
+      "compressed": true,
+      "packet_hex": "544e425500000001020000001001000b101112131415161718191a1b1c1d1e1f0000000100000036bd025ce0f79d8da49e4d71d06be4e0f8a52f7155a12deed583cd4bc7f17147482624f57eeb11a0146f510b5c7fff33682c88317a09c2"
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+name: Release UniFi AP Bridge
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          check-latest: true
+
+      - name: Build Binaries
+        run: |
+          mkdir -p dist
+
+          echo "Building ARMv7 binary..."
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o dist/unifi-bridge-armv7 cmd/unifi-bridge/main.go
+          tar -czf dist/unifi-bridge-armv7.tar.gz -C dist unifi-bridge-armv7
+
+          echo "Building ARM64 binary..."
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o dist/unifi-bridge-arm64 cmd/unifi-bridge/main.go
+          tar -czf dist/unifi-bridge-arm64.tar.gz -C dist unifi-bridge-arm64
+
+          cd dist
+          sha256sum unifi-bridge-armv7 unifi-bridge-arm64 unifi-bridge-armv7.tar.gz unifi-bridge-arm64.tar.gz > sha256sums.txt
+          cat sha256sums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/unifi-bridge-armv7
+            dist/unifi-bridge-arm64
+            dist/unifi-bridge-armv7.tar.gz
+            dist/unifi-bridge-arm64.tar.gz
+            dist/sha256sums.txt
+          generate_release_notes: true
+          draft: false
+          prerelease: false
