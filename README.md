@@ -16,6 +16,14 @@ It emulates a genuine UniFi 6 Access Point (e.g., UniFi 6 Mesh `U6M`, UniFi 6 Pr
   * Clients switch from generic wired switch port attachments to true wireless clients with live signal bars, SNR, and frequency bands (2.4 GHz vs 5 GHz).
   * IoT devices (ESP32, Sonoff, Wyze, smart appliances) correctly classify as **Wi-Fi 4 (`802.11n`)** rather than Wi-Fi 3.
   * Modern mobile and laptop devices classify as **Wi-Fi 6 (`802.11ax`)** or **Wi-Fi 5 (`802.11ac`)**.
+* **Live RF Channel Utilization & Airtime Telemetry (v1.1.0+):**
+  * Continuously polls Broadcom `wl chanim_stats` on physical 2.4 GHz and 5 GHz radios.
+  * Dynamically computes total channel utilization (`cu_total`), AP transmit airtime (`cu_self_tx`), and AP receive airtime (`cu_self_rx`).
+  * Streams RF metrics directly into `radio_table` and `radio_table_stats` in the UniFi Inform payload and displays real-time channel load percentages in the Asuswrt WebUI and CLI.
+* **Cumulative Client & VAP Traffic Counters (v1.1.0+):**
+  * Parses unicast transmission and reception bytes/packets (`tx ucast bytes`, `rx ucast bytes`, `tx ucast pkts`, `rx ucast pkts`), packet retries, uplink/downlink bitrates, association uptime, and idletime from `wl sta_info`.
+  * Excludes multicast/broadcast beacon bursts from client download metrics to guarantee accurate accounting.
+  * Aggregates counters per-client in `sta_table` and per-SSID in `vap_table`, populating UniFi real-time client throughput and bandwidth utilization graphs.
 * **Ultra-Low Resource Footprint:**
   * **RAM:** ~3–5 MB RSS (< 1% of 512 MB router RAM).
   * **CPU:** Virtually 0% (sleeps 99.9% of the time, waking every 10 seconds for a $<1$ ms local query).
@@ -169,20 +177,29 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w -X main
 
 ---
 
-## Roadmap & Pending Items
+## Roadmap & Feature Status
 
-The following enhancements are identified for future releases:
+### Completed Features
+* [x] **Zero-Dependency Architecture:** Static Go binary running directly on clean Asuswrt-Merlin firmware.
+* [x] **UniFi Inform Engine:** Wire protocol implementation supporting AES-128-CBC bootstrap and AES-128-GCM adopted encryption.
+* [x] **Broadcom Wireless Telemetry:** Automatic discovery of physical and virtual VAPs across 2.4 GHz and 5 GHz bands.
+* [x] **Wi-Fi 6 (`802.11ax`) & Wi-Fi 4 (`802.11n`) Classification:** Flawless generation mapping in UniFi Controller.
+* [x] **Native Asuswrt WebUI Integration:** Advanced Settings > Wireless tab with dynamic slot discovery (`user1`–`user20.asp`).
+* [x] **Multi-Arch Automated CI/CD:** GitHub Actions release workflow building ARMv7 and ARM64 binary packages.
+* [x] **Automated In-WebUI Updates & Dual Tracks:** Instant release/dev update checks and one-click upgrades.
+* [x] **Cluster Mesh Synchronization:** Centralized AP configuration and binary propagation over SSH.
+* [x] **RF Channel Utilization & Airtime Telemetry (v1.1.0):** Broadcom `chanim_stats` streaming `cu_total`, `cu_self_rx`, and `cu_self_tx` into UniFi RF graphs and router WebUI.
+* [x] **Cumulative Client Traffic Usage Counters (v1.1.0):** Parsing `tx/rx` unicast bytes, packets, retries, rates, and association uptime from `wl sta_info`.
 
+### Pending Roadmap Items
 1. **Dynamic WLAN Mapping UI / Auto-Discovery:**
    - WebUI interface to map custom SSIDs to UniFi 24-hex WLAN ObjectIds, or optional auto-resolution by querying the UniFi Controller API directly.
-2. **RF Channel Utilization & Airtime Telemetry:**
-   - Query Broadcom `wl chanim_stats` / `wl counters` to stream channel airtime utilization percentage and RF interference metrics into `radio_table_stats`.
-3. **Cumulative Client Traffic Usage:**
-   - Stream cumulative client `tx_bytes` / `rx_bytes` from `wl sta_info` into `sta_table` to populate UniFi historical client bandwidth consumption charts.
-4. **Community Package Directory Submission:**
+2. **Community Package Directory Submission:**
    - Prepare package submission for `amtm` (Asuswrt-Merlin Terminal Menu) third-party script directory and SNBForums.
-5. **Dynamic Guest Network Tagging:**
+3. **Dynamic Guest Network Tagging:**
    - Automatically tag isolated guest virtual APs (`is_guest: true`) so UniFi groups them into Guest analytics.
+4. **Roaming & Fast Transition Event Telemetry:**
+   - Listen to Broadcom wireless events or hostapd logs to generate UniFi client roam events (`STA-TRAFFIC-STAT`, `roamed from AP X to AP Y`).
 
 ---
 
