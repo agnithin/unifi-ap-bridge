@@ -81,6 +81,8 @@ if [ -f "$main_status_js" ]; then
     [ -n "$m_hb" ] && main_heartbeat="$m_hb"
 fi
 
+main_version=$(cat "$INSTALL_DIR/version.txt" 2>/dev/null || echo "1.0.0")
+
 if [ -f "/sys/class/thermal/thermal_zone0/temp" ]; then
     raw_temp=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null)
     [ -n "$raw_temp" ] && [ "$raw_temp" -gt 0 ] && main_temp=$(awk "BEGIN {printf \"%.1f °C\", $raw_temp / 1000}")
@@ -94,6 +96,7 @@ nodes_json="${nodes_json}
       \"ip\": \"${MAIN_IP}\",
       \"role\": \"Main Gateway\",
       \"model\": \"${main_model}\",
+      \"version\": \"${main_version}\",
       \"status\": \"$( [ "$main_running" = "true" ] && echo "RUNNING" || echo "STOPPED" )\",
       \"pid\": \"${main_pid:--}\",
       \"total_clients\": ${main_total:-0},
@@ -114,6 +117,7 @@ for node_ip in $NODE_IPS; do
     node_running="false"
     node_name="ZenWiFi_Node_${node_ip##*.}"
     node_model="$main_model"
+    node_version="$main_version"
     node_pid="-"
     node_total=0
     node_2g=0
@@ -125,8 +129,19 @@ for node_ip in $NODE_IPS; do
     if [ -z "$SSH_KEY" ]; then
         sync_status="No SSH Key"
     else
+        # If action is 'update', push updated scripts, webui, version and binary to remote node
+        if [ "$ACTION" = "update" ]; then
+            echo "[*] Propagating update to node ${node_ip}..."
+            # Stream updated scripts and binary package (excluding node-unique state.json)
+            tar -czf - -C "$INSTALL_DIR" apply_config.sh sync_nodes.sh update.sh watchdog.sh version.txt webui config/config.json unifi-bridge.tar.gz 2>/dev/null | \
+                ssh -i "$SSH_KEY" -y "$node_ip" "tar -xzf - -C $INSTALL_DIR 2>/dev/null; [ -f $INSTALL_DIR/update.sh ] && chmod 755 $INSTALL_DIR/*.sh; $INSTALL_DIR/start.sh" >/dev/null 2>&1
+            if [ $? -eq 0 ]; then
+                sync_status="Updated & In Sync"
+            else
+                sync_status="Update Failed"
+            fi
         # If action is 'sync', push local config to remote node
-        if [ "$ACTION" = "sync" ] && [ -f "$CONFIG_FILE" ]; then
+        elif [ "$ACTION" = "sync" ] && [ -f "$CONFIG_FILE" ]; then
             # Remote config with node-specific state path
             ssh -i "$SSH_KEY" -y "$node_ip" "mkdir -p $INSTALL_DIR/config; cat > $INSTALL_DIR/config/config.json && $INSTALL_DIR/start.sh" < "$CONFIG_FILE" >/dev/null 2>&1
             if [ $? -eq 0 ]; then
@@ -137,7 +152,7 @@ for node_ip in $NODE_IPS; do
         fi
 
         # Query remote node status
-        remote_raw=$(ssh -i "$SSH_KEY" -y "$node_ip" "cat /tmp/var/wwwext/$ADDON_NAME/status.js 2>/dev/null; echo '---TEMP---'; cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null" </dev/null 2>/dev/null)
+        remote_raw=$(ssh -i "$SSH_KEY" -y "$node_ip" "cat /tmp/var/wwwext/$ADDON_NAME/status.js 2>/dev/null; echo '---VER---'; cat $INSTALL_DIR/version.txt 2>/dev/null; echo '---TEMP---'; cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null" </dev/null 2>/dev/null)
         if [ -n "$remote_raw" ]; then
             r_host=$(echo "$remote_raw" | grep '"hostname":' | head -n 1 | awk -F'"' '{print $4}')
             [ -n "$r_host" ] && node_name="$r_host"
@@ -163,6 +178,18 @@ for node_ip in $NODE_IPS; do
             r_hb=$(echo "$remote_raw" | grep '"last_heartbeat":' | head -n 1 | awk -F'"' '{print $4}')
             [ -n "$r_hb" ] && node_hb="$r_hb"
 
+            r_ver=$(echo "$remote_raw" | sed -n '/---VER---/,/---TEMP---/p' | grep -vE '---' | tr -d ' \t\r\n')
+            if [ -n "$r_ver" ]; then
+                node_version="$r_ver"
+            else
+                r_ver_js=$(echo "$remote_raw" | grep '"version":' | head -n 1 | awk -F'"' '{print $4}' | tr -d ' \t\r\n')
+                [ -n "$r_ver_js" ] && node_version="$r_ver_js"
+            fi
+
+            if [ "$sync_status" = "In Sync" ] && [ "$node_version" != "$main_version" ]; then
+                sync_status="Version Diff ($node_version)"
+            fi
+
             r_temp_raw=$(echo "$remote_raw" | sed -n '/---TEMP---/,$p' | grep -oE '^[0-9]+$')
             if [ -n "$r_temp_raw" ] && [ "$r_temp_raw" -gt 0 ]; then
                 node_temp=$(awk "BEGIN {printf \"%.1f °C\", $r_temp_raw / 1000}")
@@ -178,6 +205,7 @@ for node_ip in $NODE_IPS; do
       \"ip\": \"${node_ip}\",
       \"role\": \"Satellite Node\",
       \"model\": \"${node_model}\",
+      \"version\": \"${node_version}\",
       \"status\": \"$( [ "$node_running" = "true" ] && echo "RUNNING" || echo "STOPPED" )\",
       \"pid\": \"${node_pid}\",
       \"total_clients\": ${node_total:-0},

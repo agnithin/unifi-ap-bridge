@@ -46,6 +46,13 @@ cmd_status() {
         printf "Service Status   : ${C_RED}STOPPED${C_RESET}\n"
     fi
 
+    ver="1.0.0"
+    [ -f "$INSTALL_DIR/version.txt" ] && ver=$(cat "$INSTALL_DIR/version.txt" 2>/dev/null | tr -d ' \t\r\n')
+    branch="main"
+    [ -f "$CONFIG_FILE" ] && branch=$(grep '"branch"' "$CONFIG_FILE" 2>/dev/null | head -n 1 | awk -F'"' '{print $4}')
+    [ -z "$branch" ] && branch="main"
+    printf "Software Version : ${C_BOLD}%s${C_RESET} [Track: %s]\n" "$ver" "$branch"
+
     # Read config
     if [ -f "$CONFIG_FILE" ]; then
         ctrl_url=$(grep '"controller_url"' "$CONFIG_FILE" | head -n 1 | awk -F'"' '{print $4}')
@@ -199,6 +206,16 @@ cmd_test() {
     fi
 }
 
+cmd_update() {
+    sub="${1:-check}"
+    branch="${2:-}"
+    if [ -f "$INSTALL_DIR/update.sh" ]; then
+        "$INSTALL_DIR/update.sh" "$sub" "$branch"
+    else
+        printf "${C_RED}update.sh not found in %s${C_RESET}\n" "$INSTALL_DIR"
+    fi
+}
+
 cmd_menu() {
     while true; do
         clear
@@ -216,10 +233,11 @@ cmd_menu() {
         echo " 4) Stop Service"
         echo " 5) Start Service"
         echo " 6) Test Controller Reachability"
-        echo " 7) Re-mount WebUI Tab"
+        echo " 7) Check for Updates / Apply Update"
+        echo " 8) Re-mount WebUI Tab"
         echo " e) Exit"
         echo ""
-        printf " Enter selection [1-7 or e]: "
+        printf " Enter selection [1-8 or e]: "
         read -r choice
         case "$choice" in
             1)
@@ -246,6 +264,20 @@ cmd_menu() {
                 cmd_test
                 printf "\nPress Enter to return to menu..."; read -r _ ;;
             7)
+                echo ""
+                printf "${C_CYAN}Choose branch track ([m]ain / [d]ev, default main): ${C_RESET}"
+                read -r trk
+                b="main"
+                [ "$trk" = "d" ] || [ "$trk" = "dev" ] && b="dev"
+                cmd_update check "$b"
+                echo ""
+                printf "Do you want to apply the update now? [y/N]: "
+                read -r ans
+                if [ "$ans" = "y" ] || [ "$ans" = "Y" ]; then
+                    cmd_update apply "$b"
+                fi
+                printf "\nPress Enter to return to menu..."; read -r _ ;;
+            8)
                 echo ""
                 printf "${C_CYAN}Re-mounting WebUI tab...${C_RESET}\n"
                 /jffs/addons/unifi-bridge/start.sh
@@ -276,9 +308,11 @@ case "${1:-}" in
         cmd_test ;;
     sync)
         cmd_sync ;;
+    update)
+        cmd_update "${2:-check}" "${3:-}" ;;
     "")
         cmd_menu ;;
     *)
-        echo "Usage: $0 {status|sync|start|stop|restart|logs|test}"
+        echo "Usage: $0 {status|sync|update [check|apply] [branch]|start|stop|restart|logs|test}"
         exit 1 ;;
 esac

@@ -135,6 +135,9 @@ thead.collapsible-jquery {
 var autoRefreshTimer = null;
 var detectedGatewayIP = "<% nvram_get("lan_gateway"); %>" || "10.100.1.1";
 
+var updatePollingTimer = null;
+var currentBranch = "main";
+
 function SetCurrentPage() {
   document.form.next_page.value = window.location.pathname.substring(1);
   document.form.current_page.value = window.location.pathname.substring(1);
@@ -152,6 +155,26 @@ function updateUI(st) {
     badge.className = "badge_offline";
     badge.textContent = "STOPPED";
     statusText.textContent = "Daemon Inactive";
+  }
+
+  if (st.version) {
+    var vText = "v" + st.version;
+    var hdrV = document.getElementById("hdr_version");
+    if (hdrV) hdrV.textContent = vText;
+    var curV = document.getElementById("cur_ver_val");
+    if (curV) curV.textContent = st.version;
+  }
+
+  if (st.branch) {
+    currentBranch = st.branch;
+    var selB = document.getElementById("select_branch");
+    if (selB) selB.value = st.branch;
+    if (document.form.unifibridge_branch) document.form.unifibridge_branch.value = st.branch;
+    var hdrT = document.getElementById("hdr_track");
+    if (hdrT) {
+      hdrT.textContent = st.branch === "dev" ? "Dev Track" : "Release Track";
+      hdrT.style.backgroundColor = st.branch === "dev" ? "#d35400" : "#2980b9";
+    }
   }
 
   document.getElementById("model_val").textContent = (st.model || "UniFi 6 Mesh") + " (Firmware " + (st.firmware || "6.8.2") + ")";
@@ -201,6 +224,7 @@ function updateClusterUI(cl) {
     html += '<tr style="border-bottom:1px solid #3e4d66;">';
     html += '<td class="settingvalue" style="font-weight:bold; color:#fff;">' + n.name + (isLocal ? ' <span style="font-size:10px; color:#f1c40f;">(This AP)</span>' : '') + '</td>';
     html += '<td class="settingvalue">' + n.role + '</td>';
+    html += '<td class="settingvalue"><code style="color:#2ecc71;">' + (n.version || "1.0.0") + '</code></td>';
     html += '<td class="settingvalue"><code>' + n.ip + '</code></td>';
     html += '<td class="settingvalue">' + statusBadge + '</td>';
     html += '<td class="settingvalue">' + n.total_clients + ' <span style="font-size:10px; color:#bdc3c7;">(' + n.clients_2g + 'G / ' + n.clients_5g + 'A)</span></td>';
@@ -231,6 +255,143 @@ function updateClusterUI(cl) {
     document.getElementById("stat_2g").textContent = cluster2g;
     document.getElementById("stat_5g").textContent = cluster5g;
   }
+}
+
+function updateUpdateUI(u) {
+  if (!u) return;
+  var badge = document.getElementById("update_badge");
+  var btnDo = document.getElementById("btn_do_update");
+  var desc = document.getElementById("update_desc");
+  var remVal = document.getElementById("rem_ver_val");
+  var curVal = document.getElementById("cur_ver_val");
+  var pBox = document.getElementById("update_progress_box");
+
+  if (u.current_version && u.current_version !== "-") curVal.textContent = u.current_version;
+  if (u.remote_version && u.remote_version !== "-") remVal.textContent = "Latest available: " + u.remote_version;
+  if (u.message) desc.textContent = u.message + (u.last_check ? " (Checked: " + u.last_check + ")" : "");
+
+  if (u.status === "UPDATE_AVAILABLE") {
+    badge.className = "badge_online";
+    badge.style.backgroundColor = "#e67e22";
+    badge.textContent = "UPDATE AVAILABLE";
+    btnDo.style.display = "inline-block";
+    btnDo.value = "Update to " + (u.remote_version || "Latest");
+    pBox.style.display = "none";
+  } else if (u.status === "UP_TO_DATE") {
+    badge.className = "badge_online";
+    badge.style.backgroundColor = "#27ae60";
+    badge.textContent = "UP TO DATE";
+    btnDo.style.display = "none";
+    pBox.style.display = "none";
+  } else if (u.status === "CHECKING") {
+    badge.className = "badge_online";
+    badge.style.backgroundColor = "#3498db";
+    badge.textContent = "CHECKING...";
+    btnDo.style.display = "none";
+    pBox.style.display = "none";
+  } else if (u.status === "UPDATING") {
+    badge.className = "badge_online";
+    badge.style.backgroundColor = "#f39c12";
+    badge.textContent = "UPDATING...";
+    btnDo.style.display = "none";
+    pBox.style.display = "block";
+  } else if (u.status === "SUCCESS") {
+    badge.className = "badge_online";
+    badge.style.backgroundColor = "#27ae60";
+    badge.textContent = "UPDATED SUCCESSFULLY";
+    btnDo.style.display = "none";
+    pBox.style.display = "none";
+    desc.textContent = "Update applied successfully! Refreshing page in 3 seconds...";
+    if (updatePollingTimer) {
+      clearInterval(updatePollingTimer);
+      updatePollingTimer = null;
+    }
+    setTimeout(function() { window.location.reload(); }, 3000);
+  } else if (u.status === "ERROR") {
+    badge.className = "badge_offline";
+    badge.style.backgroundColor = "#c0392b";
+    badge.textContent = "CHECK FAILED";
+    btnDo.style.display = "none";
+    pBox.style.display = "none";
+  }
+}
+
+function loadUpdateStatus() {
+  var s = document.createElement("script");
+  s.src = "/ext/unifi-bridge/update_status.js?_=" + Date.now();
+  s.onload = function() {
+    if (window.unifiBridgeUpdate) {
+      updateUpdateUI(window.unifiBridgeUpdate);
+    }
+    try { document.head.removeChild(s); } catch(e){}
+  };
+  document.head.appendChild(s);
+}
+
+function checkUpdateNow() {
+  var selectedBranch = document.getElementById("select_branch").value;
+  document.form.unifibridge_branch.value = selectedBranch;
+  document.form.action_script.value = "start_unifi_bridge_check_update";
+  document.form.action_mode.value = "apply";
+  document.form.action_wait.value = "3";
+
+  var badge = document.getElementById("update_badge");
+  badge.className = "badge_online";
+  badge.style.backgroundColor = "#3498db";
+  badge.textContent = "CHECKING...";
+  document.getElementById("update_desc").textContent = "Contacting GitHub repository on track '" + selectedBranch + "'...";
+
+  document.form.submit();
+
+  var checkCount = 0;
+  if (updatePollingTimer) clearInterval(updatePollingTimer);
+  updatePollingTimer = setInterval(function() {
+    loadUpdateStatus();
+    checkCount++;
+    if (checkCount > 8) {
+      clearInterval(updatePollingTimer);
+      updatePollingTimer = null;
+    }
+  }, 1500);
+}
+
+function doUpdateNow() {
+  var selectedBranch = document.getElementById("select_branch").value;
+  var remVer = document.getElementById("rem_ver_val").textContent;
+  if (!confirm("Are you sure you want to update UniFi AP Bridge (" + selectedBranch + " track) across the entire cluster?\n\nThis will update binaries, scripts, and WebUI and restart the bridge daemon.")) {
+    return;
+  }
+
+  document.form.unifibridge_branch.value = selectedBranch;
+  document.form.action_script.value = "start_unifi_bridge_do_update";
+  document.form.action_mode.value = "apply";
+  document.form.action_wait.value = "5";
+
+  document.getElementById("btn_do_update").style.display = "none";
+  document.getElementById("update_progress_box").style.display = "block";
+  var badge = document.getElementById("update_badge");
+  badge.className = "badge_online";
+  badge.style.backgroundColor = "#f39c12";
+  badge.textContent = "UPDATING...";
+
+  document.form.submit();
+
+  if (updatePollingTimer) clearInterval(updatePollingTimer);
+  updatePollingTimer = setInterval(function() {
+    loadUpdateStatus();
+    loadStatus();
+  }, 1500);
+}
+
+function onTrackChanged() {
+  var b = document.getElementById("select_branch").value;
+  document.form.unifibridge_branch.value = b;
+  var hdrT = document.getElementById("hdr_track");
+  if (hdrT) {
+    hdrT.textContent = b === "dev" ? "Dev Track" : "Release Track";
+    hdrT.style.backgroundColor = b === "dev" ? "#d35400" : "#2980b9";
+  }
+  checkUpdateNow();
 }
 
 function loadCluster() {
@@ -309,6 +470,7 @@ function applySettings() {
   var ctrlUrl = document.getElementById("input_controller_url").value.trim();
   var model = document.getElementById("select_model").value;
   var interval = document.getElementById("select_interval").value;
+  var branch = document.getElementById("select_branch").value;
 
   if (isAutoGw === "1") {
     ctrlUrl = "http://" + detectedGatewayIP + ":8080/inform";
@@ -319,6 +481,7 @@ function applySettings() {
   document.form.unifibridge_controller_url.value = ctrlUrl;
   document.form.unifibridge_model.value = model;
   document.form.unifibridge_interval.value = interval;
+  document.form.unifibridge_branch.value = branch;
 
   document.form.action_script.value = "start_unifi_bridge_apply";
   document.form.action_mode.value = "apply";
@@ -342,6 +505,7 @@ function initial(){
   }
   document.getElementById("detected_gw_text").textContent = detectedGatewayIP;
   loadStatus();
+  loadUpdateStatus();
   autoRefreshTimer = setInterval(loadStatus, 5000);
 }
 </script>
@@ -371,6 +535,7 @@ function initial(){
 <input type="hidden" name="unifibridge_controller_url" value="http://10.100.1.1:8080/inform">
 <input type="hidden" name="unifibridge_model" value="U6M">
 <input type="hidden" name="unifibridge_interval" value="10">
+<input type="hidden" name="unifibridge_branch" value="main">
 
 <table class="content" align="center" cellpadding="0" cellspacing="0">
   <tr>
@@ -389,7 +554,11 @@ function initial(){
                 <tr bgcolor="#4D595D">
                   <td valign="top">
                     <div>&nbsp;</div>
-                    <div class="formfonttitle" id="scripttitle" style="text-align:center;">UniFi AP Bridge</div>
+                    <div class="formfonttitle" id="scripttitle" style="text-align:center;">
+                      UniFi AP Bridge
+                      <span id="hdr_version" style="font-size:12px; font-weight:normal; background:#34495e; color:#ecf0f1; padding:3px 8px; border-radius:3px; vertical-align:middle; margin-left:6px;">v1.0.0</span>
+                      <span id="hdr_track" style="font-size:11px; font-weight:normal; background:#2980b9; color:#fff; padding:3px 6px; border-radius:3px; vertical-align:middle; margin-left:4px;">Release Track</span>
+                    </div>
                     <div style="margin:10px 0 10px 5px;" class="splitLine"></div>
                     <div class="formfontdesc">Emulate a native UniFi 6 Access Point on Asuswrt-Merlin, feeding client associations, Wi-Fi 6 telemetry, and live signal metrics directly into your UniFi Network Controller.</div>
 
@@ -413,7 +582,7 @@ function initial(){
                     <table width="100%" border="1" align="center" cellpadding="2" cellspacing="0" bordercolor="#6b8fa3" class="FormTable SettingsTable" style="border:0px; margin-bottom:12px;" id="table_cluster">
                       <thead class="collapsible-jquery">
                         <tr>
-                          <td colspan="6">
+                          <td colspan="7">
                             <div style="display:flex; justify-content:space-between; align-items:center;">
                               <span>Cluster Access Points & Synchronization Status</span>
                               <span id="cluster_sync_badge" class="badge_online" style="font-size:10px; margin-right:5px;">ALL NODES IN SYNC</span>
@@ -423,17 +592,18 @@ function initial(){
                       </thead>
                       <thead>
                         <tr bgcolor="#2F3A3E" style="color:#bdc3c7; font-size:11px; text-align:left;">
-                          <th style="padding:6px 10px; width:22%;">Access Point</th>
-                          <th style="padding:6px 10px; width:15%;">Role</th>
-                          <th style="padding:6px 10px; width:15%;">IP Address</th>
-                          <th style="padding:6px 10px; width:14%;">Status</th>
-                          <th style="padding:6px 10px; width:17%;">Clients</th>
-                          <th style="padding:6px 10px; width:17%;">Sync Status</th>
+                          <th style="padding:6px 10px; width:20%;">Access Point</th>
+                          <th style="padding:6px 10px; width:14%;">Role</th>
+                          <th style="padding:6px 10px; width:11%;">Version</th>
+                          <th style="padding:6px 10px; width:14%;">IP Address</th>
+                          <th style="padding:6px 10px; width:13%;">Status</th>
+                          <th style="padding:6px 10px; width:14%;">Clients</th>
+                          <th style="padding:6px 10px; width:14%;">Sync Status</th>
                         </tr>
                       </thead>
                       <tbody id="cluster_nodes_tbody">
                         <tr>
-                          <td colspan="6" style="padding:10px; text-align:center; color:#bdc3c7; background-color:#475a5f;">Loading cluster node status...</td>
+                          <td colspan="7" style="padding:10px; text-align:center; color:#bdc3c7; background-color:#475a5f;">Loading cluster node status...</td>
                         </tr>
                       </tbody>
                     </table>
@@ -441,6 +611,59 @@ function initial(){
                       <span>Last Cluster Sync: <span id="last_sync_time" style="color:#ecf0f1; font-weight:bold;">-</span></span>
                       <input class="button_gen" type="button" value="Sync Cluster Now" onclick="syncClusterNow();" style="padding:2px 10px; font-size:11px;" />
                     </div>
+
+                    <!-- Software Updates & Track Management Table -->
+                    <table width="100%" border="1" align="center" cellpadding="2" cellspacing="0" bordercolor="#6b8fa3" class="FormTable SettingsTable" style="border:0px; margin-bottom:12px;" id="table_updates">
+                      <thead class="collapsible-jquery">
+                        <tr>
+                          <td colspan="2">
+                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                              <span>Software Updates & Release Track Management</span>
+                              <span id="update_badge" class="badge_online" style="font-size:10px; margin-right:5px; background-color:#7f8c8d;">READY</span>
+                            </div>
+                          </td>
+                        </tr>
+                      </thead>
+                      <tr>
+                        <td class="settingname">
+                          Release Track / Branch<br/>
+                          <span style="font-size:10px;color:#bdc3c7;">Switch between official releases and dev builds</span>
+                        </td>
+                        <td class="settingvalue">
+                          <select class="input_option" id="select_branch" onchange="onTrackChanged();">
+                            <option value="main" selected>Official Release (main)</option>
+                            <option value="dev">Development Builds (dev)</option>
+                          </select>
+                          <span style="font-size:11px; color:#bdc3c7; margin-left:10px;">Select track to check or install</span>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td class="settingname">
+                          Current & Remote Version<br/>
+                          <span style="font-size:10px;color:#bdc3c7;">Live version comparison with GitHub</span>
+                        </td>
+                        <td class="settingvalue">
+                          <div style="display:flex; align-items:center; gap:12px;">
+                            <div>Installed: <span id="cur_ver_val" style="font-weight:bold; color:#2ecc71;">1.0.0</span></div>
+                            <div id="rem_ver_val" style="color:#bdc3c7;">-</div>
+                          </div>
+                          <div id="update_desc" style="font-size:11px; color:#bdc3c7; margin-top:5px;">Click "Check for Updates" to query the repository.</div>
+                          <div id="update_progress_box" style="display:none; margin-top:8px; padding:8px 12px; background:#243342; border:1px solid #3498db; border-radius:4px; color:#3498db; font-size:11px;">
+                            Updating UniFi AP Bridge daemon & propagating across cluster nodes... Please wait (do not navigate away).
+                          </div>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td class="settingname">
+                          Update Action<br/>
+                          <span style="font-size:10px;color:#bdc3c7;">Query repository or apply update</span>
+                        </td>
+                        <td class="settingvalue">
+                          <input class="button_gen" type="button" id="btn_check_update" value="Check for Updates" onclick="checkUpdateNow();" />
+                          <input class="button_gen" type="button" id="btn_do_update" value="Update Now" onclick="doUpdateNow();" style="display:none; margin-left:10px; background-color:#e67e22; color:#fff; font-weight:bold;" />
+                        </td>
+                      </tr>
+                    </table>
 
                     <!-- Status & Telemetry Table -->
                     <table width="100%" border="1" align="center" cellpadding="2" cellspacing="0" bordercolor="#6b8fa3" class="FormTable SettingsTable" style="border:0px;" id="table_status">

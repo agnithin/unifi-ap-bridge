@@ -1,9 +1,11 @@
-name: Release UniFi AP Bridge
+name: Release & Dev Build UniFi AP Bridge
 
 on:
   push:
     tags:
       - 'v*'
+    branches:
+      - dev
 
 permissions:
   contents: write
@@ -26,21 +28,42 @@ jobs:
         run: |
           mkdir -p dist
 
-          echo "Building ARMv7 binary..."
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o dist/unifi-bridge-armv7 cmd/unifi-bridge/main.go
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VER="${{ github.ref_name }}"
+            TAG_NAME="${{ github.ref_name }}"
+            RELEASE_NAME="${{ github.ref_name }}"
+            IS_PRERELEASE="false"
+          else
+            VER=$(cat version.txt 2>/dev/null | tr -d ' \t\r\n')
+            [ -z "$VER" ] && VER="dev"
+            TAG_NAME="dev"
+            RELEASE_NAME="Development Build (${VER})"
+            IS_PRERELEASE="true"
+          fi
+
+          echo "VER=$VER" >> $GITHUB_ENV
+          echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
+          echo "RELEASE_NAME=$RELEASE_NAME" >> $GITHUB_ENV
+          echo "IS_PRERELEASE=$IS_PRERELEASE" >> $GITHUB_ENV
+
+          echo "Building ARMv7 binary ($VER)..."
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags="-s -w -X main.version=$VER -X main.commit=${{ github.sha }} -X main.buildDate=$(date -u +%Y-%m-%d)" -o dist/unifi-bridge-armv7 cmd/unifi-bridge/main.go
           tar -czf dist/unifi-bridge-armv7.tar.gz -C dist unifi-bridge-armv7
 
-          echo "Building ARM64 binary..."
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o dist/unifi-bridge-arm64 cmd/unifi-bridge/main.go
+          echo "Building ARM64 binary ($VER)..."
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w -X main.version=$VER -X main.commit=${{ github.sha }} -X main.buildDate=$(date -u +%Y-%m-%d)" -o dist/unifi-bridge-arm64 cmd/unifi-bridge/main.go
           tar -czf dist/unifi-bridge-arm64.tar.gz -C dist unifi-bridge-arm64
 
           cd dist
           sha256sum unifi-bridge-armv7 unifi-bridge-arm64 unifi-bridge-armv7.tar.gz unifi-bridge-arm64.tar.gz > sha256sums.txt
           cat sha256sums.txt
 
-      - name: Create GitHub Release
+      - name: Publish Release or Dev Pre-Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: ${{ env.RELEASE_NAME }}
+          prerelease: ${{ env.IS_PRERELEASE == 'true' }}
           files: |
             dist/unifi-bridge-armv7
             dist/unifi-bridge-arm64
@@ -48,5 +71,3 @@ jobs:
             dist/unifi-bridge-arm64.tar.gz
             dist/sha256sums.txt
           generate_release_notes: true
-          draft: false
-          prerelease: false

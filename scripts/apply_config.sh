@@ -10,13 +10,37 @@ SETTINGS_FILE="/jffs/addons/custom_settings.txt"
 
 mkdir -p "$CONF_DIR"
 
-# If action is sync only, run sync_nodes.sh and exit
-if echo "${2:-}" | grep -q "sync"; then
-    if [ -f "$INSTALL_DIR/sync_nodes.sh" ]; then
-        "$INSTALL_DIR/sync_nodes.sh" sync >/tmp/unifi-bridge-sync.log 2>&1
-    fi
-    exit 0
-fi
+# Actions triggered via service-event
+case "${2:-}" in
+    *check_update*)
+        BRANCH="main"
+        if [ -f "$SETTINGS_FILE" ]; then
+            val=$(grep -E "^unifibridge_branch[[:space:]]+" "$SETTINGS_FILE" | tail -n 1 | awk '{print $2}')
+            [ -n "$val" ] && BRANCH="$val"
+        fi
+        if [ -f "$INSTALL_DIR/update.sh" ]; then
+            "$INSTALL_DIR/update.sh" check "$BRANCH" >/tmp/unifi-bridge-update.log 2>&1 &
+        fi
+        exit 0
+        ;;
+    *do_update*)
+        BRANCH="main"
+        if [ -f "$SETTINGS_FILE" ]; then
+            val=$(grep -E "^unifibridge_branch[[:space:]]+" "$SETTINGS_FILE" | tail -n 1 | awk '{print $2}')
+            [ -n "$val" ] && BRANCH="$val"
+        fi
+        if [ -f "$INSTALL_DIR/update.sh" ]; then
+            "$INSTALL_DIR/update.sh" apply "$BRANCH" >/tmp/unifi-bridge-update.log 2>&1 &
+        fi
+        exit 0
+        ;;
+    *sync*)
+        if [ -f "$INSTALL_DIR/sync_nodes.sh" ]; then
+            "$INSTALL_DIR/sync_nodes.sh" sync >/tmp/unifi-bridge-sync.log 2>&1 &
+        fi
+        exit 0
+        ;;
+esac
 
 # Defaults
 ENABLED="1"
@@ -24,6 +48,7 @@ AUTO_GW="1"
 URL=""
 MODEL="U6M"
 INTERVAL="10"
+BRANCH="main"
 
 # Parse values from custom_settings.txt
 if [ -f "$SETTINGS_FILE" ]; then
@@ -41,6 +66,9 @@ if [ -f "$SETTINGS_FILE" ]; then
 
     val=$(grep -E "^unifibridge_interval[[:space:]]+" "$SETTINGS_FILE" | tail -n 1 | awk '{print $2}')
     [ -n "$val" ] && INTERVAL="$val"
+
+    val=$(grep -E "^unifibridge_branch[[:space:]]+" "$SETTINGS_FILE" | tail -n 1 | awk '{print $2}')
+    [ -n "$val" ] && BRANCH="$val"
 fi
 
 # Detect Gateway IP if Auto
@@ -61,6 +89,7 @@ cat << EOF > "$CONF_FILE"
   "controller_url": "$URL",
   "interval_sec": $INTERVAL,
   "model": "$MODEL",
+  "branch": "$BRANCH",
   "state_path": "$INSTALL_DIR/state.json",
   "wlan_mapping": $WLAN_MAP
 }

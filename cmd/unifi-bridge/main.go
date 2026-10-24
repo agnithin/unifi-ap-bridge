@@ -21,11 +21,18 @@ import (
 	"github.com/agnithin/unifi-ap-bridge/providers/profile"
 )
 
+var (
+	version   = "1.0.0"
+	commit    = "none"
+	buildDate = "unknown"
+)
+
 type Config struct {
 	ControllerURL string            `json:"controller_url"`
 	IntervalSec   int               `json:"interval_sec"`
 	Model         string            `json:"model"`
 	StatePath     string            `json:"state_path"`
+	Branch        string            `json:"branch,omitempty"`
 	WlanMapping   map[string]string `json:"wlan_mapping"`
 }
 
@@ -35,6 +42,7 @@ func loadConfig(path string) (*Config, error) {
 		IntervalSec:   10,
 		Model:         "U6M",
 		StatePath:     "/jffs/addons/unifi-bridge/state.json",
+		Branch:        "main",
 		WlanMapping:   make(map[string]string),
 	}
 
@@ -52,6 +60,9 @@ func loadConfig(path string) (*Config, error) {
 
 	if err := json.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("invalid config json: %w", err)
+	}
+	if cfg.Branch == "" {
+		cfg.Branch = "main"
 	}
 	return cfg, nil
 }
@@ -102,6 +113,8 @@ func updateWebUIStatus(host *providers.HostInfo, modelProfile models.ModelProfil
 
 	statusObj := map[string]any{
 		"running":        true,
+		"version":        version,
+		"branch":         cfg.Branch,
 		"pid":            os.Getpid(),
 		"hostname":       host.Hostname,
 		"mac":            host.MAC,
@@ -146,7 +159,14 @@ func main() {
 	profileFlag := flag.String("profile", "", "Path to synthetic profile JSON for simulation/testing")
 	wlanMapFlag := flag.String("wlan-map", "", "JSON mapping of SSID to 24-hex WLAN ObjectId")
 	dumpFlag := flag.Bool("dump", false, "Dump rendered inform JSON payload to stdout")
+	versionFlag := flag.Bool("version", false, "Print version information and exit")
+	flag.BoolVar(versionFlag, "v", false, "Print version information and exit (shorthand)")
 	flag.Parse()
+
+	if *versionFlag {
+		fmt.Printf("unifi-bridge %s (commit: %s, built: %s)\n", version, commit, buildDate)
+		return
+	}
 
 	cfg, err := loadConfig(*configPath)
 	if err != nil {

@@ -115,6 +115,16 @@ if [ -f "./scripts/sync_nodes.sh" ]; then
     chmod 755 "$INSTALL_DIR/sync_nodes.sh"
 fi
 
+if [ -f "./scripts/update.sh" ]; then
+    cp "./scripts/update.sh" "$INSTALL_DIR/update.sh"
+    chmod 755 "$INSTALL_DIR/update.sh"
+fi
+
+if [ -f "./version.txt" ]; then
+    cp "./version.txt" "$INSTALL_DIR/version.txt"
+    chmod 644 "$INSTALL_DIR/version.txt"
+fi
+
 # Install CLI management companion to /jffs/scripts/unifi-bridge
 if [ -f "./scripts/unifi-bridge.sh" ]; then
     echo "[*] Installing CLI manager companion to /jffs/scripts/unifi-bridge..."
