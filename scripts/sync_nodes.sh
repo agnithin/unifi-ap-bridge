@@ -178,7 +178,7 @@ for node_ip in $NODE_IPS; do
             r_hb=$(echo "$remote_raw" | grep '"last_heartbeat":' | head -n 1 | awk -F'"' '{print $4}')
             [ -n "$r_hb" ] && node_hb="$r_hb"
 
-            r_ver=$(echo "$remote_raw" | sed -n '/---VER---/,/---TEMP---/p' | grep -vE '---' | tr -d ' \t\r\n')
+            r_ver=$(echo "$remote_raw" | sed -n '/---VER---/,/---TEMP---/p' | grep -v -e '---' | tr -d ' \t\r\n')
             if [ -n "$r_ver" ]; then
                 node_version="$r_ver"
             else
