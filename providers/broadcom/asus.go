@@ -129,6 +129,8 @@ func (p *AsusProvider) GetRadios() ([]telemetry.Radio, error) {
 			hasVHT = true
 		}
 
+		cuTotal, cuSelfRx, cuSelfTx := p.parseChanimStats(iface)
+
 		radios = append(radios, telemetry.Radio{
 			Name:           radioName,
 			Radio:          band,
@@ -142,6 +144,9 @@ func (p *AsusProvider) GetRadios() ([]telemetry.Radio, error) {
 			HasHE:          true,
 			HasVHT:         hasVHT,
 			TxPowerMode:    "auto",
+			CuTotal:        cuTotal,
+			CuSelfRx:       cuSelfRx,
+			CuSelfTx:       cuSelfTx,
 		})
 	}
 	return radios, nil

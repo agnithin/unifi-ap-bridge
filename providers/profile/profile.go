@@ -69,8 +69,8 @@ func (p *ProfileProvider) GetHostInfo() (*providers.HostInfo, error) {
 
 func (p *ProfileProvider) GetRadios() ([]telemetry.Radio, error) {
 	radios := []telemetry.Radio{
-		{Name: "wifi-ng", Radio: "ng", Channel: 6},
-		{Name: "wifi-na", Radio: "na", Channel: 161},
+		{Name: "wifi-ng", Radio: "ng", Channel: 6, CuTotal: 42, CuSelfRx: 3, CuSelfTx: 8},
+		{Name: "wifi-na", Radio: "na", Channel: 161, CuTotal: 18, CuSelfRx: 4, CuSelfTx: 10},
 	}
 	return radios, nil
 }

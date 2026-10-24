@@ -60,6 +60,12 @@ func TestAsusProvider(t *testing.T) {
 	if len(radios) != 2 {
 		t.Errorf("expected 2 radios, got %d", len(radios))
 	}
+	if radios[0].CuTotal != 64 || radios[0].CuSelfTx != 12 || radios[0].CuSelfRx != 2 {
+		t.Errorf("radio 0 CuTotal mismatch: %+v", radios[0])
+	}
+	if radios[1].CuTotal != 25 || radios[1].CuSelfTx != 5 || radios[1].CuSelfRx != 3 {
+		t.Errorf("radio 1 CuTotal mismatch: %+v", radios[1])
+	}
 
 	wlanMap := map[string]string{
 		"blueberry-prime": "6adb775a27327fe7fefdc22c",

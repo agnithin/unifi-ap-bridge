@@ -61,6 +61,9 @@ type Radio struct {
 	HasHE          bool   `json:"has_he"`
 	HasVHT         bool   `json:"has_vht,omitempty"`
 	TxPowerMode    string `json:"tx_power_mode,omitempty"`
+	CuTotal        int    `json:"cu_total"`   // Total channel utilization % (0-100)
+	CuSelfRx       int    `json:"cu_self_rx"` // AP receive airtime % (0-100)
+	CuSelfTx       int    `json:"cu_self_tx"` // AP transmit airtime % (0-100)
 }
 
 type RadioStat struct {
