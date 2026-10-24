@@ -141,8 +141,8 @@ for node_ip in $NODE_IPS; do
         if [ "$ACTION" = "update" ]; then
             echo "[*] Propagating update to node ${node_ip}..."
             # Stream updated scripts and binary package (excluding node-unique state.json)
-            tar -czf - -C "$INSTALL_DIR" apply_config.sh sync_nodes.sh update.sh watchdog.sh version.txt webui config/config.json unifi-bridge.tar.gz 2>/dev/null | \
-                ssh -i "$SSH_KEY" -y "$node_ip" "tar -xzf - -C $INSTALL_DIR 2>/dev/null; [ -f $INSTALL_DIR/update.sh ] && chmod 755 $INSTALL_DIR/*.sh; $INSTALL_DIR/start.sh" >/dev/null 2>&1
+            tar -czf - -C "$INSTALL_DIR" apply_config.sh sync_nodes.sh unifi-bridge.sh update.sh watchdog.sh version.txt webui config/config.json unifi-bridge.tar.gz 2>/dev/null | \
+                ssh -i "$SSH_KEY" -y "$node_ip" "tar -xzf - -C $INSTALL_DIR 2>/dev/null; [ -f $INSTALL_DIR/unifi-bridge.sh ] && ln -sf $INSTALL_DIR/unifi-bridge.sh /jffs/scripts/unifi-bridge; chmod 755 $INSTALL_DIR/*.sh; $INSTALL_DIR/start.sh" >/dev/null 2>&1
             if [ $? -eq 0 ]; then
                 sync_status="Updated & In Sync"
             else

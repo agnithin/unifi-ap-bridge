@@ -128,8 +128,9 @@ fi
 # Install CLI management companion to /jffs/scripts/unifi-bridge
 if [ -f "./scripts/unifi-bridge.sh" ]; then
     echo "[*] Installing CLI manager companion to /jffs/scripts/unifi-bridge..."
-    cp "./scripts/unifi-bridge.sh" "$SCRIPTS_DIR/unifi-bridge"
-    chmod 755 "$SCRIPTS_DIR/unifi-bridge"
+    cp -fp "./scripts/unifi-bridge.sh" "$INSTALL_DIR/unifi-bridge.sh"
+    chmod 755 "$INSTALL_DIR/unifi-bridge.sh"
+    ln -sf "$INSTALL_DIR/unifi-bridge.sh" "$SCRIPTS_DIR/unifi-bridge"
     # Entware symlink if available
     [ -d "/opt/bin" ] && ln -sf "$SCRIPTS_DIR/unifi-bridge" /opt/bin/unifi-bridge 2>/dev/null || true
 fi

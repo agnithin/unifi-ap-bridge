@@ -192,7 +192,8 @@ cmd_apply() {
     cp -fp "${tmp_dir}/version.txt" "$INSTALL_DIR/version.txt" && chmod 644 "$INSTALL_DIR/version.txt"
 
     # CLI tool
-    cp -fp "${tmp_dir}/unifi-bridge.sh" "/jffs/scripts/unifi-bridge" && chmod 755 "/jffs/scripts/unifi-bridge"
+    cp -fp "${tmp_dir}/unifi-bridge.sh" "$INSTALL_DIR/unifi-bridge.sh" && chmod 755 "$INSTALL_DIR/unifi-bridge.sh"
+    ln -sf "$INSTALL_DIR/unifi-bridge.sh" "/jffs/scripts/unifi-bridge"
 
     # WebUI
     mkdir -p "$INSTALL_DIR/webui"
