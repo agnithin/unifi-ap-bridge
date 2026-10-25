@@ -19,6 +19,31 @@ REPO_RELEASES="https://github.com/agnithin/unifi-ap-bridge/releases"
 
 mkdir -p "/tmp/var/wwwext/$ADDON_NAME"
 
+# Serialize checks and installs so a second request cannot replace active status
+# or interleave installed assets. Never steal a stale lock automatically: a PID
+# alone cannot prove ownership after PID reuse or a partially completed install.
+UPDATE_LOCK="/tmp/unifi-bridge-update.lock"
+acquire_update_lock() {
+    if ! (umask 077; mkdir "$UPDATE_LOCK") 2>/dev/null; then
+        echo "Another bridge update/check owns $UPDATE_LOCK; retry after it completes. If interrupted, inspect service and lock ownership before recovery." >&2
+        return 1
+    fi
+    if ! echo "$$" > "$UPDATE_LOCK/pid"; then
+        rmdir "$UPDATE_LOCK" 2>/dev/null || true
+        return 1
+    fi
+    trap 'release_update_lock' 0
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+}
+
+release_update_lock() {
+    if [ "$(cat "$UPDATE_LOCK/pid" 2>/dev/null)" = "$$" ]; then
+        rm -f "$UPDATE_LOCK/pid"
+        rmdir "$UPDATE_LOCK" 2>/dev/null || true
+    fi
+}
+
 # Determine current configured branch (default: main)
 get_branch() {
     if [ -n "${1:-}" ]; then
@@ -362,7 +387,6 @@ cmd_apply() {
     fi
 
     write_update_status "SUCCESS" "$branch" "$remote_ver" "$remote_ver" "Local addon updated to ${remote_ver} (${branch}); cluster rollout is reported separately"
-    (sleep 5 && write_update_status "UP_TO_DATE" "$branch" "$remote_ver" "$remote_ver" "UniFi AP Bridge is up to date (${remote_ver})") >/dev/null 2>&1 &
 
     echo "[*] Propagating update to cluster nodes..."
     if [ -f "$INSTALL_DIR/sync_nodes.sh" ]; then
@@ -388,9 +412,11 @@ cmd_status() {
 
 case "${1:-}" in
     check)
+        acquire_update_lock || exit 1
         cmd_check "${2:-}" "${3:-}"
         ;;
     apply|update)
+        acquire_update_lock || exit 1
         cmd_apply "${2:-}" "${3:-}"
         ;;
     status)

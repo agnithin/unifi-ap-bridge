@@ -254,7 +254,7 @@ The detailed evidence and acceptance criteria are in [the project audit/backlog]
 
 | Work | Status / next step |
 |---|---|
-| B1–B2: Reliable bridge-addon updates | Fail-closed download/checksum/archive/version/startup/heartbeat checks implemented and tested in dev. Immutable complete release bundles, transaction locking, rollback and verified per-node outcomes remain pending. Stable release publication is separate from merging main. |
+| B1–B2: Reliable bridge-addon updates | Fail-closed download/checksum/archive/version/startup/heartbeat checks implemented and tested in dev. A follow-up source fix serializes checks/installs and preserves active status against overlapping requests; its rollout is pending. Immutable complete release bundles, cross-operation settings/sync locking, rollback and verified per-node outcomes remain pending. Stable release publication is separate from merging main. |
 | B3: Preserve settings | JSON merge preserves custom WLAN mappings, node lists, topology and unknown fields; validation, private atomic writes and no-op detection implemented and tested in dev. |
 | B4: Respect disabled state | Daemon and shared tracked startup enforce enabled=false for boot, cluster and manual entry points; startup distribution included in addon updates. Local regression tests pass. |
 | B5: Accurate tri-band telemetry | Separate physical radio/VAP identities, actual channel widths and per-radio counts implemented and tested in dev. Three-radio rendering under U6IW passed in the actual UniFi overview on both APs; other diagnostic/control surfaces remain outside that check. |

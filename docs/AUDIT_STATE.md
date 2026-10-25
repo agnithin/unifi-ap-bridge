@@ -378,3 +378,13 @@ UniFi overview rendered all three radios on each U6IW-emulated AP. This closes t
 - Structured cluster config/commit verification, background settings/sync completion, sample deadlines/cache/backoff, interval retry/VAP counters, broader LLDP validation and VLAN discovery remain open.
 - Simple authenticated reboot command support is queued. WLAN auto-discovery and guest/VLAN reporting remain future features. UniFi-driven upgrades, router firmware, broad provisioning and scanner/capture integration remain deferred.
 - Main/stable publication was not changed. Stable release remains held pending remaining acceptance and release packaging work.
+
+## 10. Updater Serialization Follow-up — 2026-10-25
+
+**Source implemented and tested; not deployed:** checks and installs now acquire an atomic private RAM-directory lock before downloading or writing operation status. A competing request fails without replacing the active request's status or changing installed files. Normal exit and INT/TERM release only the owning shell's lock. Stale locks are deliberately not reclaimed automatically because PID reuse or interrupted installation requires inspection. SIGKILL/power interruption is not trap-recoverable; the RAM lock clears on reboot, but reboot is not the recommended first recovery action.
+
+Removed the delayed background success-to-UP_TO_DATE rewrite, which could otherwise replace a subsequent request's status after lock release. The UI already handles SUCCESS directly. This is updater-only serialization, not a claim that settings saves, cluster propagation or arbitrary direct script calls share one transaction lock.
+
+**Validation:** eight addon-apply tests passed, including real overlapping processes and a busy owner for both check/apply; failures release their lock and preserve the installed version; a successful intentionally disabled install also releases its lock. Four backend tests, existing WebUI update/health/track/disabled-state regressions, shell syntax and whitespace checks passed. No AP rollout or restart was performed for this follow-up. Both APs retain the previously accepted v1.2.5 `be106ec` deployment.
+
+**Acceptance blocker:** Chrome reported another extension panel blocking automation on the Asus page. Browser settings-save/update-check acceptance remains pending user dismissal/login; this does not block the isolated source tests. Immutable bundles, automatic rollback, cross-operation locking and per-node final update outcomes remain open.
