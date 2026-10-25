@@ -5,6 +5,12 @@
 
 ADDON_NAME="unifi-bridge"
 INSTALL_DIR="/jffs/addons/$ADDON_NAME"
+# Protect existing cluster credentials as well as newly provisioned directories.
+mkdir -p "$INSTALL_DIR/.ssh"
+# Status runs periodically: avoid chmod writes when modes are already correct.
+[ "$(ls -ld "$INSTALL_DIR" | awk '{print $1}')" = "drwxr-xr-x" ] || chmod 755 "$INSTALL_DIR"
+[ "$(ls -ld "$INSTALL_DIR/.ssh" | awk '{print $1}')" = "drwx------" ] || chmod 700 "$INSTALL_DIR/.ssh"
+
 CONFIG_FILE="$INSTALL_DIR/config/config.json"
 CLUSTER_JS="/tmp/var/wwwext/$ADDON_NAME/cluster.js"
 CLUSTER_JSON="/tmp/$ADDON_NAME-cluster.json"
@@ -23,6 +29,34 @@ for k in "$INSTALL_DIR/.ssh/cluster_key" "/jffs/addons/mervlan/.ssh/vlan_manager
         break
     fi
 done
+
+# Dropbear on Merlin does not support OpenSSH ConnectTimeout. Bound the
+# entire command (including connect/auth) with a watchdog; retain stdin for tar.
+cluster_ssh() (
+    ssh -i "$SSH_KEY" -y -o BatchMode=yes -K 5 -I 15 "$@" <&0 &
+    ssh_pid=$!
+    (
+        sleep "${CLUSTER_SSH_TIMEOUT:-30}" &
+        sleep_pid=$!
+        trap 'kill "$sleep_pid" 2>/dev/null; exit' TERM INT
+        wait "$sleep_pid"
+        kill "$ssh_pid" 2>/dev/null
+    ) &
+    timer_pid=$!
+    trap 'kill "$ssh_pid" "$timer_pid" 2>/dev/null' TERM INT
+    wait "$ssh_pid"
+    result=$?
+    kill "$timer_pid" 2>/dev/null
+    wait "$timer_pid" 2>/dev/null
+    exit "$result"
+)
+
+# Status freshness is measured on the node's own clock; no inter-node skew.
+status_is_fresh() {
+    case "$1:$2:$3" in *[!0-9:]*|:*|*::*|*:) return 1 ;; esac
+    age=$(( $1 - $2 ))
+    [ "$age" -ge 0 ] && [ "$age" -le "$3" ]
+}
 
 # Discover configured Satellite Nodes
 get_node_ips() {
@@ -85,7 +119,15 @@ if [ -f "$main_status_js" ]; then
     [ -n "$m_hb" ] && main_heartbeat="$m_hb"
 fi
 
-main_version=$(cat "$INSTALL_DIR/version.txt" 2>/dev/null || echo "1.0.0")
+main_updated=$(grep '"status_updated_at":' "$main_status_js" 2>/dev/null | head -n 1 | awk -F':' '{print $2}' | tr -d ' \t\r\n,')
+main_interval=$(grep '"interval_sec":' "$main_status_js" 2>/dev/null | head -n 1 | awk -F':' '{print $2}' | tr -d ' \t\r\n,')
+case "$main_interval" in ''|*[!0-9]*) main_interval=10 ;; esac
+if ! status_is_fresh "$(date +%s)" "$main_updated" "$((main_interval * 3 + 30))"; then
+    main_running="false"
+fi
+
+main_version=$(grep '"version":' "$main_status_js" 2>/dev/null | head -n 1 | awk -F'"' '{print $4}')
+[ -n "$main_version" ] || main_version=$(cat "$INSTALL_DIR/version.txt" 2>/dev/null || echo "unknown")
 
 if [ -f "/sys/class/thermal/thermal_zone0/temp" ]; then
     raw_temp=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null)
@@ -111,7 +153,7 @@ nodes_json="${nodes_json}
       \"mode\": \"${main_mode}\",
       \"temp\": \"${main_temp}\",
       \"last_heartbeat\": \"${main_heartbeat}\",
-      \"sync_status\": \"In Sync (Local)\"
+      \"sync_status\": \"Local\"
     }"
 
 # 2. Iterate Satellite Nodes
@@ -119,7 +161,7 @@ NODE_IPS=$(get_node_ips)
 
 for node_ip in $NODE_IPS; do
     [ -z "$node_ip" ] && continue
-    sync_status="In Sync"
+    sync_status="Version Match (Config Unverified)"
     node_running="false"
     node_name="ZenWiFi_Node_${node_ip##*.}"
     node_model="$main_model"
@@ -142,31 +184,42 @@ for node_ip in $NODE_IPS; do
             echo "[*] Propagating update to node ${node_ip}..."
             # Stream updated scripts and binary package (excluding node-unique state.json)
             tar -czf - -C "$INSTALL_DIR" apply_config.sh sync_nodes.sh unifi-bridge.sh update.sh watchdog.sh version.txt webui config/config.json unifi-bridge.tar.gz 2>/dev/null | \
-                ssh -i "$SSH_KEY" -y "$node_ip" "tar -xzf - -C $INSTALL_DIR 2>/dev/null; [ -f $INSTALL_DIR/unifi-bridge.sh ] && ln -sf $INSTALL_DIR/unifi-bridge.sh /jffs/scripts/unifi-bridge; chmod 755 $INSTALL_DIR/*.sh; $INSTALL_DIR/start.sh" >/dev/null 2>&1
+                CLUSTER_SSH_TIMEOUT=120 cluster_ssh "$node_ip" "tar -xzf - -C $INSTALL_DIR 2>/dev/null; [ -f $INSTALL_DIR/unifi-bridge.sh ] && ln -sf $INSTALL_DIR/unifi-bridge.sh /jffs/scripts/unifi-bridge; chmod 755 $INSTALL_DIR/*.sh; mkdir -p $INSTALL_DIR/.ssh; chmod 755 $INSTALL_DIR; chmod 700 $INSTALL_DIR/.ssh; $INSTALL_DIR/start.sh" >/dev/null 2>&1
             if [ $? -eq 0 ]; then
-                sync_status="Updated & In Sync"
+                sync_status="Update Applied (Unverified)"
             else
                 sync_status="Update Failed"
             fi
         # If action is 'sync', push local config to remote node
         elif [ "$ACTION" = "sync" ] && [ -f "$CONFIG_FILE" ]; then
             # Remote config with node-specific state path
-            ssh -i "$SSH_KEY" -y "$node_ip" "mkdir -p $INSTALL_DIR/config; cat > $INSTALL_DIR/config/config.json && $INSTALL_DIR/start.sh" < "$CONFIG_FILE" >/dev/null 2>&1
+            CLUSTER_SSH_TIMEOUT=120 cluster_ssh "$node_ip" "mkdir -p $INSTALL_DIR/config $INSTALL_DIR/.ssh; chmod 755 $INSTALL_DIR; chmod 700 $INSTALL_DIR/.ssh; umask 077; cat > $INSTALL_DIR/config/config.json && chmod 600 $INSTALL_DIR/config/config.json && $INSTALL_DIR/start.sh" < "$CONFIG_FILE" >/dev/null 2>&1
             if [ $? -eq 0 ]; then
-                sync_status="In Sync"
+                sync_status="Config Synced"
             else
                 sync_status="Sync Failed"
             fi
         fi
 
         # Query remote node status
-        remote_raw=$(ssh -i "$SSH_KEY" -y "$node_ip" "cat /tmp/var/wwwext/$ADDON_NAME/status.js 2>/dev/null; echo '---VER---'; cat $INSTALL_DIR/version.txt 2>/dev/null; echo '---TEMP---'; cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null" </dev/null 2>/dev/null)
-        if [ -n "$remote_raw" ]; then
+        remote_raw=$(cluster_ssh "$node_ip" "cat /tmp/var/wwwext/$ADDON_NAME/status.js 2>/dev/null; echo '---LIVE---'; date +%s; pidof unifi-bridge; echo '---VER---'; cat $INSTALL_DIR/version.txt 2>/dev/null; echo '---TEMP---'; cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null" </dev/null 2>/dev/null)
+        remote_result=$?
+        if [ "$remote_result" -eq 0 ] && [ -n "$remote_raw" ]; then
             r_host=$(echo "$remote_raw" | grep '"hostname":' | head -n 1 | awk -F'"' '{print $4}')
             [ -n "$r_host" ] && node_name="$r_host"
 
+            r_now=$(echo "$remote_raw" | sed -n '/---LIVE---/{n;p;}')
+            r_live_pid=$(echo "$remote_raw" | sed -n '/---LIVE---/{n;n;p;}')
+            r_updated=$(echo "$remote_raw" | grep '"status_updated_at":' | head -n 1 | awk -F':' '{print $2}' | tr -d ' \t\r\n,')
+            r_interval=$(echo "$remote_raw" | grep '"interval_sec":' | head -n 1 | awk -F':' '{print $2}' | tr -d ' \t\r\n,')
+            case "$r_interval" in ''|*[!0-9]*) r_interval=10 ;; esac
+            max_age=$((r_interval * 3 + 30))
             r_run=$(echo "$remote_raw" | grep '"running":' | head -n 1 | awk -F':' '{print $2}' | tr -d ' \t\r\n,')
-            [ "$r_run" = "true" ] && node_running="true"
+            if [ "$r_run" = "true" ] && [ -n "$r_live_pid" ] && status_is_fresh "$r_now" "$r_updated" "$max_age"; then
+                node_running="true"
+            else
+                sync_status="Stale or Stopped"
+            fi
 
             r_pid=$(echo "$remote_raw" | grep '"pid":' | head -n 1 | awk -F':' '{print $2}' | tr -d ' \t\r\n,')
             [ -n "$r_pid" ] && node_pid="$r_pid"
@@ -193,14 +246,16 @@ for node_ip in $NODE_IPS; do
             [ -n "$r_hb" ] && node_hb="$r_hb"
 
             r_ver=$(echo "$remote_raw" | sed -n '/---VER---/,/---TEMP---/p' | grep -v -e '---' | tr -d ' \t\r\n')
-            if [ -n "$r_ver" ]; then
+            r_ver_js=$(echo "$remote_raw" | grep '"version":' | head -n 1 | awk -F'"' '{print $4}' | tr -d ' \t\r\n')
+            if [ -n "$r_ver_js" ]; then
+                node_version="$r_ver_js"
+            elif [ -n "$r_ver" ]; then
                 node_version="$r_ver"
             else
-                r_ver_js=$(echo "$remote_raw" | grep '"version":' | head -n 1 | awk -F'"' '{print $4}' | tr -d ' \t\r\n')
-                [ -n "$r_ver_js" ] && node_version="$r_ver_js"
+                node_version="unknown"
             fi
 
-            if [ "$sync_status" = "In Sync" ] && [ "$node_version" != "$main_version" ]; then
+            if [ "$sync_status" = "Version Match (Config Unverified)" ] && [ "$node_version" != "$main_version" ]; then
                 sync_status="Version Diff ($node_version)"
             fi
 

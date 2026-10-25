@@ -24,6 +24,12 @@ jobs:
           go-version: '1.22'
           check-latest: true
 
+      - name: Verify daemon and cluster behavior
+        run: |
+          go test ./...
+          python3 scripts/test_sync_nodes.py
+          for script in scripts/*.sh; do sh -n "$script"; done
+
       - name: Build Binaries
         run: |
           mkdir -p dist
@@ -47,11 +53,11 @@ jobs:
           echo "IS_PRERELEASE=$IS_PRERELEASE" >> $GITHUB_ENV
 
           echo "Building ARMv7 binary ($VER)..."
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags="-s -w -X main.version=$VER -X main.commit=${{ github.sha }} -X main.buildDate=$(date -u +%Y-%m-%d)" -o dist/unifi-bridge-armv7 cmd/unifi-bridge/main.go
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags="-s -w -X main.version=$VER -X main.commit=${{ github.sha }} -X main.buildDate=$(date -u +%Y-%m-%d)" -o dist/unifi-bridge-armv7 ./cmd/unifi-bridge
           tar -czf dist/unifi-bridge-armv7.tar.gz -C dist unifi-bridge-armv7
 
           echo "Building ARM64 binary ($VER)..."
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w -X main.version=$VER -X main.commit=${{ github.sha }} -X main.buildDate=$(date -u +%Y-%m-%d)" -o dist/unifi-bridge-arm64 cmd/unifi-bridge/main.go
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w -X main.version=$VER -X main.commit=${{ github.sha }} -X main.buildDate=$(date -u +%Y-%m-%d)" -o dist/unifi-bridge-arm64 ./cmd/unifi-bridge
           tar -czf dist/unifi-bridge-arm64.tar.gz -C dist unifi-bridge-arm64
 
           cd dist

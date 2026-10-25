@@ -7,7 +7,7 @@
 
 ---
 
-> **Evidence precedence:** The independent verification and action register below supersede conflicting claims in sections 1–4. Those sections preserve the earlier reported baseline; they are not all independently verified. In particular, controller topology, zero client disruption, and deployment provenance are not established by the follow-up checks.
+> **Evidence precedence:** The latest implementation review in section 7 supersedes conflicting dispositions in sections 1–6; section 5 preserves the earlier independent live sample. Those sections preserve the earlier reported baseline; they are not all independently verified. In particular, controller topology, zero client disruption, and deployment provenance are not established by the follow-up checks.
 
 ## 1. Network Topology & Hardware Infrastructure
 
@@ -109,18 +109,25 @@ cd /Users/nithinag/workspace/unifi-ap-bridge && go test -v ./...
 # 2. Check cluster sync & running daemon status on Main AP
 ssh -o BatchMode=yes nithin@10.100.1.10 '/jffs/addons/unifi-bridge/sync_nodes.sh status'
 
-# 3. Query UniFi Controller API for adopted AP state & port tables (via CT107)
-# Pass CONTROLLER_API_KEY as an environment variable or via secure secrets store
-ssh -o BatchMode=yes root@10.100.1.100 "pct exec 107 -- python3 -c '
-import os, urllib.request, ssl, json
-key = os.environ.get(\"CONTROLLER_API_KEY\", \"\")
-ctx = ssl._create_unverified_context()
-req = urllib.request.Request(\"https://10.100.1.1/proxy/network/api/s/default/stat/device\", headers={\"X-API-KEY\": key})
-data = json.loads(urllib.request.urlopen(req, context=ctx).read())[\"data\"]
-for d in data:
-    if d.get(\"mac\") in [\"fc:34:97:46:7b:10\", \"fc:34:97:4f:ac:60\"]:
-        print(d[\"name\"], d[\"model\"], \"Adopted:\", d[\"adopted\"], \"NumSta:\", d[\"num_sta\"])
-'"
+# 3. Use the official Integration API, not the legacy UI stat/device API.
+# Run Python in the environment where the secret is securely supplied.
+# A local exported variable is not automatically forwarded through SSH/pct.
+# CONTROLLER_CA_FILE must identify the trusted controller CA certificate.
+python3 - <<'PYTHON'
+import json, os, ssl, urllib.request
+base = "https://10.100.1.1/proxy/network/integration/v1"
+ctx = ssl.create_default_context(cafile=os.environ["CONTROLLER_CA_FILE"])
+def get(path):
+    req = urllib.request.Request(base + path,
+        headers={"X-API-Key": os.environ["CONTROLLER_API_KEY"]})
+    with urllib.request.urlopen(req, context=ctx, timeout=10) as response:
+        return json.load(response)
+for site in get("/sites")["data"]:
+    for device in get("/sites/" + site["id"] + "/devices?limit=100")["data"]:
+        if device.get("macAddress", "").lower() in (
+            "fc:34:97:46:7b:10", "fc:34:97:4f:ac:60"):
+            print({k: device.get(k) for k in ("name", "model", "state")})
+PYTHON
 ```
 
 
@@ -257,3 +264,52 @@ When authorized by the operator to proceed with code changes:
    - Verify `.ssh` directory remains `0700`.
    - Re-run Go test suite (`go test -v ./...`).
 4. **Present Audit Closure to Operator for Merge Consideration.**
+
+
+---
+
+## 7. Implementation Review — 2026-10-24, after operator authorization
+
+**Authorization:** Operator requested evaluation of the worker's pushback and implementation of fixes. Local source changes are in progress on `dev`; the former standby directive is superseded. Live daemon deployment, artifact replacement, permission changes, and merging have not been performed by this implementation pass.
+
+### Evaluation of worker pushback
+
+- **A5 — Partly reasonable.** Keeping a single Dropbear `-y` (trust unknown host keys) is proportionate for this homelab. Live `ssh -h` confirms that a second `-y` would disable checking; these are different behaviors. SSH host-key trust does not require a certificate authority or DNS. The assertions that keys routinely regenerate on ordinary reboot and that the backhaul is exclusively private are not independently established. Strict PKI was never required by the audit. Existing fallback identities are preserved; dedicated-key migration remains a separate decision.
+- **A5 timeout proposal — Corrected for firmware compatibility.** Dropbear v2025.89 on Main lists no `ConnectTimeout` option, and BusyBox has no `timeout` applet. The implementation uses supported `BatchMode`, keepalive/idle options, plus a shell watchdog bounding the full SSH operation (30 seconds for status, 120 for transfers). A live probe also found no `stat` command; mode checks use available `ls`/`awk` and skip redundant chmod operations during periodic status collection.
+- **A6 — Accept the reduced measurement scope, reject the absolute claim.** No flash-wear benchmark is needed. Source review shows `StateManager.Save` is invoked when controller responses change identity or `cfgversion`, and on adoption reset; it is not limited to first adoption or manual settings edits. Temporary-file rename already provides atomic replacement. Runtime files under `/tmp` reduce flash writes, but an unbounded log still consumes RAM. Daemon log output is now capped at 1 MiB; watchdog logging and broader write-path review remain follow-up work.
+- **A7 — Reasonable.** WLAN discovery, guest tagging, and roam events are future features. They do not gate v1.2.2 if limitations are documented accurately. Keep their acceptance criteria in section 5.
+- **A2 — API mismatch confirmed live.** The existing documented key successfully authenticated to `/proxy/network/integration/v1/info` and `/sites` through CT107. The legacy endpoint's 401 did not establish that the credential was invalid. Removing the literal from the current document does not revoke the active key or remove it from Git history. Rotation remains open and requires a coordinated credential change.
+- **A3 — Root cause was overstated.** The stale fallback `1.2.1` is confirmed in source. Prior build flags and deployed binary provenance were not proven; do not label that as a confirmed explanation for the installed artifact. CI already injected version metadata. Local defaults and package build commands are corrected, with runtime commit/build-date fields added for future verification.
+
+### New controller-side evidence
+
+Read-only official Integration API checks at approximately **22:09 PDT** established:
+
+- UniFi Network application version: `10.6.109`.
+- Main and Node: `ONLINE`, model `U6 IW`; heartbeat timestamps `2026-10-25T05:09:28Z` and `2026-10-25T05:09:29Z`.
+- Controller AP ports match physical samples: Port 1 at 2500 Mbps on both; Node Port 4 at 1000 Mbps; remaining AP LAN ports down.
+- Gateway and Flex switch are `ONLINE`.
+- Both AP detail responses have **`uplink: null`**. The official response therefore does not establish the claimed parent gateway/port mapping. This may be an API representation limitation or a topology defect; inspect the controller topology presentation and relevant live LLDP/payload evidence before declaring resolution.
+
+The query printed only selected device/port/heartbeat fields. The existing key was loaded privately from the earlier documentation for this bounded verification and was not printed or copied to a new file. TLS certificate validation was disabled for these diagnostic checks as in the earlier audit; the documented reusable example now expects a trusted CA file.
+
+### Fixes prepared locally
+
+| Area | Change | Remaining verification |
+|---|---|---|
+| Permissions (A1) | Installer, updater, and cluster script enforce addon directory `0755` and bridge `.ssh` `0700`, including remote sync/update paths. Protecting only `.ssh` while its parent stays `0777` is insufficient. | Apply to both APs and verify ownership, modes, and cluster access. Existing key file modes remain unchanged. |
+| Version/provenance (A3) | Default version `1.2.2`; WebUI status includes commit/build date; CI builds the full command package so helper files are compiled. | Deploy identified artifacts, compare checksums, and verify runtime metadata on both APs. |
+| Daemon resilience (A4) | Normalize non-positive configured intervals to 10 seconds; update uptime from each system sample; require three consecutive HTTP 401/404 rejections before adoption recovery. HTTP 400 no longer resets identity. | Targeted regressions plus live outage/recovery observation after deployment. Three rejections remain a recovery policy, not cryptographic proof of forgetting. |
+| Accurate heartbeat status (A4) | `last_attempt`, `last_successful_inform`, and epoch `status_updated_at`; legacy `last_heartbeat` now means last successful inform. Failed attempts no longer fabricate success; WebUI surfaces inform errors. | Live failure/recovery verification; controller and AP clocks checked for consistency. |
+| Key validation (A4) | Reject malformed non-hex or wrong-length auth keys from controller responses and persisted state rather than using a bootstrap fallback in adopted mode. | Regression tests preserve the existing identity on malformed responses. |
+| Cluster health (A5) | Bound SSH operations; require a live remote PID and fresh status on the node's own clock; stale legacy status is conservatively unhealthy. Matching versions are labeled `Version Match (Config Unverified)`, not `In Sync`. | The new wrapper successfully performed a Main-to-Node PID read on actual Dropbear without installing files or restarting anything. Full installed status/sync validation remains pending. Timestamp freshness tracks daemon sampling; inform success is reported separately. |
+| RAM logging (A6) | Bound regular-file daemon logs to 1 MiB, preserving terminal/pipe output; oversized events retain their bounded tail. | Confirm bounds and useful recent logs on the AP; broader watchdog/write review remains open. |
+| CI | Run Go regressions, cluster watchdog/freshness tests, and shell syntax checks before ARM builds. | Hosted CI on a future authorized push; local validation recorded below. |
+
+### Validation and release disposition
+
+Local validation passed: Go tests with the race detector, Go vet, three cluster regression tests (including hung SSH termination, preserved transfer stdin, and stale/stopped node detection), shell syntax checks, and extracted WebUI JavaScript syntax checking. ARMv7 and ARM64 command-package builds succeeded with metadata `1.2.2`, `3107678-audit-fixes`, and UTC build date `2026-10-25`. The commit label explicitly identifies uncommitted audit fixes; it does not claim those changes are part of commit `3107678`.
+
+Build outputs remain in `/private/tmp/unifi-fixes-9oj5polz/artifacts`; tracked `bin/` artifacts have not been overwritten. Final rebuilt artifact checksums are recorded in that directory's manifest. Hosted CI and live deployment validation are still pending.
+
+**Release status:** Keep `dev`. Source fixes do not close live deployment verification. A2 credential rotation and topology investigation remain open; A4 full architecture review is not claimed complete. Do not merge to `main` without explicit approval.

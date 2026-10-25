@@ -75,6 +75,9 @@ func (sm *StateManager) Load() error {
 	}
 
 	if loaded.AuthKeyHex != "" {
+		if !validAuthKey(loaded.AuthKeyHex) {
+			return ErrStateCorrupted
+		}
 		loaded.Adopted = true
 		loaded.Mode = ModeGCM
 	}
@@ -171,7 +174,10 @@ func (sm *StateManager) ApplyControllerResponse(payload map[string]any) (changed
 		if keyHex == "" {
 			keyHex = params["x_authkey"]
 		}
-		if len(keyHex) == 32 {
+		if keyHex != "" && !validAuthKey(keyHex) {
+			return false, fmt.Errorf("invalid controller auth key")
+		}
+		if validAuthKey(keyHex) {
 			if sm.state.AuthKeyHex != keyHex || !sm.state.Adopted {
 				sm.state.AuthKeyHex = keyHex
 				sm.state.Adopted = true
@@ -189,7 +195,10 @@ func (sm *StateManager) ApplyControllerResponse(payload map[string]any) (changed
 
 	case "cmd":
 		if cmd, _ := payload["cmd"].(string); cmd == "set-adopt" {
-			if keyHex, ok := payload["key"].(string); ok && len(keyHex) == 32 {
+			if keyHex, ok := payload["key"].(string); ok {
+				if !validAuthKey(keyHex) {
+					return false, fmt.Errorf("invalid controller auth key")
+				}
 				if sm.state.AuthKeyHex != keyHex || !sm.state.Adopted {
 					sm.state.AuthKeyHex = keyHex
 					sm.state.Adopted = true
@@ -225,4 +234,9 @@ func (sm *StateManager) Reset() error {
 	}
 	sm.mu.Unlock()
 	return sm.Save()
+}
+
+func validAuthKey(value string) bool {
+	key, err := hex.DecodeString(value)
+	return err == nil && len(key) == 16
 }

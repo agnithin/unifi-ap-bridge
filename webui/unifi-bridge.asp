@@ -201,7 +201,7 @@ function updateUI(st) {
   if (st.running) {
     badge.className = "badge_online";
     badge.textContent = "RUNNING";
-    statusText.textContent = "Daemon Active (PID " + (st.pid || "-") + ")";
+    statusText.textContent = "Daemon Active (PID " + (st.pid || "-") + ")" + (st.last_status && st.last_status.indexOf("Error:") === 0 ? " — " + st.last_status : "");
   } else {
     badge.className = "badge_offline";
     badge.textContent = "STOPPED";
@@ -218,7 +218,7 @@ function updateUI(st) {
 
   document.getElementById("model_val").textContent = (st.model || "UniFi 6 Mesh") + " (Firmware " + (st.firmware || "6.8.2") + ")";
   document.getElementById("controller_val").textContent = st.controller_url || ("http://" + detectedGatewayIP + ":8080/inform");
-  document.getElementById("heartbeat_val").textContent = (st.last_heartbeat || "-") + " [" + (st.mode || "GCM") + "]";
+  document.getElementById("heartbeat_val").textContent = (st.last_successful_inform || st.last_heartbeat || "-") + " [" + (st.mode || "GCM") + "]";
 
   document.getElementById("stat_total").textContent = st.total_stations !== undefined ? st.total_stations : "-";
   document.getElementById("stat_2g").textContent = st.stations_2g !== undefined ? st.stations_2g : "-";

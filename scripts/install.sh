@@ -7,6 +7,11 @@ set -eu
 
 ADDON_NAME="unifi-bridge"
 INSTALL_DIR="/jffs/addons/$ADDON_NAME"
+# Protect existing cluster credentials as well as newly provisioned directories.
+mkdir -p "$INSTALL_DIR/.ssh"
+chmod 755 "$INSTALL_DIR"
+chmod 700 "$INSTALL_DIR/.ssh"
+
 BIN_DIR="$INSTALL_DIR/bin"
 CONFIG_DIR="$INSTALL_DIR/config"
 WEBUI_DIR="$INSTALL_DIR/webui"

@@ -22,7 +22,7 @@ import (
 )
 
 var (
-	version   = "1.2.1"
+	version   = "1.2.2"
 	commit    = "none"
 	buildDate = "unknown"
 )
@@ -66,6 +66,9 @@ func loadConfig(path string) (*Config, error) {
 	if cfg.Branch == "" {
 		cfg.Branch = "main"
 	}
+	if cfg.IntervalSec <= 0 {
+		cfg.IntervalSec = 10
+	}
 	return cfg, nil
 }
 
@@ -87,7 +90,7 @@ func logEvent(format string, v ...any) string {
 	return msg
 }
 
-func updateWebUIStatus(host *providers.HostInfo, modelProfile models.ModelProfile, cfg *Config, stateMgr *inform.StateManager, totalStations int, radioStats []telemetry.RadioStat, ports []telemetry.Port, sysStats *telemetry.SystemStats, exchangeErr error) {
+func updateWebUIStatus(host *providers.HostInfo, modelProfile models.ModelProfile, cfg *Config, stateMgr *inform.StateManager, totalStations int, radioStats []telemetry.RadioStat, ports []telemetry.Port, sysStats *telemetry.SystemStats, health *exchangeHealth, exchangeErr error) {
 	statusDir := "/tmp/var/wwwext/unifi-bridge"
 	if err := os.MkdirAll(statusDir, 0755); err != nil {
 		return
@@ -118,32 +121,37 @@ func updateWebUIStatus(host *providers.HostInfo, modelProfile models.ModelProfil
 	logMu.Unlock()
 
 	statusObj := map[string]any{
-		"running":        true,
-		"version":        version,
-		"branch":         cfg.Branch,
-		"pid":            os.Getpid(),
-		"hostname":       host.Hostname,
-		"mac":            host.MAC,
-		"ip":             host.IP,
-		"model":          modelProfile.DisplayName,
-		"model_code":     modelProfile.ModelCode,
-		"firmware":       modelProfile.Firmware,
-		"controller_url": cfg.ControllerURL,
-		"interval_sec":   cfg.IntervalSec,
-		"adopted":        stateMgr.IsAdopted(),
-		"mode":           string(stateMgr.GetMode()),
-		"uptime":         host.Uptime,
-		"last_heartbeat": time.Now().Format("2006-01-02 15:04:05"),
-		"last_status":    lastStatus,
-		"total_stations": totalStations,
-		"stations_2g":    sta2G,
-		"stations_5g":    sta5G,
-		"cu_total_2g":    cuTotal2G,
-		"cu_total_5g":    cuTotal5G,
-		"radio_stats":    radioStats,
-		"ports":          ports,
-		"system_stats":   sysStats,
-		"recent_logs":    logsCopy,
+		"running":                true,
+		"version":                version,
+		"branch":                 cfg.Branch,
+		"pid":                    os.Getpid(),
+		"hostname":               host.Hostname,
+		"mac":                    host.MAC,
+		"ip":                     host.IP,
+		"model":                  modelProfile.DisplayName,
+		"model_code":             modelProfile.ModelCode,
+		"firmware":               modelProfile.Firmware,
+		"controller_url":         cfg.ControllerURL,
+		"interval_sec":           cfg.IntervalSec,
+		"adopted":                stateMgr.IsAdopted(),
+		"mode":                   string(stateMgr.GetMode()),
+		"uptime":                 host.Uptime,
+		"last_heartbeat":         health.lastSuccessString(),
+		"last_successful_inform": health.lastSuccessString(),
+		"last_attempt":           health.LastAttempt.Format("2006-01-02 15:04:05"),
+		"status_updated_at":      time.Now().Unix(),
+		"commit":                 commit,
+		"build_date":             buildDate,
+		"last_status":            lastStatus,
+		"total_stations":         totalStations,
+		"stations_2g":            sta2G,
+		"stations_5g":            sta5G,
+		"cu_total_2g":            cuTotal2G,
+		"cu_total_5g":            cuTotal5G,
+		"radio_stats":            radioStats,
+		"ports":                  ports,
+		"system_stats":           sysStats,
+		"recent_logs":            logsCopy,
 	}
 
 	raw, err := json.MarshalIndent(statusObj, "", "  ")
@@ -163,7 +171,7 @@ func main() {
 	configPath := flag.String("config", "", "Path to configuration file")
 	controllerFlag := flag.String("controller", "", "UniFi controller inform URL")
 	intervalFlag := flag.Int("interval", 0, "Heartbeat interval in seconds")
-	modelFlag := flag.String("model", "", "Emulated UniFi AP model (U6M, U6P, U6L)")
+	modelFlag := flag.String("model", "", "Emulated UniFi AP model (U6IW, U6M, U6P, U6L)")
 	stateFlag := flag.String("state", "", "Path to persistent state file")
 	onceFlag := flag.Bool("once", false, "Execute single inform exchange and exit")
 	profileFlag := flag.String("profile", "", "Path to synthetic profile JSON for simulation/testing")
@@ -177,6 +185,8 @@ func main() {
 		fmt.Printf("unifi-bridge %s (commit: %s, built: %s)\n", version, commit, buildDate)
 		return
 	}
+
+	log.SetOutput(&boundedLogWriter{file: os.Stderr, maxBytes: 1024 * 1024})
 
 	cfg, err := loadConfig(*configPath)
 	if err != nil {
@@ -237,14 +247,16 @@ func main() {
 	ticker := time.NewTicker(time.Duration(cfg.IntervalSec) * time.Second)
 	defer ticker.Stop()
 
+	health := &exchangeHealth{}
 	runExchange := func() (exchangeErr error) {
+		health.LastAttempt = time.Now()
 		var totalStations int
 		var radioStats []telemetry.RadioStat
 		var ports []telemetry.Port
 		var sysStats *telemetry.SystemStats
 
 		defer func() {
-			updateWebUIStatus(host, modelProfile, cfg, stateMgr, totalStations, radioStats, ports, sysStats, exchangeErr)
+			updateWebUIStatus(host, modelProfile, cfg, stateMgr, totalStations, radioStats, ports, sysStats, health, exchangeErr)
 		}()
 
 		radios, err := provider.GetRadios()
@@ -275,6 +287,9 @@ func main() {
 		lldpEntries, _ := provider.GetLLDPTable()
 		systemStats, sysStatsLegacy, _ := provider.GetSystemStats()
 		sysStats = systemStats
+		if systemStats != nil {
+			host.Uptime = systemStats.Uptime
+		}
 
 		if uplink != nil {
 			if cfg.UplinkMAC != "" {
@@ -356,15 +371,13 @@ func main() {
 		}
 
 		respRaw, err := client.Post(ctx, packet)
+		resetAdoption := health.observePost(err)
 		if err != nil {
-			if httpErr, ok := err.(*inform.HTTPError); ok && (httpErr.StatusCode == 404 || httpErr.StatusCode == 400 || httpErr.StatusCode == 401) {
-				if adopted {
-					logEvent("[unifi-bridge] Controller returned HTTP %d for adopted device (device forgotten or reset). Resetting adoption state...", httpErr.StatusCode)
-					_ = stateMgr.Reset()
-					return nil
+			if adopted && resetAdoption {
+				logEvent("[unifi-bridge] Controller rejected 3 consecutive informs; resetting adoption state")
+				if resetErr := stateMgr.Reset(); resetErr != nil {
+					return fmt.Errorf("failed to persist adoption reset: %w", resetErr)
 				}
-				logEvent("[unifi-bridge] Bootstrap sent; waiting for operator adoption in UniFi UI (MAC: %s)", host.MAC)
-				return nil
 			}
 			return err
 		}
@@ -386,6 +399,7 @@ func main() {
 				stateMgr.IsAdopted(), stateMgr.GetMode())
 		}
 
+		health.LastSuccess = time.Now()
 		respType, _ := respPacket.Payload["_type"].(string)
 		logEvent("[unifi-bridge] Heartbeat ok (%s) | stations: %d | mode: %s",
 			respType, totalStations, stateMgr.GetMode())
