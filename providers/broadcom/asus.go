@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"math/bits"
@@ -12,6 +13,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/agnithin/unifi-ap-bridge/pkg/inform"
@@ -22,22 +25,124 @@ import (
 type CmdRunner func(ctx context.Context, name string, args ...string) (string, error)
 
 func defaultCmdRunner(ctx context.Context, name string, args ...string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = 300 * time.Millisecond
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
 	out, err := cmd.Output()
+	if ctx.Err() != nil {
+		return string(bytes.TrimSpace(out)), ctx.Err()
+	}
+	if cmd.Process != nil {
+		// The command leader can exit while background descendants survive,
+		// whether or not they inherited its output pipes.
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
 	return string(bytes.TrimSpace(out)), err
+}
+
+const commandTimeout = 2 * time.Second
+const stableCacheTTL = 5 * time.Minute
+
+type staticCacheEntry struct {
+	value   string
+	expires time.Time
+}
+
+type sampleCommandCacheKey struct{}
+type commandResult struct {
+	output string
+	err    error
+}
+type sampleCommandCache struct {
+	mu      sync.Mutex
+	results map[string]commandResult
 }
 
 type AsusProvider struct {
 	runner      CmdRunner
 	radioNames  map[string]string
 	previousCPU cpuSample
+	cacheMu     sync.Mutex
+	staticCache map[string]staticCacheEntry
+	now         func() time.Time
 }
 
 func NewAsusProvider(runner CmdRunner) *AsusProvider {
 	if runner == nil {
 		runner = defaultCmdRunner
 	}
-	return &AsusProvider{runner: runner}
+	return &AsusProvider{runner: runner, staticCache: make(map[string]staticCacheEntry), now: time.Now}
+}
+
+func (p *AsusProvider) Collect(ctx context.Context, mapping map[string]string) (*providers.Sample, error) {
+	ctx = context.WithValue(ctx, sampleCommandCacheKey{}, &sampleCommandCache{results: make(map[string]commandResult)})
+	started := time.Now()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	radios, err := p.GetRadiosContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("collect radios: %w", err)
+	}
+	vaps, err := p.GetVAPsContext(ctx, mapping)
+	if err != nil {
+		return nil, fmt.Errorf("collect vaps: %w", err)
+	}
+	sample := &providers.Sample{Radios: radios, VAPs: vaps, StartedAt: started, StageErrors: make(map[string]string)}
+	setStageError := func(stage string, err error) error {
+		if err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		message := "unavailable"
+		if errors.Is(err, context.DeadlineExceeded) {
+			message = "deadline exceeded"
+		}
+		if errors.Is(err, context.Canceled) {
+			message = "canceled"
+		}
+		sample.StageErrors[stage] = message
+		return nil
+	}
+	if sample.RadioStats, err = p.GetRadioStatsContext(ctx); err != nil {
+		if fatal := setStageError("radio_stats", err); fatal != nil {
+			return nil, fatal
+		}
+	}
+	if sample.Ports, sample.Ethernet, sample.Uplink, err = p.GetPortTableContext(ctx); err != nil {
+		if fatal := setStageError("ports", err); fatal != nil {
+			return nil, fatal
+		}
+		sample.Ports, sample.Ethernet, sample.Uplink = nil, nil, nil
+	}
+	if sample.LLDP, err = p.GetLLDPTableContext(ctx); err != nil {
+		if fatal := setStageError("lldp", err); fatal != nil {
+			return nil, fatal
+		}
+		sample.LLDP = nil
+	}
+	if sample.System, sample.LegacySystem, err = p.GetSystemStatsContext(ctx); err != nil {
+		if fatal := setStageError("system", err); fatal != nil {
+			return nil, fatal
+		}
+		sample.System, sample.LegacySystem = nil, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	sample.CompletedAt = time.Now()
+	return sample, nil
 }
 
 func (p *AsusProvider) Name() string {
@@ -45,39 +150,97 @@ func (p *AsusProvider) Name() string {
 }
 
 func (p *AsusProvider) nvramGet(key string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	out, err := p.runner(ctx, "nvram", "get", key)
-	if err != nil {
-		return ""
+	out, _ := p.nvramGetContext(context.Background(), key)
+	return out
+}
+
+func (p *AsusProvider) runCommand(ctx context.Context, name string, args ...string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
-	return strings.TrimSpace(out)
+	if cache, ok := ctx.Value(sampleCommandCacheKey{}).(*sampleCommandCache); ok {
+		key := name + "\x00" + strings.Join(args, "\x00")
+		cache.mu.Lock()
+		result, found := cache.results[key]
+		cache.mu.Unlock()
+		if found {
+			return result.output, result.err
+		}
+		cmdCtx, cancel := context.WithTimeout(ctx, commandTimeout)
+		out, err := p.runner(cmdCtx, name, args...)
+		cancel()
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			cache.mu.Lock()
+			cache.results[key] = commandResult{output: out, err: err}
+			cache.mu.Unlock()
+		}
+		return out, err
+	}
+	cmdCtx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+	return p.runner(cmdCtx, name, args...)
 }
 
 func (p *AsusProvider) wlCmd(iface string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
+	return p.wlCmdContext(context.Background(), iface, args...)
+}
+
+func (p *AsusProvider) wlCmdContext(ctx context.Context, iface string, args ...string) (string, error) {
 	fullArgs := append([]string{"-i", iface}, args...)
-	return p.runner(ctx, "wl", fullArgs...)
+	return p.runCommand(ctx, "wl", fullArgs...)
+}
+
+func (p *AsusProvider) nvramGetContext(ctx context.Context, key string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	stable := key == "wl_ifnames" || strings.HasPrefix(key, "wl") && strings.HasSuffix(key, "_vifnames")
+	if stable {
+		p.cacheMu.Lock()
+		entry, ok := p.staticCache["nvram:"+key]
+		if ok && p.now().Before(entry.expires) {
+			p.cacheMu.Unlock()
+			return entry.value, nil
+		}
+		p.cacheMu.Unlock()
+	}
+	out, err := p.runCommand(ctx, "nvram", "get", key)
+	if err != nil {
+		return "", err
+	}
+	out = strings.TrimSpace(out)
+	if stable {
+		p.cacheMu.Lock()
+		p.staticCache["nvram:"+key] = staticCacheEntry{value: out, expires: p.now().Add(stableCacheTTL)}
+		p.cacheMu.Unlock()
+	}
+	return out, nil
 }
 
 func (p *AsusProvider) GetHostInfo() (*providers.HostInfo, error) {
-	mac := p.nvramGet("lan_hwaddr")
+	return p.GetHostInfoContext(context.Background())
+}
+
+func (p *AsusProvider) GetHostInfoContext(ctx context.Context) (*providers.HostInfo, error) {
+	mac, _ := p.nvramGetContext(ctx, "lan_hwaddr")
 	if mac == "" {
-		mac = p.nvramGet("et0macaddr")
+		mac, _ = p.nvramGetContext(ctx, "et0macaddr")
 	}
 	normMAC, err := inform.NormalizeMAC(mac)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get valid lan mac: %w", err)
 	}
 
-	ip := p.nvramGet("lan_ipaddr")
-	hostname := p.nvramGet("lan_hostname")
+	ip, _ := p.nvramGetContext(ctx, "lan_ipaddr")
+	hostname, _ := p.nvramGetContext(ctx, "lan_hostname")
 	if hostname == "" {
-		hostname = p.nvramGet("computer_name")
+		hostname, _ = p.nvramGetContext(ctx, "computer_name")
 	}
 	if hostname == "" {
 		hostname = "Asus-XT8"
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	// Read uptime directly from /proc/uptime (sub-microsecond, 0 subprocesses)
@@ -100,22 +263,46 @@ func (p *AsusProvider) GetHostInfo() (*providers.HostInfo, error) {
 }
 
 func (p *AsusProvider) getRadioInterfaces() []string {
-	raw := p.nvramGet("wl_ifnames")
-	if raw == "" {
-		return []string{"eth4", "eth6"}
+	interfaces, _ := p.getRadioInterfacesContext(context.Background())
+	return interfaces
+}
+
+func (p *AsusProvider) getRadioInterfacesContext(ctx context.Context) ([]string, error) {
+	raw, err := p.nvramGetContext(ctx, "wl_ifnames")
+	if err != nil {
+		return nil, err
 	}
-	return strings.Fields(raw)
+	if raw == "" {
+		return []string{"eth4", "eth6"}, nil
+	}
+	return strings.Fields(raw), nil
 }
 
 func (p *AsusProvider) GetRadios() ([]telemetry.Radio, error) {
-	ifaces := p.getRadioInterfaces()
+	return p.GetRadiosContext(context.Background())
+}
+
+func (p *AsusProvider) GetRadiosContext(ctx context.Context) ([]telemetry.Radio, error) {
+	ifaces, err := p.getRadioInterfacesContext(ctx)
+	if err != nil {
+		return nil, err
+	}
 	radios := make([]telemetry.Radio, 0, len(ifaces))
 	p.radioNames = make(map[string]string)
 	bandCounts := make(map[string]int)
 
 	for _, iface := range ifaces {
-		chanspecRaw, _ := p.wlCmd(iface, "chanspec")
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		chanspecRaw, err := p.wlCmdContext(ctx, iface, "chanspec")
+		if err != nil {
+			return nil, fmt.Errorf("read %s chanspec: %w", iface, err)
+		}
 		channel, width := ParseChanspec(chanspecRaw)
+		if channel <= 0 || width <= 0 {
+			return nil, fmt.Errorf("read %s chanspec: invalid value %q", iface, strings.TrimSpace(chanspecRaw))
+		}
 		band := BandForChannel(channel)
 		radioName := "wifi-" + band
 		if bandCounts[band] > 0 {
@@ -136,12 +323,18 @@ func (p *AsusProvider) GetRadios() ([]telemetry.Radio, error) {
 			hasVHT = true
 		}
 
-		if chainRaw, e := p.wlCmd(iface, "txchain"); e == nil && len(strings.Fields(chainRaw))>0 {
-			if mask, e := strconv.ParseUint(strings.Fields(chainRaw+" ")[0], 0, 32); e == nil && mask != 0 {
+		if chainRaw, e := p.wlCmdContext(ctx, iface, "txchain"); e == nil && len(strings.Fields(chainRaw)) > 0 {
+			if mask, e := strconv.ParseUint(strings.Fields(chainRaw + " ")[0], 0, 32); e == nil && mask != 0 {
 				nss = bits.OnesCount32(uint32(mask))
 			}
 		}
-		cuTotal, cuSelfRx, cuSelfTx := p.parseChanimStats(iface)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		cuTotal, cuSelfRx, cuSelfTx, err := p.parseChanimStatsStrict(ctx, iface)
+		if err != nil {
+			return nil, fmt.Errorf("read %s channel utilization: %w", iface, err)
+		}
 
 		radios = append(radios, telemetry.Radio{
 			Name:           radioName,
@@ -165,19 +358,33 @@ func (p *AsusProvider) GetRadios() ([]telemetry.Radio, error) {
 }
 
 func (p *AsusProvider) GetVAPs(wlanMapping map[string]string) ([]telemetry.VAP, error) {
+	return p.GetVAPsContext(context.Background(), wlanMapping)
+}
+
+func (p *AsusProvider) GetVAPsContext(ctx context.Context, wlanMapping map[string]string) ([]telemetry.VAP, error) {
 	if p.radioNames == nil {
-		if _, err := p.GetRadios(); err != nil {
+		if _, err := p.GetRadiosContext(ctx); err != nil {
 			return nil, err
 		}
 	}
-	physical := p.getRadioInterfaces()
+	physical, err := p.getRadioInterfacesContext(ctx)
+	if err != nil {
+		return nil, err
+	}
 	candidates := append([]string(nil), physical...)
 	parent := make(map[string]string)
 	units := make(map[string]int)
 	for unit, iface := range physical {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		parent[iface] = iface
 		units[iface] = unit
-		virtual := strings.Fields(p.nvramGet(fmt.Sprintf("wl%d_vifnames", unit)))
+		virtualRaw, err := p.nvramGetContext(ctx, fmt.Sprintf("wl%d_vifnames", unit))
+		if err != nil {
+			return nil, err
+		}
+		virtual := strings.Fields(virtualRaw)
 		if len(virtual) == 0 {
 			for sub := 1; sub <= 3; sub++ {
 				virtual = append(virtual, fmt.Sprintf("wl%d.%d", unit, sub))
@@ -193,16 +400,23 @@ func (p *AsusProvider) GetVAPs(wlanMapping map[string]string) ([]telemetry.VAP, 
 	vaps := make([]telemetry.VAP, 0, len(candidates))
 
 	for _, iface := range candidates {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		nvramPrefix := iface
 		if !strings.HasPrefix(iface, "wl") {
 			nvramPrefix = fmt.Sprintf("wl%d", units[iface])
 		}
-		if p.nvramGet(nvramPrefix+"_bss_enabled") == "0" {
+		bssEnabled, err := p.nvramGetContext(ctx, nvramPrefix+"_bss_enabled")
+		if err != nil {
+			return nil, err
+		}
+		if bssEnabled == "0" {
 			continue
 		}
-		ssidRaw, err := p.wlCmd(iface, "ssid")
+		ssidRaw, err := p.wlCmdContext(ctx, iface, "ssid")
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("read %s SSID: %w", iface, err)
 		}
 		var ssid string
 		parts := strings.Split(ssidRaw, "\"")
@@ -213,22 +427,19 @@ func (p *AsusProvider) GetVAPs(wlanMapping map[string]string) ([]telemetry.VAP, 
 			continue
 		}
 
-		bssidRaw, _ := p.wlCmd(iface, "bssid")
+		bssidRaw, _ := p.wlCmdContext(ctx, iface, "bssid")
 		bssid, err := inform.NormalizeMAC(bssidRaw)
 		if err != nil {
 			bssid = bssidRaw
 		}
 
-		chanspecRaw, _ := p.wlCmd(iface, "chanspec")
+		chanspecRaw, err := p.wlCmdContext(ctx, iface, "chanspec")
+		if err != nil {
+			return nil, fmt.Errorf("read %s chanspec: %w", iface, err)
+		}
 		channel, _ := ParseChanspec(chanspecRaw)
 		if channel == 0 {
-			if strings.HasPrefix(iface, "wl0") || iface == "eth4" {
-				channel = 6
-			} else if strings.HasPrefix(iface, "wl1") || iface == "eth5" {
-				channel = 36
-			} else {
-				channel = 161
-			}
+			return nil, fmt.Errorf("read %s chanspec: invalid value %q", iface, strings.TrimSpace(chanspecRaw))
 		}
 
 		band := BandForChannel(channel)
@@ -241,7 +452,10 @@ func (p *AsusProvider) GetVAPs(wlanMapping map[string]string) ([]telemetry.VAP, 
 		vapName := fmt.Sprintf("ath%d", units[iface]*16+sub)
 
 		// Get associated clients for this VAP
-		stations := p.getStationsForIface(iface, vapName, bssid, ssid, channel, band)
+		stations, err := p.getStationsForIfaceContext(ctx, iface, vapName, bssid, ssid, channel, band)
+		if err != nil {
+			return nil, err
+		}
 
 		var vapTxBytes, vapRxBytes, vapTxPackets, vapRxPackets int64
 		for _, s := range stations {
@@ -281,15 +495,26 @@ func (p *AsusProvider) GetVAPs(wlanMapping map[string]string) ([]telemetry.VAP, 
 }
 
 func (p *AsusProvider) getStationsForIface(iface, vapName, bssid, ssid string, channel int, band string) []telemetry.Station {
+	stations, _ := p.getStationsForIfaceContext(context.Background(), iface, vapName, bssid, ssid, channel, band)
+	return stations
+}
+
+func (p *AsusProvider) getStationsForIfaceContext(ctx context.Context, iface, vapName, bssid, ssid string, channel int, band string) ([]telemetry.Station, error) {
 	stations := []telemetry.Station{}
-	assocRaw, err := p.wlCmd(iface, "assoclist")
-	if err != nil || strings.TrimSpace(assocRaw) == "" {
-		return stations
+	assocRaw, err := p.wlCmdContext(ctx, iface, "assoclist")
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(assocRaw) == "" {
+		return stations, nil
 	}
 
 	lines := strings.Split(assocRaw, "\n")
 
 	for _, line := range lines {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		fields := strings.Fields(line)
 		if len(fields) == 0 {
 			continue
@@ -316,35 +541,40 @@ func (p *AsusProvider) getStationsForIface(iface, vapName, bssid, ssid string, c
 		}
 
 		// Enrich with sta_info (RSSI, generation, rates)
-		infoRaw, err := p.wlCmd(iface, "sta_info", rawMAC)
-		if err == nil && len(infoRaw) > 0 {
-			parsed := ParseStaInfo(infoRaw, band)
-			EnrichStation(&sta, parsed)
-		} else {
-			// Fallback: rssi only
-			rssiRaw, _ := p.wlCmd(iface, "rssi", rawMAC)
-			if rssiVal, err := strconv.Atoi(strings.TrimSpace(rssiRaw)); err == nil {
-				sta.Signal = rssiVal
-			}
-			if band == "na" {
-				sta.RadioProto = "ac"
-				sta.Is11ac = true
-			} else {
-				sta.RadioProto = "ng"
-				sta.Is11n = true
-			}
+		infoRaw, err := p.wlCmdContext(ctx, iface, "sta_info", rawMAC)
+		if err != nil {
+			return nil, fmt.Errorf("read %s station %s details: %w", iface, normMAC, err)
 		}
+		if len(infoRaw) == 0 {
+			return nil, fmt.Errorf("read %s station %s details: empty response", iface, normMAC)
+		}
+		parsed := ParseStaInfo(infoRaw, band)
+		EnrichStation(&sta, parsed)
 
 		stations = append(stations, sta)
 	}
-
-	return stations
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return stations, nil
 }
 
 func (p *AsusProvider) parseChanimStats(iface string) (cuTotal int, cuSelfRx int, cuSelfTx int) {
-	raw, err := p.wlCmd(iface, "chanim_stats")
-	if err != nil || len(raw) == 0 {
-		return 0, 0, 0
+	return p.parseChanimStatsContext(context.Background(), iface)
+}
+
+func (p *AsusProvider) parseChanimStatsContext(ctx context.Context, iface string) (cuTotal int, cuSelfRx int, cuSelfTx int) {
+	cuTotal, cuSelfRx, cuSelfTx, _ = p.parseChanimStatsStrict(ctx, iface)
+	return
+}
+
+func (p *AsusProvider) parseChanimStatsStrict(ctx context.Context, iface string) (cuTotal int, cuSelfRx int, cuSelfTx int, resultErr error) {
+	raw, err := p.wlCmdContext(ctx, iface, "chanim_stats")
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	if len(strings.TrimSpace(raw)) == 0 {
+		return 0, 0, 0, fmt.Errorf("empty response")
 	}
 	lines := strings.Split(raw, "\n")
 	var headerIdx map[string]int
@@ -361,47 +591,66 @@ func (p *AsusProvider) parseChanimStats(iface string) (cuTotal int, cuSelfRx int
 			continue
 		}
 		if headerIdx != nil && strings.HasPrefix(fields[0], "0x") {
-			if txIdx, ok := headerIdx["tx"]; ok && txIdx < len(fields) {
-				if v, err := strconv.Atoi(fields[txIdx]); err == nil {
-					cuSelfTx = v
-				}
+			txIdx, hasTx := headerIdx["tx"]
+			rxIdx, hasRx := headerIdx["inbss"]
+			idleIdx, hasIdle := headerIdx["idle"]
+			if !hasTx || !hasRx || !hasIdle || txIdx >= len(fields) || rxIdx >= len(fields) || idleIdx >= len(fields) {
+				return 0, 0, 0, fmt.Errorf("malformed utilization row")
 			}
-			if rxIdx, ok := headerIdx["inbss"]; ok && rxIdx < len(fields) {
-				if v, err := strconv.Atoi(fields[rxIdx]); err == nil {
-					cuSelfRx = v
-				}
+			cuSelfTx, err = strconv.Atoi(fields[txIdx])
+			if err != nil {
+				return 0, 0, 0, fmt.Errorf("invalid tx utilization: %w", err)
 			}
-			if idleIdx, ok := headerIdx["idle"]; ok && idleIdx < len(fields) {
-				if v, err := strconv.Atoi(fields[idleIdx]); err == nil {
-					cuTotal = 100 - v
-					if cuTotal < 0 {
-						cuTotal = 0
-					} else if cuTotal > 100 {
-						cuTotal = 100
-					}
-				}
+			cuSelfRx, err = strconv.Atoi(fields[rxIdx])
+			if err != nil {
+				return 0, 0, 0, fmt.Errorf("invalid inbss utilization: %w", err)
 			}
-			break
+			idle, err := strconv.Atoi(fields[idleIdx])
+			if err != nil || idle < 0 || idle > 100 {
+				return 0, 0, 0, fmt.Errorf("invalid idle utilization %q", fields[idleIdx])
+			}
+			cuTotal = 100 - idle
+			return cuTotal, cuSelfRx, cuSelfTx, nil
 		}
 	}
-	return cuTotal, cuSelfRx, cuSelfTx
+	return 0, 0, 0, fmt.Errorf("unrecognized response")
 }
 
 func (p *AsusProvider) GetRadioStats() ([]telemetry.RadioStat, error) {
-    if p.radioNames==nil {if _,err:=p.GetRadios();err!=nil{return nil,err}}
-	ifaces := p.getRadioInterfaces()
+	return p.GetRadioStatsContext(context.Background())
+}
+
+func (p *AsusProvider) GetRadioStatsContext(ctx context.Context) ([]telemetry.RadioStat, error) {
+	if p.radioNames == nil {
+		if _, err := p.GetRadiosContext(ctx); err != nil {
+			return nil, err
+		}
+	}
+	ifaces, err := p.getRadioInterfacesContext(ctx)
+	if err != nil {
+		return nil, err
+	}
 	stats := make([]telemetry.RadioStat, 0, len(ifaces))
 
 	for _, iface := range ifaces {
-		chanspecRaw, _ := p.wlCmd(iface, "chanspec")
+		chanspecRaw, err := p.wlCmdContext(ctx, iface, "chanspec")
+		if err != nil {
+			return nil, fmt.Errorf("read %s chanspec: %w", iface, err)
+		}
 		channel, _ := ParseChanspec(chanspecRaw)
+		if channel <= 0 {
+			return nil, fmt.Errorf("read %s chanspec: invalid value %q", iface, strings.TrimSpace(chanspecRaw))
+		}
 		band := BandForChannel(channel)
 		radioName := p.radioNames[iface]
 		if radioName == "" {
 			radioName = "wifi-" + band
 		}
 
-		cuTotal, cuSelfRx, cuSelfTx := p.parseChanimStats(iface)
+		cuTotal, cuSelfRx, cuSelfTx, err := p.parseChanimStatsStrict(ctx, iface)
+		if err != nil {
+			return nil, fmt.Errorf("read %s channel utilization: %w", iface, err)
+		}
 
 		stats = append(stats, telemetry.RadioStat{
 			Name:     radioName,
@@ -518,10 +767,11 @@ type lldpCliOutput struct {
 }
 
 func (p *AsusProvider) getLLDPNeighbor() (chassisMAC string, portMAC string, remotePort int, err error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
+	return p.getLLDPNeighborContext(context.Background())
+}
 
-	out, err := p.runner(ctx, "lldpcli", "-f", "json", "show", "neighbors")
+func (p *AsusProvider) getLLDPNeighborContext(ctx context.Context) (chassisMAC string, portMAC string, remotePort int, err error) {
+	out, err := p.runCommand(ctx, "lldpcli", "-f", "json", "show", "neighbors")
 	if err != nil || len(out) == 0 {
 		return "", "", 0, fmt.Errorf("lldpcli unavailable: %v", err)
 	}
@@ -574,7 +824,11 @@ func (p *AsusProvider) getLLDPNeighbor() (chassisMAC string, portMAC string, rem
 }
 
 func (p *AsusProvider) GetLLDPTable() ([]telemetry.LLDPEntry, error) {
-	chassisMAC, portMAC, _, err := p.getLLDPNeighbor()
+	return p.GetLLDPTableContext(context.Background())
+}
+
+func (p *AsusProvider) GetLLDPTableContext(ctx context.Context) ([]telemetry.LLDPEntry, error) {
+	chassisMAC, portMAC, _, err := p.getLLDPNeighborContext(ctx)
 	if err == nil && chassisMAC != "" {
 		if portMAC == "" {
 			portMAC = chassisMAC
@@ -590,7 +844,7 @@ func (p *AsusProvider) GetLLDPTable() ([]telemetry.LLDPEntry, error) {
 		}, nil
 	}
 
-	gwIP := p.nvramGet("lan_gateway")
+	gwIP, _ := p.nvramGetContext(ctx, "lan_gateway")
 	if gwIP == "" {
 		gwIP = "10.100.1.1"
 	}
@@ -607,6 +861,9 @@ func (p *AsusProvider) GetLLDPTable() ([]telemetry.LLDPEntry, error) {
 		}, nil
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return nil, nil
 }
 
@@ -742,10 +999,20 @@ func getBridgePortMap() map[int]string {
 }
 
 func (p *AsusProvider) GetPortTable() ([]telemetry.Port, []telemetry.EthernetPort, *telemetry.Uplink, error) {
+	return p.GetPortTableContext(context.Background())
+}
+
+func (p *AsusProvider) GetPortTableContext(ctx context.Context) ([]telemetry.Port, []telemetry.EthernetPort, *telemetry.Uplink, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, nil, err
+	}
 	netDevRaw, _ := os.ReadFile("/proc/net/dev")
 	counters := parseNetDev(string(netDevRaw))
 
-	hostMAC := p.nvramGet("lan_hwaddr")
+	hostMAC, err := p.nvramGetContext(ctx, "lan_hwaddr")
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	if norm, err := inform.NormalizeMAC(hostMAC); err == nil {
 		hostMAC = norm
 	}
@@ -754,20 +1021,32 @@ func (p *AsusProvider) GetPortTable() ([]telemetry.Port, []telemetry.EthernetPor
 	arpData, _ := os.ReadFile("/proc/net/arp")
 	arpMap := parseArpTable(string(arpData))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	showmacsOut, _ := p.runner(ctx, "brctl", "showmacs", "br0")
+	showmacsOut, cmdErr := p.runCommand(ctx, "brctl", "showmacs", "br0")
+	if cmdErr != nil && ctx.Err() != nil {
+		return nil, nil, nil, ctx.Err()
+	}
 	macsByPort, lastConnByPort := parseBrctlShowmacs(showmacsOut, brPortMap, arpMap)
 
-	chassisMAC, _, remotePort, err := p.getLLDPNeighbor()
+	chassisMAC, _, remotePort, err := p.getLLDPNeighborContext(ctx)
 	gwMAC := chassisMAC
 	if err != nil || gwMAC == "" {
-		gwIP := p.nvramGet("lan_gateway")
+		gwIP, err := p.nvramGetContext(ctx, "lan_gateway")
+		if err != nil {
+			return nil, nil, nil, err
+		}
 		if gwIP == "" {
 			gwIP = "10.100.1.1"
 		}
 		gwMAC = parseArpGatewayMAC(gwIP)
 		remotePort = 0
+	}
+	lanGateway, err := p.nvramGetContext(ctx, "lan_gateway")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	lanIP, err := p.nvramGetContext(ctx, "lan_ipaddr")
+	if err != nil {
+		return nil, nil, nil, err
 	}
 
 	// Physical port mapping for Asuswrt (XT8 / BCM4908 / BCM53134):
@@ -790,6 +1069,9 @@ func (p *AsusProvider) GetPortTable() ([]telemetry.Port, []telemetry.EthernetPor
 
 	ports := make([]telemetry.Port, 0, len(ifaces))
 	for _, spec := range ifaces {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, nil, err
+		}
 		carrier := readSysfsInt(fmt.Sprintf("/sys/class/net/%s/carrier", spec.dev))
 		speed := readSysfsInt(fmt.Sprintf("/sys/class/net/%s/speed", spec.dev))
 		duplexStr := readSysfsString(fmt.Sprintf("/sys/class/net/%s/duplex", spec.dev))
@@ -822,7 +1104,7 @@ func (p *AsusProvider) GetPortTable() ([]telemetry.Port, []telemetry.EthernetPor
 			lastConn = &telemetry.PortLastConnection{
 				Connected: up,
 				MAC:       gwMAC,
-				IP:        p.nvramGet("lan_gateway"),
+				IP:        lanGateway,
 				LastSeen:  time.Now().Unix(),
 			}
 		}
@@ -874,7 +1156,7 @@ func (p *AsusProvider) GetPortTable() ([]telemetry.Port, []telemetry.EthernetPor
 	uplink := &telemetry.Uplink{
 		Name:             "eth0",
 		MAC:              hostMAC,
-		IP:               p.nvramGet("lan_ipaddr"),
+		IP:               lanIP,
 		Type:             "wire",
 		Speed:            eth0Port.Speed,
 		FullDuplex:       eth0Port.FullDuplex,
@@ -895,10 +1177,20 @@ func (p *AsusProvider) GetPortTable() ([]telemetry.Port, []telemetry.EthernetPor
 		RxDropped:        eth0Port.RxDropped,
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, nil, nil, err
+	}
 	return ports, ethTable, uplink, nil
 }
 
 func (p *AsusProvider) GetSystemStats() (*telemetry.SystemStats, *telemetry.SysStats, error) {
+	return p.GetSystemStatsContext(context.Background())
+}
+
+func (p *AsusProvider) GetSystemStatsContext(ctx context.Context) (*telemetry.SystemStats, *telemetry.SysStats, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	var uptime int64
 	if data, err := os.ReadFile("/proc/uptime"); err == nil {
 		fields := strings.Fields(string(data))
@@ -980,6 +1272,9 @@ func (p *AsusProvider) GetSystemStats() (*telemetry.SystemStats, *telemetry.SysS
 		MemBuffer: buffers * 1024,
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	return &telemetry.SystemStats{
 		CPU: func() *float64 {
 			if cpuPct < 0 {

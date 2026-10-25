@@ -427,6 +427,11 @@ function updateUI(st) {
     badge.className = "badge_online";
     badge.textContent = "RUNNING";
     statusText.textContent = "Daemon Active (PID " + (st.pid || "-") + ")" + (st.last_status && st.last_status.indexOf("Error:") === 0 ? " — " + st.last_status : "");
+    if (st.sample_fresh === false) {
+      statusText.textContent += " — Telemetry sample stale" + (Number(st.sample_age_sec) >= 0 ? " (" + st.sample_age_sec + "s old)" : " (no completed sample)");
+    } else if (st.sample_stage_errors && Object.keys(st.sample_stage_errors).length > 0) {
+      statusText.textContent += " — Partial telemetry; one or more sections are unavailable";
+    }
   } else {
     badge.className = "badge_offline";
     badge.textContent = "STOPPED";

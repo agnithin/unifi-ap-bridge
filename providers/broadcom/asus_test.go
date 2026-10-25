@@ -2,8 +2,17 @@ package broadcom
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"runtime"
+	"strconv"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestAsusProvider(t *testing.T) {
@@ -119,6 +128,238 @@ func TestAsusProvider(t *testing.T) {
 	}
 }
 
+func TestCommandRunnerHonorsParentDeadlineAndPreCancellation(t *testing.T) {
+	var calls atomic.Int32
+	runner := func(ctx context.Context, name string, args ...string) (string, error) {
+		calls.Add(1)
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	p := NewAsusProvider(runner)
+	preCanceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := p.runCommand(preCanceled, "slow"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("pre-canceled command error = %v", err)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("pre-canceled context started %d commands", calls.Load())
+	}
+
+	parent, stop := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer stop()
+	start := time.Now()
+	if _, err := p.runCommand(parent, "slow"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("deadline command error = %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 300*time.Millisecond {
+		t.Fatalf("command exceeded parent deadline by too much: %s", elapsed)
+	}
+}
+
+func TestDefaultRunnerKillsCommandProcessGroup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process groups are Unix-specific")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	output, err := defaultCmdRunner(ctx, "sh", "-c", "sleep 30 & echo $!; wait")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("runner error = %v", err)
+	}
+	fields := strings.Fields(output)
+	if len(fields) == 0 {
+		t.Fatalf("child PID missing from output %q", output)
+	}
+	child, err := strconv.Atoi(fields[0])
+	if err != nil {
+		t.Fatalf("invalid child PID %q", fields[0])
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if syscall.Kill(child, 0) != nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("child process %d survived command deadline", child)
+}
+
+func TestDefaultRunnerKillsDescendantAfterCommandExits(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process groups are Unix-specific")
+	}
+	output, err := defaultCmdRunner(context.Background(), "sh", "-c", "sleep 30 & echo $!")
+	if !errors.Is(err, exec.ErrWaitDelay) {
+		t.Fatalf("runner error = %v, want bounded pipe wait", err)
+	}
+	fields := strings.Fields(output)
+	if len(fields) == 0 {
+		t.Fatalf("child PID missing from output %q", output)
+	}
+	child, err := strconv.Atoi(fields[0])
+	if err != nil {
+		t.Fatalf("invalid child PID %q", fields[0])
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if syscall.Kill(child, 0) != nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("descendant process %d survived parent exit", child)
+}
+
+func TestDefaultRunnerKillsDetachedDescendantAfterCommandExits(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process groups are Unix-specific")
+	}
+	output, err := defaultCmdRunner(context.Background(), "sh", "-c", "sleep 30 >/dev/null 2>&1 & echo $!")
+	if err != nil {
+		t.Fatalf("runner failed: %v", err)
+	}
+	fields := strings.Fields(output)
+	if len(fields) == 0 {
+		t.Fatalf("child PID missing from output %q", output)
+	}
+	child, err := strconv.Atoi(fields[0])
+	if err != nil {
+		t.Fatalf("invalid child PID %q", fields[0])
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if !testProcessAlive(child) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("detached descendant process %d survived parent exit", child)
+}
+
+func processStateFromStat(stat string) byte {
+	closeParen := strings.LastIndex(stat, ")")
+	if closeParen < 0 || closeParen+2 >= len(stat) {
+		return 0
+	}
+	return stat[closeParen+2]
+}
+
+func testProcessAlive(pid int) bool {
+	if stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid)); err == nil && processStateFromStat(string(stat)) == 'Z' {
+		return false
+	}
+	return syscall.Kill(pid, 0) == nil
+}
+
+func TestRadioCollectionRejectsFailedRequiredReads(t *testing.T) {
+	runner := func(ctx context.Context, name string, args ...string) (string, error) {
+		full := name + " " + strings.Join(args, " ")
+		switch full {
+		case "nvram get wl_ifnames":
+			return "eth4", nil
+		case "wl -i eth4 chanspec":
+			return "6", nil
+		case "wl -i eth4 chanim_stats":
+			return "", errors.New("command timed out")
+		default:
+			return "", nil
+		}
+	}
+	if _, err := NewAsusProvider(runner).GetRadiosContext(context.Background()); err == nil || !strings.Contains(err.Error(), "channel utilization") {
+		t.Fatalf("failed channel-utilization read became fresh radio data: %v", err)
+	}
+}
+
+func TestStaticInterfaceCacheExpiryAndFailedRefresh(t *testing.T) {
+	now := time.Unix(100, 0)
+	var calls atomic.Int32
+	fail := false
+	runner := func(ctx context.Context, name string, args ...string) (string, error) {
+		calls.Add(1)
+		if fail {
+			return "", errors.New("temporary nvram failure")
+		}
+		return "eth4 eth6", nil
+	}
+	p := NewAsusProvider(runner)
+	p.now = func() time.Time { return now }
+	read := func(want string) {
+		t.Helper()
+		got, err := p.nvramGetContext(context.Background(), "wl_ifnames")
+		if err != nil || got != want {
+			t.Fatalf("cache read = %q, %v; want %q", got, err, want)
+		}
+	}
+	read("eth4 eth6")
+	read("eth4 eth6")
+	if calls.Load() != 1 {
+		t.Fatalf("cache hit spawned command, calls=%d", calls.Load())
+	}
+
+	now = now.Add(stableCacheTTL) // exact expiry is a miss
+	fail = true
+	if _, err := p.nvramGetContext(context.Background(), "wl_ifnames"); err == nil {
+		t.Fatal("expected expired refresh failure")
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("expired entry was not refreshed, calls=%d", calls.Load())
+	}
+
+	now = now.Add(time.Second)
+	fail = false
+	read("eth4 eth6")
+	if calls.Load() != 3 {
+		t.Fatalf("failed refresh extended cache expiry, calls=%d", calls.Load())
+	}
+}
+
+func TestCollectionDeadlineStopsLaterInterfaceCommands(t *testing.T) {
+	var calls atomic.Int32
+	runner := func(ctx context.Context, name string, args ...string) (string, error) {
+		calls.Add(1)
+		if name == "nvram" {
+			return "eth4 eth6", nil
+		}
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	p := NewAsusProvider(runner)
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+	if _, err := p.Collect(ctx, nil); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("collection error = %v", err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("collection launched later commands after deadline: calls=%d, want nvram + first radio only", got)
+	}
+}
+
+func TestSampleCommandCacheStoresEmptyAndFailedReads(t *testing.T) {
+	var calls atomic.Int32
+	runner := func(context.Context, string, ...string) (string, error) {
+		calls.Add(1)
+		return "", errors.New("unsupported")
+	}
+	p := NewAsusProvider(runner)
+	ctx := context.WithValue(context.Background(), sampleCommandCacheKey{}, &sampleCommandCache{results: make(map[string]commandResult)})
+	for i := 0; i < 2; i++ {
+		if _, err := p.runCommand(ctx, "wl", "-i", "eth4", "chanim_stats"); err == nil {
+			t.Fatal("expected cached command error")
+		}
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("duplicate command ran %d times", calls.Load())
+	}
+	emptyCalls := atomic.Int32{}
+	pEmpty := NewAsusProvider(func(context.Context, string, ...string) (string, error) { emptyCalls.Add(1); return "", nil })
+	ctxEmpty := context.WithValue(context.Background(), sampleCommandCacheKey{}, &sampleCommandCache{results: make(map[string]commandResult)})
+	_, _ = pEmpty.runCommand(ctxEmpty, "nvram", "get", "wl0_vifnames")
+	_, _ = pEmpty.runCommand(ctxEmpty, "nvram", "get", "wl0_vifnames")
+	if emptyCalls.Load() != 1 {
+		t.Fatalf("valid empty command result was not cached: calls=%d", emptyCalls.Load())
+	}
+}
+
 func TestParseNetDev(t *testing.T) {
 	raw := `Inter-|   Receive                                                |  Transmit
  face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
@@ -226,6 +467,8 @@ func TestTriBandParentIdentityAndWidth(t *testing.T) {
 			return "0x3", nil
 		case "wl -i eth6 txchain":
 			return "15 (0xf)", nil
+		case "wl -i eth4 chanim_stats", "wl -i eth5 chanim_stats", "wl -i eth6 chanim_stats":
+			return "chanspec tx inbss idle\n0x1006 1 1 80", nil
 		case "wl -i wl1.1 ssid", "wl -i wl2.1 ssid":
 			return `Current SSID: "test"`, nil
 		case "wl -i wl1.1 bssid":
@@ -234,6 +477,8 @@ func TestTriBandParentIdentityAndWidth(t *testing.T) {
 			return "02:00:00:00:02:01", nil
 		case "wl -i wl1.1 assoclist", "wl -i wl2.1 assoclist":
 			return "assoclist 02:00:00:00:00:11", nil
+		case "wl -i wl1.1 sta_info 02:00:00:00:00:11", "wl -i wl2.1 sta_info 02:00:00:00:00:11":
+			return "rssi: -60\nrates: 600 Mbps (11ax 40MHz 2ss)", nil
 		}
 		return "", nil
 	}

@@ -115,6 +115,12 @@ assert.equal(node('unifibridge_enabled_1').checked,false);
 assert.equal(node('unifibridge_enabled_0').checked,true);
 console.log('Disabled UI regression passed: unrelated edits do not silently re-enable the service.');
 
+context.updateUI({running:true,pid:123,status_updated_at:1000,sample_fresh:false,sample_age_sec:12,enabled:true,branch:'dev',model_code:'U6IW',interval_sec:10});
+assert.match(node('bridge_status_text').textContent,/Telemetry sample stale \(12s old\)/);
+context.updateUI({running:true,pid:123,status_updated_at:1000,sample_fresh:true,sample_stage_errors:{ports:'unavailable'},enabled:true,branch:'dev',model_code:'U6IW',interval_sec:10});
+assert.match(node('bridge_status_text').textContent,/Partial telemetry/);
+console.log('Sampling status regression passed: stale and partial telemetry remain explicit.');
+
 clock=70000;context.applySettings();
 const settingsRequest=context.activeActionRequest;
 assert.ok(settingsRequest);

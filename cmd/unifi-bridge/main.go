@@ -92,7 +92,7 @@ func logEvent(format string, v ...any) string {
 	return msg
 }
 
-func updateWebUIStatus(host *providers.HostInfo, modelProfile models.ModelProfile, cfg *Config, stateMgr *inform.StateManager, totalStations int, radioStats []telemetry.RadioStat, ports []telemetry.Port, sysStats *telemetry.SystemStats, health *exchangeHealth, exchangeErr error) {
+func updateWebUIStatus(host *providers.HostInfo, modelProfile models.ModelProfile, cfg *Config, stateMgr *inform.StateManager, totalStations int, radioStats []telemetry.RadioStat, ports []telemetry.Port, sysStats *telemetry.SystemStats, health *exchangeHealth, exchangeErr error, sampleFresh bool, sampleCompletedAt time.Time, sampleErrors map[string]string) {
 	statusDir := "/tmp/var/wwwext/unifi-bridge"
 	if err := os.MkdirAll(statusDir, 0755); err != nil {
 		return
@@ -145,18 +145,27 @@ func updateWebUIStatus(host *providers.HostInfo, modelProfile models.ModelProfil
 		"last_successful_inform": health.lastSuccessString(),
 		"last_attempt":           health.LastAttempt.Format("2006-01-02 15:04:05"),
 		"status_updated_at":      time.Now().Unix(),
-		"commit":                 commit,
-		"build_date":             buildDate,
-		"last_status":            lastStatus,
-		"total_stations":         totalStations,
-		"stations_2g":            sta2G,
-		"stations_5g":            sta5G,
-		"cu_total_2g":            cuTotal2G,
-		"cu_total_5g":            cuTotal5G,
-		"radio_stats":            radioStats,
-		"ports":                  ports,
-		"system_stats":           sysStats,
-		"recent_logs":            logsCopy,
+		"sample_fresh":           sampleFresh,
+		"sample_updated_at":      sampleCompletedAt.Unix(),
+		"sample_age_sec": func() int64 {
+			if sampleCompletedAt.IsZero() {
+				return -1
+			}
+			return int64(time.Since(sampleCompletedAt).Seconds())
+		}(),
+		"sample_stage_errors": sampleErrors,
+		"commit":              commit,
+		"build_date":          buildDate,
+		"last_status":         lastStatus,
+		"total_stations":      totalStations,
+		"stations_2g":         sta2G,
+		"stations_5g":         sta5G,
+		"cu_total_2g":         cuTotal2G,
+		"cu_total_5g":         cuTotal5G,
+		"radio_stats":         radioStats,
+		"ports":               ports,
+		"system_stats":        sysStats,
+		"recent_logs":         logsCopy,
 	}
 
 	raw, err := json.MarshalIndent(statusObj, "", "  ")
@@ -257,8 +266,10 @@ func main() {
 	}
 
 	modelProfile := models.GetProfile(cfg.Model)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
 
-	var provider providers.TelemetryProvider
+	var provider providers.ContextTelemetryProvider
 	if *profileFlag != "" {
 		p, err := profile.NewProfileProvider(*profileFlag)
 		if err != nil {
@@ -269,7 +280,9 @@ func main() {
 		provider = broadcom.NewAsusProvider(nil)
 	}
 
-	host, err := provider.GetHostInfo()
+	startupCtx, startupCancel := context.WithTimeout(ctx, 8*time.Second)
+	host, err := provider.GetHostInfoContext(startupCtx)
+	startupCancel()
 	if err != nil {
 		log.Fatalf("failed to query host info: %v", err)
 	}
@@ -285,52 +298,43 @@ func main() {
 	logEvent("[unifi-bridge] Emulating %s (firmware: %s), reporting to %s",
 		modelProfile.DisplayName, modelProfile.Firmware, cfg.ControllerURL)
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-
 	ticker := time.NewTicker(time.Duration(cfg.IntervalSec) * time.Second)
 	defer ticker.Stop()
 
 	health := &exchangeHealth{}
+	lastTotalStations := 0
+	lastRadioStats := []telemetry.RadioStat(nil)
+	lastPorts := []telemetry.Port(nil)
+	lastSystemStats := (*telemetry.SystemStats)(nil)
+	lastSampleAt := time.Time{}
+	lastStageErrors := map[string]string(nil)
+	sampleBudget := 8 * time.Second
+	if intervalBudget := time.Duration(cfg.IntervalSec) * time.Second; intervalBudget < sampleBudget {
+		sampleBudget = intervalBudget
+	}
 	runExchange := func() (exchangeErr error) {
 		health.LastAttempt = time.Now()
-		var totalStations int
-		var radioStats []telemetry.RadioStat
-		var ports []telemetry.Port
-		var sysStats *telemetry.SystemStats
+		sampleFresh := false
 
 		defer func() {
-			updateWebUIStatus(host, modelProfile, cfg, stateMgr, totalStations, radioStats, ports, sysStats, health, exchangeErr)
+			updateWebUIStatus(host, modelProfile, cfg, stateMgr, lastTotalStations, lastRadioStats, lastPorts, lastSystemStats, health, exchangeErr, sampleFresh, lastSampleAt, lastStageErrors)
 		}()
 
-		radios, err := provider.GetRadios()
+		sampleCtx, sampleCancel := context.WithTimeout(ctx, sampleBudget)
+		sample, err := provider.Collect(sampleCtx, cfg.WlanMapping)
+		sampleCancel()
 		if err != nil {
-			return fmt.Errorf("failed to get radios: %w", err)
+			return fmt.Errorf("telemetry sample failed: %w", err)
 		}
-
-		vaps, err := provider.GetVAPs(cfg.WlanMapping)
-		if err != nil {
-			return fmt.Errorf("failed to get vaps: %w", err)
-		}
-
-		// Retrieve radio stats including RF channel utilization and airtime metrics
-		radioStats, err = provider.GetRadioStats()
-		if err != nil || len(radioStats) == 0 {
-			radioStats = make([]telemetry.RadioStat, 0, len(radios))
-			for _, r := range radios {
-				radioStats = append(radioStats, telemetry.RadioStat{
-					Name:    r.Name,
-					Channel: r.Channel,
-				})
-			}
-		}
-
-		// Retrieve Ethernet ports, uplink, LLDP and system load telemetry
-		pTable, ethTable, uplink, _ := provider.GetPortTable()
-		ports = pTable
-		lldpEntries, _ := provider.GetLLDPTable()
-		systemStats, sysStatsLegacy, _ := provider.GetSystemStats()
-		sysStats = systemStats
+		sampleFresh = true
+		lastSampleAt = sample.CompletedAt
+		lastStageErrors = sample.StageErrors
+		radios, vaps := sample.Radios, sample.VAPs
+		radioStats := sample.RadioStats
+		ports, ethTable, uplink := sample.Ports, sample.Ethernet, sample.Uplink
+		lldpEntries := sample.LLDP
+		systemStats, sysStatsLegacy := sample.System, sample.LegacySystem
+		sysStats := systemStats
 		if systemStats != nil {
 			host.Uptime = systemStats.Uptime
 		}
@@ -346,10 +350,20 @@ func main() {
 		}
 
 		telemetry.AssignRadioStationCounts(radioStats, vaps)
-
+		totalStations := 0
 		for _, v := range vaps {
 			totalStations += v.NumSta
 		}
+		if _, failed := sample.StageErrors["radio_stats"]; !failed {
+			lastRadioStats = radioStats
+		}
+		if _, failed := sample.StageErrors["ports"]; !failed {
+			lastPorts = ports
+		}
+		if _, failed := sample.StageErrors["system"]; !failed {
+			lastSystemStats = sysStats
+		}
+		lastTotalStations = totalStations
 
 		now := time.Now().Unix()
 		key := stateMgr.GetKey()

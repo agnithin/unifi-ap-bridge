@@ -1,9 +1,11 @@
 package profile
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/agnithin/unifi-ap-bridge/pkg/inform"
 	"github.com/agnithin/unifi-ap-bridge/pkg/telemetry"
@@ -64,6 +66,53 @@ func (p *ProfileProvider) GetHostInfo() (*providers.HostInfo, error) {
 		MAC:      p.data.MAC,
 		IP:       p.data.IP,
 		Uptime:   3600,
+	}, nil
+}
+
+func (p *ProfileProvider) GetHostInfoContext(ctx context.Context) (*providers.HostInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return p.GetHostInfo()
+}
+
+func (p *ProfileProvider) Collect(ctx context.Context, mapping map[string]string) (*providers.Sample, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	started := time.Now()
+	radios, err := p.GetRadios()
+	if err != nil {
+		return nil, err
+	}
+	vaps, err := p.GetVAPs(mapping)
+	if err != nil {
+		return nil, err
+	}
+	stats, err := p.GetRadioStats()
+	if err != nil {
+		return nil, err
+	}
+	ports, ethernet, uplink, err := p.GetPortTable()
+	if err != nil {
+		return nil, err
+	}
+	lldp, err := p.GetLLDPTable()
+	if err != nil {
+		return nil, err
+	}
+	system, legacySystem, err := p.GetSystemStats()
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return &providers.Sample{
+		Radios: radios, VAPs: vaps, RadioStats: stats,
+		Ports: ports, Ethernet: ethernet, Uplink: uplink, LLDP: lldp,
+		System: system, LegacySystem: legacySystem,
+		StartedAt: started, CompletedAt: time.Now(),
 	}, nil
 }
 
