@@ -88,5 +88,68 @@ class UpdateBackendTests(unittest.TestCase):
         self.assertEqual(settings.read_text(), original)
         self.assertEqual(json.loads((self.install / 'config/config.json').read_text())["branch"], "dev")
 
+    def settings_fixture(self, *, payload_id="123456", startup_rc=0):
+        self.install.mkdir(exist_ok=True)
+        conf = self.install / "config"
+        conf.mkdir(exist_ok=True)
+        status_dir = self.root / "tmp/var/wwwext/unifi-bridge"
+        status_dir.mkdir(parents=True, exist_ok=True)
+        self.env.update({"AMNG": json.dumps({"request_id": payload_id, "enabled": True,
+            "auto_gateway": False, "controller_url": "http://controller.test:8080/inform",
+            "model": "U6IW", "interval": 10, "branch": "dev"}), "START_RC": str(startup_rc),
+            "CAPTURE": str(self.root / "helper.json"), "HELPER_ARGS": str(self.root / "helper-args"),
+            "SYNC_ARGS": str(self.root / "sync-args")})
+        nvram = self.bin / "nvram"
+        nvram.write_text('#!/bin/sh\ncase "$2" in amng_custom) printf "%s" "$AMNG";; lan_gateway) echo 10.0.0.1;; esac\n')
+        nvram.chmod(0o755)
+        bridge = self.root / "tmp/unifi-bridge/unifi-bridge"
+        bridge.parent.mkdir(parents=True, exist_ok=True)
+        bridge.write_text('#!/usr/bin/env python3\nimport json,os,sys\na=sys.argv[1:]; payload=sys.stdin.read(); cfg=a[a.index("-config")+1]\nexpected=a[a.index("-request-id")+1] if "-request-id" in a else ""\ndata=json.loads(payload)\nopen(os.environ["HELPER_ARGS"],"w").write(repr((a, data)))\nif expected and data.get("request_id") != expected: sys.exit(31)\ndata.pop("request_id",None)\nopen(os.environ["CAPTURE"],"w").write(json.dumps(data))\nopen(cfg,"w").write(json.dumps(data))\n')
+        bridge.chmod(0o755)
+        (self.install / "start.sh").write_text('#!/bin/sh\nexit "$START_RC"\n')
+        (self.install / "start.sh").chmod(0o755)
+        (self.install / "sync_nodes.sh").write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$SYNC_ARGS"\n')
+        (self.install / "sync_nodes.sh").chmod(0o755)
+        source = (ROOT / "scripts/apply_config.sh").read_text()
+        source = source.replace('/jffs/addons/unifi-bridge', str(self.install))
+        source = source.replace('/tmp/', str(self.root / 'tmp') + '/')
+        handler = self.root / "settings-handler.sh"
+        handler.write_text(source)
+        return handler, status_dir
+
+    def run_settings(self, *, action_id="123456", payload_id="123456", startup_rc=0):
+        handler, status_dir = self.settings_fixture(payload_id=payload_id, startup_rc=startup_rc)
+        result = subprocess.run(["sh", str(handler), "start", "start_unifi_bridge_apply_" + action_id],
+            env=self.env, capture_output=True, text=True, timeout=5)
+        status_path = status_dir / ("action_status_" + action_id + ".js")
+        for _ in range(50):
+            if status_path.exists() and (startup_rc != 0 or (self.root / "sync-args").exists()): break
+            time.sleep(.02)
+        status = json.loads(status_path.read_text().split("=",1)[1].strip().rstrip(";")) if status_path.exists() else None
+        return result, status
+
+    def test_settings_action_binds_payload_id_and_retains_per_request_completion(self):
+        result, status = self.run_settings()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(status["request_id"], "123456")
+        self.assertEqual(status["operation"], "settings")
+        self.assertEqual(status["status"], "SAVED")
+        self.assertNotIn("request_id", json.loads((self.root / "helper.json").read_text()))
+        self.assertEqual((self.root / "sync-args").read_text().splitlines(), ["sync", "", "", "123456"])
+
+    def test_superseded_settings_payload_is_rejected_without_config_write(self):
+        prior_config = (self.install / "config/config.json").read_text()
+        result, status = self.run_settings(action_id="123456", payload_id="654321")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(status["status"], "REJECTED")
+        self.assertEqual((self.install / "config/config.json").read_text(), prior_config)
+        self.assertFalse((self.root / "sync-args").exists())
+
+    def test_start_failure_reports_settings_saved_separately(self):
+        result, status = self.run_settings(startup_rc=1)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(status["status"], "START_FAILED_AFTER_SAVE")
+        self.assertTrue((self.install / "config/config.json").exists())
+
 if __name__ == "__main__":
     unittest.main()

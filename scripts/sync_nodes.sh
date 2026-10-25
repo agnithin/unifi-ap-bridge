@@ -85,10 +85,17 @@ get_node_ips() {
 
 ACTION="${1:-sync}"
 NOW=$(date +"%Y-%m-%d %H:%M:%S")
-OPERATION_ID="${4:-$(date +%s)$$}"
+EXPLICIT_OPERATION_ID="${4:-}"
+OPERATION_ID="${EXPLICIT_OPERATION_ID:-$(date +%s)$$}"
 case "$OPERATION_ID" in ''|*[!0-9]*) OPERATION_ID=$(date +%s) ;; esac
+[ "${#OPERATION_ID}" -le 24 ] || OPERATION_ID=$(date +%s)
+case "$EXPLICIT_OPERATION_ID" in ''|*[!0-9]*|?????????????????????????*) EXPLICIT_OPERATION_ID="" ;; esac
 MUTATION_LOCK="/tmp/unifi-bridge-mutation.lock"
 mutation_lock_owned=0
+operation_record_done=0
+operation_failure_status="FAILED"
+sync_tmp=""
+OPERATION_RECORD_FILE=""
 release_mutation_lock() {
     if [ "$mutation_lock_owned" -eq 1 ] && [ "$(cat "$MUTATION_LOCK/pid" 2>/dev/null)" = "$$" ]; then
         rm -f "$MUTATION_LOCK/pid"; rmdir "$MUTATION_LOCK" 2>/dev/null || true
@@ -103,9 +110,6 @@ acquire_mutation_lock() {
     done
     echo "$$" > "$MUTATION_LOCK/pid" || { rmdir "$MUTATION_LOCK" 2>/dev/null; return 1; }
     mutation_lock_owned=1
-    trap 'release_mutation_lock; rm -rf "${sync_tmp:-}"' 0
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
 }
 assert_no_update_journal() {
     [ ! -e "$INSTALL_DIR/.update-transaction" ] || {
@@ -118,19 +122,46 @@ json_escape() {
 json_number_or_null() {
     case "$1" in ''|*[!0-9]*) printf 'null' ;; *) printf '%s' "$1" ;; esac
 }
+write_sync_operation() {
+    [ -n "$EXPLICIT_OPERATION_ID" ] || return 0
+    status="$1"; message="$2"; result_nodes="${3:-[]}"
+    mkdir -p "/tmp/var/wwwext/$ADDON_NAME" || return 1
+    OPERATION_RECORD_FILE="/tmp/var/wwwext/$ADDON_NAME/operation_${EXPLICIT_OPERATION_ID}.js"
+    tmp="$OPERATION_RECORD_FILE.tmp.$$"
+    completed_at=$(date +%s)
+    message_json=$(json_escape "$message")
+    printf 'window.unifiBridgeOperation = {"request_id":"%s","operation":"sync","status":"%s","completed_at":%s,"message":"%s","nodes":%s};\n' \
+        "$EXPLICIT_OPERATION_ID" "$status" "$completed_at" "$message_json" "$result_nodes" > "$tmp" || return 1
+    chmod 644 "$tmp" && mv -f "$tmp" "$OPERATION_RECORD_FILE" || return 1
+    ls -1t "/tmp/var/wwwext/$ADDON_NAME"/operation_*.js 2>/dev/null | sed -n '21,$p' | while IFS= read -r old; do rm -f "$old"; done
+}
+sync_exit_trap() {
+    exit_rc=$?
+    release_mutation_lock
+    rm -rf "${sync_tmp:-}"
+    if [ "$ACTION" = "sync" ] && [ -n "$EXPLICIT_OPERATION_ID" ] && [ "$operation_record_done" -eq 0 ]; then
+        write_sync_operation "$operation_failure_status" "Sync did not complete; inspect per-node status" "[]"
+    fi
+}
+trap 'sync_exit_trap' 0
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+if [ "$ACTION" = "sync" ] && [ -n "$EXPLICIT_OPERATION_ID" ]; then
+    write_sync_operation RUNNING "Sync request accepted; per-node verification is pending" "[]"
+fi
 
 
 # Snapshot local inputs while holding only this node's mutation lock. Never
 # retain it while waiting for a remote node; reciprocal syncs must not form a
 # distributed lock cycle.
-sync_tmp=""
 NODE_IPS=""
 SYNC_CONFIG=""
 REQUESTED_BRANCH="${2:-}"
 REQUESTED_COMMIT="${3:-}"
 if [ "$ACTION" = "sync" ] || [ "$ACTION" = "update" ]; then
-    acquire_mutation_lock || exit 1
-    assert_no_update_journal || exit 1
+    if ! acquire_mutation_lock; then operation_failure_status="REJECTED"; exit 1; fi
+    if ! assert_no_update_journal; then operation_failure_status="REJECTED"; exit 1; fi
     sync_tmp="/tmp/unifi-bridge-sync-$$"
     (umask 077; mkdir "$sync_tmp") || exit 1
     NODE_IPS=$(get_node_ips)
@@ -507,13 +538,28 @@ done
 nodes_json="${nodes_json}
   ]"
 
-# Write cluster.js for WebUI consumption
-cat << EOF > "$CLUSTER_JS"
+# Write cluster.js atomically for WebUI consumption
+cluster_tmp="$CLUSTER_JS.tmp.$$"
+cat << EOF > "$cluster_tmp"
 window.unifiBridgeCluster = {
   "last_sync": "${NOW}",
   "nodes": ${nodes_json}
 };
 EOF
 
-chmod 644 "$CLUSTER_JS"
+chmod 644 "$cluster_tmp" && mv -f "$cluster_tmp" "$CLUSTER_JS" || exit 1
+if [ "$ACTION" = "sync" ] && [ -n "$EXPLICIT_OPERATION_ID" ]; then
+    failure_count=$(printf '%s' "$nodes_json" | grep -o '"outcome":[[:space:]]*"failure"' | wc -l | tr -d ' ')
+    unknown_count=$(printf '%s' "$nodes_json" | grep -o '"outcome":[[:space:]]*"unknown"' | wc -l | tr -d ' ')
+    case "$failure_count:$unknown_count" in *[!0-9:]*) failure_count=0; unknown_count=0 ;; esac
+    if [ "$failure_count" -gt 0 ]; then
+        result_state="PARTIAL"
+    elif [ "$unknown_count" -gt 0 ]; then
+        result_state="UNKNOWN"
+    else
+        result_state="COMPLETED"
+    fi
+    write_sync_operation "$result_state" "Sync completed with ${failure_count} failed and ${unknown_count} unverified nodes" "$nodes_json" || exit 1
+    operation_record_done=1
+fi
 echo "Cluster sync completed at ${NOW}"

@@ -47,6 +47,25 @@ func TestSettingsPreserveConfiguration(t *testing.T) {
 		t.Fatal("no-op settings replaced configuration")
 	}
 }
+
+func TestSettingsRejectSupersededRequestBeforeMutation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	prior := `{"enabled":true,"branch":"dev","custom":{"keep":1}}`
+	if err := os.WriteFile(path, []byte(prior), 0600); err != nil {
+		t.Fatal(err)
+	}
+	input := `{"request_id":"222","enabled":false,"branch":"main"}`
+	if err := mergeSettings(path, strings.NewReader(input), "json", "", "111"); err == nil || !strings.Contains(err.Error(), "request id mismatch") {
+		t.Fatalf("expected superseded request rejection, got %v", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != prior {
+		t.Fatalf("superseded request changed config: %s", after)
+	}
+}
 func TestInvalidSettingsLeaveOriginalIntact(t *testing.T) {
 	for _, patch := range []string{`{"interval":0}`, `{"enabled":"false"}`, `{"enabled":null}`, `{"branch":"other"}`, `{"model":"oops"}`, `{"controller_url":"file:///etc/passwd"}`, `{"nodes":[]}`, `{"interval":5} trailing`} {
 		t.Run(patch, func(t *testing.T) {

@@ -141,6 +141,8 @@ var updatePollingTimer = null;
 var currentBranch = "main";
 var installedVersion = "";
 var activeUpdateRequest = null;
+var activeActionRequest = null;
+var actionPollingTimer = null;
 
 function displayVersion(value) {
   if (!value || value === "-") return "Unknown";
@@ -156,6 +158,112 @@ function finishUpdateRequest() {
   updatePollingTimer = null;
   activeUpdateRequest = null;
   document.getElementById("btn_check_update").disabled = false;
+}
+
+function finishActionRequest() {
+  if (actionPollingTimer !== null) clearInterval(actionPollingTimer);
+  actionPollingTimer = null;
+  activeActionRequest = null;
+  var applyButton = document.getElementById("btn_apply_settings");
+  var syncButton = document.getElementById("btn_sync_cluster");
+  if (applyButton) applyButton.disabled = false;
+  if (syncButton) syncButton.disabled = false;
+}
+
+function actionMessage(message, failed) {
+  var el = document.getElementById("action_status");
+  if (!el) return;
+  el.textContent = message;
+  el.style.color = failed ? "#e74c3c" : "#bdc3c7";
+}
+
+function startActionRequest(operation, requestId, actionScript) {
+  if (activeActionRequest || activeUpdateRequest) {
+    actionMessage("Another bridge operation is still running. Wait for its result before starting another.", true);
+    return false;
+  }
+  var request = {operation:operation, id:String(requestId), started:Date.now()};
+  activeActionRequest = request;
+  var applyButton = document.getElementById("btn_apply_settings");
+  var syncButton = document.getElementById("btn_sync_cluster");
+  if (applyButton) applyButton.disabled = true;
+  if (syncButton) syncButton.disabled = true;
+  document.form.action_script.value = actionScript;
+  document.form.action_mode.value = "apply";
+  document.form.action_wait.value = "0";
+  document.form.current_page.value = "";
+  document.form.next_page.value = "";
+  actionMessage(operation === "sync" ? "Sync dispatched. Waiting for per-node verification…" : "Applying settings on this AP…", false);
+  function fail(message) {
+    if (activeActionRequest !== request) return;
+    finishActionRequest();
+    actionMessage(message, true);
+  }
+  submitUpdateAction(function() {
+    if (activeActionRequest !== request) return;
+    request.dispatchUnknown = true;
+    actionMessage("Dispatch response was lost; checking this request ID. Do not resubmit while its outcome is unknown.", true);
+  });
+  if (activeActionRequest !== request) return false;
+  actionPollingTimer = setInterval(function() {
+    if (Date.now() - request.started > (operation === "sync" ? 180000 : 60000)) {
+      fail(operation === "sync" ? "Completion was not confirmed before the deadline. Check each node's status before retrying; no request was resubmitted." : "Settings completion was not confirmed before the deadline. Refresh status before retrying; no request was resubmitted.");
+      return;
+    }
+    if (operation === "settings") {
+      loadActionStatus(function(st) {
+        if (activeActionRequest !== request || !st || String(st.request_id || "") !== request.id || st.operation !== "settings") return;
+        if (st.status === "SAVED") {
+          finishActionRequest();
+          actionMessage(st.message || "Settings saved locally; runtime and cluster outcomes remain unverified.", false);
+          loadStatus();
+        } else if (st.status === "START_FAILED_AFTER_SAVE") {
+          fail(st.message || "Settings saved, but startup failed.");
+        } else if (st.status === "REJECTED") {
+          fail(st.message || "Settings could not be applied.");
+        }
+      });
+    } else {
+      loadOperationStatus(request, function(st) {
+        if (activeActionRequest !== request || !st || String(st.request_id || "") !== request.id || st.operation !== "sync") return;
+        if (st.nodes) updateClusterUI({nodes:st.nodes,last_sync:st.completed_at || "-"});
+        if (/^(COMPLETED|PARTIAL|UNKNOWN|FAILED|REJECTED)$/.test(st.status)) {
+          finishActionRequest();
+          actionMessage(st.message || ("Sync " + st.status.toLowerCase() + ". Review each node's stage, freshness, version and commit below."), st.status === "FAILED" || st.status === "REJECTED" || st.status === "PARTIAL");
+        }
+      });
+    }
+  }, 1500);
+  return true;
+}
+
+function loadActionStatus(done) {
+  if (!activeActionRequest) return;
+  var s = document.createElement("script");
+  s.src = "/ext/unifi-bridge/action_status_" + activeActionRequest.id + ".js?_=" + Date.now();
+  s.onload = function() {
+    if (done) done(window.unifiBridgeAction || null);
+    try { document.head.removeChild(s); } catch(e){}
+  };
+  s.onerror = function() { try { document.head.removeChild(s); } catch(e){} };
+  document.head.appendChild(s);
+}
+
+function loadOperationStatus(request, done) {
+  var s = document.createElement("script");
+  s.src = "/ext/unifi-bridge/operation_" + request.id + ".js?_=" + Date.now();
+  s.onload = function() {
+    if (done) done(window.unifiBridgeOperation || null);
+    try { document.head.removeChild(s); } catch(e){}
+  };
+  s.onerror = function() { try { document.head.removeChild(s); } catch(e){} };
+  document.head.appendChild(s);
+}
+
+function newRequestId() {
+  var suffix = String(Math.floor(Math.random() * 1000000));
+  while (suffix.length < 6) suffix = "0" + suffix;
+  return String(Date.now()) + suffix;
 }
 
 // POST through the normal Asuswrt dispatcher without executing its iframe HTML.
@@ -182,8 +290,12 @@ function submitUpdateAction(onError) {
 }
 
 function startUpdateRequest(operation, branch) {
+  if (activeActionRequest) {
+    actionMessage("Another bridge operation is still running. Wait for its result before starting an update.", true);
+    return;
+  }
   finishUpdateRequest();
-  var request = { id: String(Date.now()), operation: operation, branch: branch, started: Date.now() };
+  var request = { id: newRequestId(), operation: operation, branch: branch, started: Date.now() };
   activeUpdateRequest = request;
   document.getElementById("btn_check_update").disabled = true;
   document.getElementById("btn_do_update").style.display = "none";
@@ -275,6 +387,14 @@ function escapeHTML(value) {
   });
 }
 
+function displayMetric(value, maxValue) {
+  var text = String(value == null ? "" : value);
+  if (!/^\d+$/.test(text)) return "-";
+  var number = Number(text);
+  if (!isFinite(number) || (maxValue != null && number > maxValue)) return "-";
+  return String(number);
+}
+
 function statusIsFresh(st) {
   var age = Date.now()/1000 - Number(st.status_updated_at);
   return Number.isFinite(age) && age >= -30 && age <= 3 * (Number(st.interval_sec) || 10) + 30;
@@ -282,7 +402,9 @@ function statusIsFresh(st) {
 
 function clusterState(n) {
   var label=n.sync_status || "Unknown";
-  if (n.status !== "RUNNING" || /Failed|Unreachable|Stale|Stopped|No SSH/i.test(label)) return "error";
+  if (n.outcome === "failure" || /Failed|Unreachable|Stale|Stopped|No SSH/i.test(label)) return "error";
+  if (n.enabled === false && n.running === false && n.freshness === "fresh") return n.pid ? "error" : "disabled";
+  if (n.freshness === "stale" || n.freshness === "unknown" || n.status !== "RUNNING") return "unverified";
   if (label === "Local") return "local";
   // A version match is healthy sampling, not proof of configuration equality.
   if (/Unverified|Config Synced|Version Diff/i.test(label)) return "unverified";
@@ -396,8 +518,8 @@ function updateClusterUI(cl) {
   if (!tbody) return;
 
   var html = "";
-  var allInSync = true;
-  var anyUnverified = false;
+  var hasHealthError = false;
+  var healthVerified = cl.nodes.length > 0;
   var clusterTotal = 0;
   var cluster2g = 0;
   var cluster5g = 0;
@@ -407,8 +529,10 @@ function updateClusterUI(cl) {
     var isLocal = n.role.indexOf("Main") !== -1;
     var state = clusterState(n);
     var isSync = state === "verified" || state === "local";
-    if (state === "error") allInSync = false;
-    if (state === "unverified") anyUnverified = true;
+    var nodeDisabledAndHealthy = n.enabled === false && n.running === false && n.freshness === "fresh" && !n.pid;
+    var nodeRunningAndFresh = n.status === "RUNNING" && n.running !== false && n.freshness === "fresh";
+    if (state === "error") hasHealthError = true;
+    if (!nodeDisabledAndHealthy && !nodeRunningAndFresh) healthVerified = false;
 
     if (n.status === "RUNNING") {
       clusterTotal += Number(n.total_clients) || 0;
@@ -416,9 +540,11 @@ function updateClusterUI(cl) {
       cluster5g += Number(n.clients_5g) || 0;
     }
 
-    var statusBadge = n.status === "RUNNING"
-      ? '<span class="badge_online" style="font-size:10px;">RUNNING</span>'
-      : '<span class="badge_offline" style="font-size:10px;">STOPPED</span>';
+    var statusBadge = n.enabled === false && n.running === false
+      ? '<span style="font-size:10px;color:#bdc3c7;">DISABLED</span>'
+      : (n.status === "RUNNING"
+        ? '<span class="badge_online" style="font-size:10px;">RUNNING</span>'
+        : '<span class="badge_offline" style="font-size:10px;">STOPPED</span>');
 
     var syncBadge = isSync
       ? '<span class="badge_online" style="font-size:10px; background-color:#2980b9;">' + escapeHTML(n.sync_status) + '</span>'
@@ -428,11 +554,26 @@ function updateClusterUI(cl) {
     html += '<td class="settingvalue" style="font-weight:bold; color:#fff;">' + escapeHTML(n.name) + (isLocal ? ' <span style="font-size:10px; color:#f1c40f;">(This AP)</span>' : '') + '</td>';
     html += '<td class="settingvalue">' + escapeHTML(n.role) + '</td>';
     html += '<td class="settingvalue"><code style="color:#2ecc71;">' + escapeHTML(n.version || "Unknown") + '</code></td>';
+    html += '<td class="settingvalue"><code style="font-size:10px;" title="' + escapeHTML(n.commit || "") + '">' + escapeHTML(n.commit ? String(n.commit).slice(0, 12) : "-") + '</code></td>';
     html += '<td class="settingvalue"><code>' + escapeHTML(n.ip) + '</code></td>';
     html += '<td class="settingvalue">' + statusBadge + '</td>';
-    var loadTag = (n.cu_2g || n.cu_5g) ? ' <span style="font-size:10px; color:#f39c12;">[' + (n.cu_2g || 0) + '% / ' + (n.cu_5g || 0) + '% load]</span>' : '';
-    html += '<td class="settingvalue">' + escapeHTML(n.total_clients) + ' <span style="font-size:10px; color:#bdc3c7;">(' + n.clients_2g + 'G / ' + n.clients_5g + 'A)</span>' + loadTag + '</td>';
+    var clientsTotal = displayMetric(n.total_clients);
+    var clients2g = displayMetric(n.clients_2g);
+    var clients5g = displayMetric(n.clients_5g);
+    var load2g = displayMetric(n.cu_2g, 100);
+    var load5g = displayMetric(n.cu_5g, 100);
+    var loadTag = (load2g !== "-" || load5g !== "-")
+      ? ' <span style="font-size:10px; color:#f39c12;">[' + (load2g === "-" ? "0" : load2g) + '% / ' + (load5g === "-" ? "0" : load5g) + '% load]</span>' : '';
+    html += '<td class="settingvalue">' + clientsTotal + ' <span style="font-size:10px; color:#bdc3c7;">(' + clients2g + 'G / ' + clients5g + 'A)</span>' + loadTag + '</td>';
     html += '<td class="settingvalue">' + syncBadge + '</td>';
+    var operationText = (n.outcome || "unknown") + " · " + (n.stage || "unknown") + " · " + (n.freshness || "unknown") + " · dispatch " + (n.dispatch_result || "unknown");
+    if (n.operation_id) operationText += " · op " + n.operation_id;
+    if (n.requested_version) operationText += " · requested v" + String(n.requested_version).replace(/^v/i, "");
+    if (n.requested_commit) operationText += " · requested " + String(n.requested_commit).slice(0, 12);
+    if (n.commit) operationText += " · observed " + String(n.commit).slice(0, 12);
+    if (n.enabled === false) operationText += " · disabled";
+    if (n.last_successful_inform) operationText += " · inform " + n.last_successful_inform;
+    html += '<td class="settingvalue" style="font-size:10px;">' + escapeHTML(operationText) + '</td>';
     html += '</tr>';
   }
 
@@ -444,14 +585,14 @@ function updateClusterUI(cl) {
 
   var syncBadgeEl = document.getElementById("cluster_sync_badge");
   if (syncBadgeEl) {
-    syncBadgeEl.style.backgroundColor = allInSync ? (anyUnverified ? "#9a7200" : "#27ae60") : "#c0392b";
-    if (allInSync) {
-      syncBadgeEl.className = "badge_online";
-      syncBadgeEl.textContent = anyUnverified ? "CONFIGURATION UNVERIFIED" : "ALL NODES IN SYNC";
-      if (anyUnverified) syncBadgeEl.style.backgroundColor = "#9a7200";
-    } else {
+    if (hasHealthError) {
       syncBadgeEl.className = "badge_offline";
-      syncBadgeEl.textContent = "SYNC ATTENTION NEEDED";
+      syncBadgeEl.textContent = "HEALTH ATTENTION · CONFIGURATION UNVERIFIED";
+      syncBadgeEl.style.backgroundColor = "#c0392b";
+    } else {
+      syncBadgeEl.className = "badge_online";
+      syncBadgeEl.textContent = healthVerified ? "HEALTH OK · CONFIGURATION UNVERIFIED" : "CONFIGURATION UNVERIFIED";
+      syncBadgeEl.style.backgroundColor = "#9a7200";
     }
   }
 
@@ -577,12 +718,15 @@ function onTrackChanged() {
   checkUpdateNow();
 }
 
-function loadCluster() {
+function loadCluster(done) {
   var s = document.createElement("script");
   s.src = "/ext/unifi-bridge/cluster.js?_=" + Date.now();
   s.onload = function() {
     if (window.unifiBridgeCluster) {
       updateClusterUI(window.unifiBridgeCluster);
+      if (done) done(window.unifiBridgeCluster);
+    } else if (done) {
+      done(null);
     }
     try { document.head.removeChild(s); } catch(e){}
   };
@@ -632,24 +776,13 @@ function toggleControllerInput() {
 }
 
 function syncClusterNow() {
+  var requestId = newRequestId();
   document.form.current_page.value = "";
   document.form.next_page.value = "";
   window.refreshpage = function() {};
   try { window.parent.refreshpage = function() {}; } catch (e) {}
 
-  document.form.action_script.value = "start_unifi_bridge_sync";
-  document.form.action_mode.value = "apply";
-  document.form.action_wait.value = "4";
-
-  if (typeof showLoading === "function") {
-    showLoading(4);
-  }
-  document.form.submit();
-
-  setTimeout(function() {
-    loadCluster();
-    loadStatus();
-  }, 4500);
+  startActionRequest("sync", requestId, "start_unifi_bridge_sync_" + requestId);
 }
 
 function applySettings() {
@@ -658,6 +791,7 @@ function applySettings() {
   var ctrlUrl = document.getElementById("input_controller_url").value.trim();
   var model = document.getElementById("select_model").value;
   var interval = document.getElementById("select_interval").value;
+  var requestId = newRequestId();
   // The comparison selector does not change the installed track.
   var branch = currentBranch;
 
@@ -685,23 +819,12 @@ function applySettings() {
       controller_url: ctrlUrl,
       model: model,
       interval: parseInt(interval, 10),
-      branch: branch
+      branch: branch,
+      request_id: requestId
     });
   }
 
-  document.form.action_script.value = "start_unifi_bridge_apply";
-  document.form.action_mode.value = "apply";
-  document.form.action_wait.value = "4";
-
-  if (typeof showLoading === "function") {
-    showLoading(4);
-  }
-  document.form.submit();
-
-  setTimeout(function() {
-    loadStatus();
-    loadCluster();
-  }, 4500);
+  startActionRequest("settings", requestId, "start_unifi_bridge_apply_" + requestId);
 }
 
 function initial(){
@@ -796,10 +919,10 @@ function initial(){
                     <table width="100%" border="1" align="center" cellpadding="2" cellspacing="0" bordercolor="#6b8fa3" class="FormTable SettingsTable" style="border:0px; margin-bottom:12px;" id="table_cluster">
                       <thead class="collapsible-jquery">
                         <tr>
-                          <td colspan="7">
+                          <td colspan="9">
                             <div style="display:flex; justify-content:space-between; align-items:center;">
                               <span>Cluster Access Points & Synchronization Status</span>
-                              <span id="cluster_sync_badge" class="badge_online" style="font-size:10px; margin-right:5px;">ALL NODES IN SYNC</span>
+                          <span id="cluster_sync_badge" class="badge_online" style="font-size:10px; margin-right:5px; background-color:#9a7200;">CONFIGURATION UNVERIFIED</span>
                             </div>
                           </td>
                         </tr>
@@ -809,22 +932,25 @@ function initial(){
                           <th style="padding:6px 10px; width:20%;">Access Point</th>
                           <th style="padding:6px 10px; width:14%;">Role</th>
                           <th style="padding:6px 10px; width:11%;">Version</th>
+                          <th style="padding:6px 10px; width:10%;">Commit</th>
                           <th style="padding:6px 10px; width:14%;">IP Address</th>
                           <th style="padding:6px 10px; width:13%;">Status</th>
                           <th style="padding:6px 10px; width:14%;">Clients</th>
                           <th style="padding:6px 10px; width:14%;">Sync Status</th>
+                          <th style="padding:6px 10px; width:22%;">Operation / Health</th>
                         </tr>
                       </thead>
                       <tbody id="cluster_nodes_tbody">
                         <tr>
-                          <td colspan="7" style="padding:10px; text-align:center; color:#bdc3c7; background-color:#475a5f;">Loading cluster node status...</td>
+                          <td colspan="9" style="padding:10px; text-align:center; color:#bdc3c7; background-color:#475a5f;">Loading cluster node status...</td>
                         </tr>
                       </tbody>
                     </table>
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin:-6px 0 14px 2px; font-size:11px; color:#bdc3c7;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin:-6px 0 4px 2px; font-size:11px; color:#bdc3c7;">
                       <span>Last Cluster Sync: <span id="last_sync_time" style="color:#ecf0f1; font-weight:bold;">-</span></span>
-                      <input class="button_gen" type="button" value="Sync Cluster Now" onclick="syncClusterNow();" style="padding:2px 10px; font-size:11px;" />
+                      <input id="btn_sync_cluster" class="button_gen" type="button" value="Sync Cluster Now" onclick="syncClusterNow();" style="padding:2px 10px; font-size:11px;" />
                     </div>
+                    <div id="action_status" role="status" aria-live="polite" style="min-height:16px; margin:0 0 14px 2px; font-size:11px; color:#bdc3c7;"></div>
 
                     <!-- Software Updates & Track Management Table -->
                     <table width="100%" border="1" align="center" cellpadding="2" cellspacing="0" bordercolor="#6b8fa3" class="FormTable SettingsTable" style="border:0px; margin-bottom:12px;" id="table_updates">
@@ -917,7 +1043,7 @@ function initial(){
                         <tr>
                           <td colspan="2">
                             <span>Configuration</span>
-                            <span style="font-size:11px; color:#bdc3c7; font-weight:normal; margin-left:10px;">(Settings automatically propagate to all cluster nodes)</span>
+                            <span style="font-size:11px; color:#bdc3c7; font-weight:normal; margin-left:10px;">(Settings apply locally; cluster outcomes are reported per node)</span>
                           </td>
                         </tr>
                       </thead>
@@ -980,7 +1106,7 @@ function initial(){
 
                     <!-- Apply Button -->
                     <div class="apply_gen" style="margin-top:15px;text-align:center;">
-                      <input class="button_gen" type="button" value="Apply Settings" onclick="applySettings();" />
+                      <input id="btn_apply_settings" class="button_gen" type="button" value="Apply Settings" onclick="applySettings();" />
                     </div>
 
                     <!-- Live Heartbeat Events -->

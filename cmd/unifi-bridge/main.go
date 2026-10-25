@@ -177,6 +177,7 @@ func main() {
 	applySettingsFlag := flag.Bool("apply-settings", false, "Merge settings from stdin without starting telemetry")
 	syncSettingsFlag := flag.Bool("sync-settings", false, "Merge shared settings from stdin while preserving node-local configuration")
 	settingsFormat := flag.String("settings-format", "json", "Settings input: json or custom")
+	requestIDFlag := flag.String("request-id", "", "Expected WebUI settings request ID")
 	gatewayFlag := flag.String("gateway", "", "Gateway IP for automatic controller discovery")
 	configPath := flag.String("config", "", "Path to configuration file")
 	controllerFlag := flag.String("controller", "", "UniFi controller inform URL")
@@ -207,7 +208,7 @@ func main() {
 		if *syncSettingsFlag {
 			err = mergeSharedSettings(*configPath, os.Stdin, *gatewayFlag)
 		} else {
-			err = mergeSettings(*configPath, os.Stdin, *settingsFormat, *gatewayFlag)
+			err = mergeSettings(*configPath, os.Stdin, *settingsFormat, *gatewayFlag, *requestIDFlag)
 		}
 		if err != nil {
 			log.Fatal(err)

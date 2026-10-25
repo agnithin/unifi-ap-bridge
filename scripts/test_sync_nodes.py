@@ -155,6 +155,19 @@ class ClusterTests(unittest.TestCase):
         query = (self.root / "remote-query-command.txt").read_text()
         self.assertIn("awk '{print $1}'", query, "remote shell must receive an unexpanded PID field reference")
 
+    def test_sync_request_result_survives_routine_status_refresh(self):
+        node, _, _ = self.run_settings_sync()
+        result_path = self.root / "tmp/var/wwwext/unifi-bridge/operation_123456.js"
+        original = result_path.read_bytes()
+        operation = json.loads(original.decode().split("=", 1)[1].strip().rstrip(";"))
+        self.assertEqual(operation["request_id"], "123456")
+        self.assertEqual(operation["operation"], "sync")
+        self.assertIn(operation["status"], ("UNKNOWN", "COMPLETED", "PARTIAL"))
+        self.assertEqual(operation["nodes"][1]["operation_id"], "123456")
+        subprocess.run(["sh", str(self.root / "sync-settings.sh"), "status"], env=self.env,
+            check=True, capture_output=True, timeout=5)
+        self.assertEqual(result_path.read_bytes(), original, "routine health refresh must not replace terminal request results")
+
     def test_sync_stale_status_remains_unknown(self):
         node, _, _ = self.run_settings_sync(status_age=500)
         self.assertEqual(node["freshness"], "stale")

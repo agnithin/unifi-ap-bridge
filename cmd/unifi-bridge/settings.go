@@ -64,7 +64,11 @@ func acquireSettingsMutation() (func(), error) {
 
 // mergeSettings preserves fields owned by other components (including WLAN IDs,
 // node lists and per-node topology) instead of reconstructing the configuration.
-func mergeSettings(path string, input io.Reader, format, gateway string) error {
+func mergeSettings(path string, input io.Reader, format, gateway string, expectedRequestIDs ...string) error {
+	expectedRequestID := ""
+	if len(expectedRequestIDs) > 0 {
+		expectedRequestID = expectedRequestIDs[0]
+	}
 	raw, err := io.ReadAll(io.LimitReader(input, 65537))
 	if err != nil || len(raw) > 65536 {
 		return fmt.Errorf("settings input exceeds limit")
@@ -98,6 +102,13 @@ func mergeSettings(path string, input io.Reader, format, gateway string) error {
 	} else if format == "json" {
 		if err := json.Unmarshal(raw, &patch); err != nil || patch == nil {
 			return fmt.Errorf("settings must be a JSON object")
+		}
+		if expectedRequestID != "" {
+			var supplied string
+			if value, ok := patch["request_id"]; !ok || json.Unmarshal(value, &supplied) != nil || supplied != expectedRequestID {
+				return fmt.Errorf("settings request id mismatch; submission was superseded")
+			}
+			delete(patch, "request_id")
 		}
 	} else {
 		return fmt.Errorf("unknown settings format")
