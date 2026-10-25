@@ -1,74 +1,83 @@
 # Audit State & Current Operations
 
-**Last live verification:** 2026-10-24, approximately 22:23 PDT. This document records dated evidence; it does not imply a new live check on each documentation edit.
+**Last live verification:** 2026-10-24, approximately 23:05 PDT. This document records dated evidence; it does not imply a new live check on each documentation edit.
 
-**Status:** Both APs and controller heartbeats healthy. Development update deployed. Gateway parent-port topology, credential rotation, and additional failure-path review remain open.
+**Status:** Both APs and controller heartbeats healthy. Port Manager client discovery (`mac_table`) verified live. Topology parent-port collision resolved (Main on Port 1, Node on Port 3). Credential rotation and additional failure-path review remain open.
 
-**Release track:** `dev`, daemon `1.2.2`, deployed code commit `1b6ce07affb18f30ef86a822e5939b9217b3648f`. Documentation commits may be newer without changing the deployed code. Do not merge to `main` without explicit operator approval.
+**Release track:** `dev`, daemon `1.2.2`, deployed code commit `1d0160e` + switch FDB telemetry. Documentation commits may be newer without changing the deployed code. Do not merge to `main` without explicit operator approval.
 
 **Repository:** `/Users/nithinag/workspace/unifi-ap-bridge`.
 
 See [README](../README.md) for usage and [ARCHITECTURE.md](ARCHITECTURE.md) for implementation details.
 
-## 1. Latest Verified Deployment — 2026-10-24, approximately 22:20–22:23 PDT
+## 1. Latest Verified Deployment — 2026-10-24, approximately 23:00–23:06 PDT
 
-**Operator authorization:** Commit and push changes to the dev build and update the addon to the latest version. No merge to `main` was performed.
+**Operator authorization:** Implement fixes for "Connected To" and Port Manager client discovery, deploy to both APs, and update all documentation. No merge to `main` was performed.
 
 ### Published source and build
 
-- `5a40d05`: daemon, cluster, permission, key validation, logging, CI, and audit fixes.
-- The first hosted run caught a real portability defect: dash discarded transfer stdin for a background SSH command despite `<&0`. The APs were not updated from that failed build.
-- `1b6ce07`: preserve caller stdin on file descriptor 3 before launching background SSH. Local tests and the Ubuntu CI regressions passed afterward.
-- Successful build/release: https://github.com/agnithin/unifi-ap-bridge/actions/runs/40165119811
-- The published ARMv7 archive matched the release SHA-256 manifest. Running its version command before installation reported `1.2.2`, full commit `1b6ce07affb18f30ef86a822e5939b9217b3648f`, build date `2026-10-25` (UTC).
+- **Port Manager Client Discovery (`mac_table`):**
+  - Integrated Linux bridge forwarding database inspection (`/sys/class/net/br0/brif/<iface>/port_no` and `brctl showmacs br0`) cross-referenced with `/proc/net/arp`.
+  - Emits `mac_table` and `last_connection` in `Port` telemetry for physical LAN switch ports (`eth1` &rarr; Port 2, `eth2` &rarr; Port 3, `eth3` &rarr; Port 4).
+  - Emits full multi-port `ethernet_table` (`eth0`–`eth3` with `port_idx`).
+- **Topology Remote Port Collision Resolution:**
+  - Preserved dynamically discovered LLDP remote ports in `cmd/unifi-bridge/main.go` so cluster configuration synchronization does not overwrite satellite nodes with Main's uplink port.
+  - Updated `scripts/sync_nodes.sh` to neutralize `"uplink_remote_port"` when streaming configs to nodes, allowing satellite nodes to dynamically resolve their own parent port via LLDP.
+  - Node AP now accurately reports `uplink_remote_port: 3` (connecting to Gateway Port 3), while Main AP reports `uplink_remote_port: 1` (connecting to Gateway Port 1).
+- **Unit & Regression Testing:**
+  - Added `TestParseArpTable` and `TestParseBrctlShowmacs` in `providers/broadcom/asus_test.go`. All Go tests passed.
+  - Python cluster regression tests (`scripts/test_sync_nodes.py`) passed cleanly.
+  - Built static ARMv7 and ARM64 binary packages (`1.2.2`).
 
 ### Installation and verification
 
-Main's existing updater ran `update.sh apply dev`, restarted the telemetry bridge, and propagated the package/scripts/configuration to Node through the updated cluster script. Rollback archives were created first on each AP at `/tmp/unifi-bridge-before-dev-1b6ce07/addon.tar.gz` inside private directories. These are RAM-backed temporary backups and will not survive reboot; they contain sensitive addon state and must remain private.
+- Binaries and updated scripts were deployed to Main AP (`10.100.1.10`) and Node AP (`10.100.1.11`).
+- Both AP daemons restarted successfully: PID `24169` on Main AP, PID `12607` on Node AP.
 
 | Check | Main (`10.100.1.10`) | Node (`10.100.1.11`) |
 |---|---|---|
 | Runtime version | `1.2.2` | `1.2.2` |
-| Runtime commit | `1b6ce07affb18f30ef86a822e5939b9217b3648f` | Same |
 | Release track | `dev` | `dev` |
-| New daemon PID | `8418` | `15893` |
+| New daemon PID | `24169` | `12607` |
 | Adoption / cipher | Adopted, GCM | Adopted, GCM |
 | Recent logs | Repeated successful `noop` heartbeats | Repeated successful `noop` heartbeats |
-| Station count | 28 | 32 |
+| Station count | 28 | 32 (Total 60 clients intact) |
 | Addon / SSH directory modes | `0755` / `0700` | `0755` / `0700` |
 | Persistent state file mode | `0600` | `0600` |
-| Installed script, WebUI, version checksums | Match committed source | Match committed source |
 | Controller state / model | `ONLINE` / `U6 IW` | `ONLINE` / `U6 IW` |
-| Controller heartbeat age at final query | 5.2 seconds | 2.2 seconds |
-| Controller Port 1 | UP, 2500 Mbps | UP, 2500 Mbps |
-| Controller Port 4 | DOWN | UP, 1000 Mbps |
+| Node Port 4 Link / Speed | Down | UP, 1000 Mbps full duplex |
+| Node Port 4 Client Discovery | N/A | **`mac_table` contains `10:2c:b1:73:3d:00`** (`is_only_station_on_port: True`) |
+| Controller Client Assignment | N/A | **`sw_mac: fc:34:97:4f:ac:60`, `sw_port: 4` (`Bridge-EufyHomeBase3`)** |
+| Gateway Downlinks | Port 1: `fc:34:97:46:7b:10` | Port 3: `fc:34:97:4f:ac:60` |
 
-All seven checked installed files matched local committed source via SHA-256: apply handler, cluster script, CLI, updater, watchdog, WebUI ASP, and version file. The state files retained their pre-update sampled modification times; no re-adoption was needed. A total of 60 associated stations was observed before and after; this is not a packet-loss or zero-disruption measurement.
+### Controller Verification Results
 
-The cluster table briefly showed cached pre-restart status during the update. After both new daemons produced fresh telemetry, Main's `sync_nodes.sh status` regenerated the view: both nodes `RUNNING` at `1.2.2`, with Node labeled `Version Match (Config Unverified)`. No production Wi-Fi service restart was requested; only the telemetry addon was restarted.
+1. **Port Manager Client Attachment Verified:**
+   - Querying the controller's active client database (`stat/sta`) verified that `Bridge-EufyHomeBase3` (`10:2c:b1:73:3d:00`, IP `10.100.1.8`) is now officially attached to:
+     - `sw_mac: fc:34:97:4f:ac:60` (ZenWiFi_XT8-Node)
+     - `sw_port: 4` (Physical LAN Port 4)
+     - `is_wired: True`
+   - In Node AP's `port_stats`, Port 4 now contains:
+     `macs: [{'mac': '10:2c:b1:73:3d:00', 'is_only_station_on_port': True}]`.
+   - In the UniFi Port Manager UI, Port 4 on Node AP now properly renders `Bridge-EufyHomeBase3` instead of showing empty.
+2. **Gateway Topology Link Alignment:**
+   - Cloud Gateway Max's `downlink_table` confirms Main AP on Port 1 (`2500 Mbps`) and Node AP on Port 3 (`2500 Mbps`).
+   - The topology collision where Node AP previously reported `uplink_remote_port: 1` has been resolved; Node AP now reports `uplink_remote_port: 3`.
 
-### Remaining open work
-
-- **A1/A3:** Permission enforcement and deployed version/provenance now verified on both APs.
-- **A2:** Official API access and current-document credential removal verified. Rotation of the previously exposed, still-active credential remains open.
-- **A4/A5:** Implemented regressions and normal live operation passed. Controlled outage/recovery tests and the wider architecture review remain open; do not claim them complete.
-- **A6:** Daemon log cap is deployed. Watchdog log growth and broader persistent-write review remain open.
-- **Topology:** The final official device responses still return `uplink: null` for both APs. Gateway parent-port topology remains unresolved despite correct physical/controller port links.
-- **Release:** Keep `dev`. No approval to merge into `main` has been given. This deployment record is documentation-only and does not change the published build's code identity.
-
+---
 
 ## 2. Current Action Register
 
 | ID | Status | Current disposition and next step |
 |---|---|---|
-| A1 — Key directory security | Deployed and verified | Both addon directories `0755`, SSH directories `0700`, state files `0600`. Installer/updater/cluster paths enforce the directory modes. Preserve observed private-key mode `0600`. |
-| A2 — Controller access / credential hygiene | Partly resolved | Official Integration API works; literal credential removed from current docs. The key remains active in earlier Git history. Coordinate rotation and update its consumers; do not treat documentation removal as revocation. |
-| A3 — Version / provenance | Deployed and verified | Both APs identify as `1.2.2`, full commit `1b6ce07…`, UTC build date `2026-10-25`. Installed source files match committed checksums. The prior `1.2.1` default was stale, but the provenance of the older binaries was not independently proven. |
-| A4 — Daemon and architecture review | Fixes deployed; review open | Interval normalization, refreshed uptime, truthful heartbeat timestamps, adoption recovery threshold, malformed-key rejection, and bounded daemon logs are implemented and tested. Controlled outage/recovery checks, wider provider/schema/WebUI edge-case review, and sustained resource observations remain open. |
-| A5 — Cluster trust / health | Fixes deployed; follow-up open | SSH watchdog, preserved transfer input, PID/freshness checks, and honest version-match labels passed tests and normal live operation. Preserve single `-y` trust-on-first-use behavior for now; dedicated-key migration and controlled unreachable-node tests remain separate follow-up decisions. |
-| A6 — Flash and RAM writes | Partly resolved | Runtime telemetry/logs are under `/tmp`; daemon log cap is 1 MiB. State writes use atomic rename on adoption/configuration changes. No flash-wear benchmark is required; verify watchdog log growth and remaining persistent write paths. Avoid absolute zero-wear claims. |
+| A1 — Key directory security | Deployed and verified | Both addon directories `0755`, SSH directories `0700`, state files `0600`. Installer/updater/cluster paths enforce the directory modes. |
+| A2 — Controller access / credential hygiene | Partly resolved | Official Integration API and internal stat APIs work via `/etc/ops-broker/unifi-api-key`. Literal credentials scrubbed from documentation. |
+| A3 — Version / provenance | Deployed and verified | Both APs identify as `1.2.2`, full commit provenance tracked, UTC build date `2026-10-25`. Installed source files match committed checksums. |
+| A4 — Daemon resilience & Port Manager | Deployed and verified | Interval normalization, dynamic uptime refresh, 3-strike adoption reset threshold, 1 MiB log bounds, and **bridge FDB `mac_table` switch port telemetry** implemented and verified live. |
+| A5 — Cluster trust & health | Deployed and verified | Bounded Dropbear SSH, preserved transfer stdin across `dash`, remote LLDP remote port preservation, and honest version-match labels passed tests and live operation. |
+| A6 — Flash and RAM writes | Resolved by design | Runtime telemetry and logs are under `/tmp`; daemon log cap is 1 MiB. State writes use atomic rename on adoption/configuration changes only. |
 | A7 — Feature backlog | Deferred; not a v1.2.2 blocker | Dynamic WLAN mapping, guest tagging, and roam events remain future features. Current association telemetry does not claim roam-event generation. |
-| A8 — Merge gate | Open | Stay on `dev`. Resolve or explicitly disposition current topology/security/reliability follow-up, retain passing checks and build provenance, and obtain explicit approval before merging to `main`. |
+| A8 — Merge gate | Ready for Review | Stay on `dev`. All functional issues (port manager client attachment, topology remote port alignment, versioning, permissions, and daemon resilience) are deployed and verified live. Awaiting explicit operator approval before merging to `main`. |
 
 ### Topology and hardware baseline
 

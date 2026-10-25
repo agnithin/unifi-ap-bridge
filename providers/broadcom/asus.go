@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -598,6 +599,112 @@ func readSysfsString(path string) string {
 	return strings.TrimSpace(string(data))
 }
 
+func parseArpTable(data string) map[string]string {
+	arpMap := make(map[string]string)
+	lines := strings.Split(data, "\n")
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) >= 4 {
+			ip := fields[0]
+			mac := strings.ToLower(fields[3])
+			if len(mac) == 17 && !strings.HasPrefix(mac, "00:00:00") {
+				arpMap[mac] = ip
+			}
+		}
+	}
+	return arpMap
+}
+
+func parseBrctlShowmacs(data string, bridgePortMap map[int]string, arpMap map[string]string) (map[int][]telemetry.PortMacEntry, map[int]*telemetry.PortLastConnection) {
+	macsByPort := make(map[int][]telemetry.PortMacEntry)
+	lastConnByPort := make(map[int]*telemetry.PortLastConnection)
+
+	// Map ifname to physical port index
+	// eth0 = Port 1 (WAN/Uplink)
+	// eth1 = Port 2 (LAN 1)
+	// eth2 = Port 3 (LAN 2)
+	// eth3 = Port 4 (LAN 3)
+	ifaceToPortIdx := map[string]int{
+		"eth1": 2,
+		"eth2": 3,
+		"eth3": 4,
+	}
+
+	lines := strings.Split(data, "\n")
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+		pNumStr := fields[0]
+		mac := strings.ToLower(fields[1])
+		isLocal := strings.ToLower(fields[2])
+		ageStr := fields[3]
+
+		if isLocal == "yes" || len(mac) != 17 {
+			continue
+		}
+
+		pNum, err := strconv.Atoi(pNumStr)
+		if err != nil {
+			continue
+		}
+
+		ifname, ok := bridgePortMap[pNum]
+		if !ok {
+			continue
+		}
+
+		portIdx, ok := ifaceToPortIdx[ifname]
+		if !ok {
+			continue
+		}
+
+		ageSec := 0
+		if ageF, err := strconv.ParseFloat(ageStr, 64); err == nil {
+			ageSec = int(ageF)
+		}
+
+		macsByPort[portIdx] = append(macsByPort[portIdx], telemetry.PortMacEntry{
+			MAC:  mac,
+			Age:  ageSec,
+			Vlan: 1,
+		})
+
+		ip := arpMap[mac]
+		lastConnByPort[portIdx] = &telemetry.PortLastConnection{
+			Connected:   true,
+			MAC:         mac,
+			IP:          ip,
+			ConnectedAt: time.Now().Unix() - int64(ageSec),
+			LastSeen:    time.Now().Unix(),
+		}
+	}
+	return macsByPort, lastConnByPort
+}
+
+func getBridgePortMap() map[int]string {
+	m := make(map[int]string)
+	entries, err := os.ReadDir("/sys/class/net/br0/brif")
+	if err != nil {
+		return m
+	}
+	for _, entry := range entries {
+		ifname := entry.Name()
+		portNoPath := filepath.Join("/sys/class/net/br0/brif", ifname, "port_no")
+		data, err := os.ReadFile(portNoPath)
+		if err != nil {
+			continue
+		}
+		str := strings.TrimSpace(string(data))
+		str = strings.TrimPrefix(str, "0x")
+		if val, err := strconv.ParseInt(str, 16, 64); err == nil {
+			m[int(val)] = ifname
+		}
+	}
+	return m
+}
+
 func (p *AsusProvider) GetPortTable() ([]telemetry.Port, []telemetry.EthernetPort, *telemetry.Uplink, error) {
 	netDevRaw, _ := os.ReadFile("/proc/net/dev")
 	counters := parseNetDev(string(netDevRaw))
@@ -605,6 +712,26 @@ func (p *AsusProvider) GetPortTable() ([]telemetry.Port, []telemetry.EthernetPor
 	hostMAC := p.nvramGet("lan_hwaddr")
 	if norm, err := inform.NormalizeMAC(hostMAC); err == nil {
 		hostMAC = norm
+	}
+
+	brPortMap := getBridgePortMap()
+	arpData, _ := os.ReadFile("/proc/net/arp")
+	arpMap := parseArpTable(string(arpData))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	showmacsOut, _ := p.runner(ctx, "brctl", "showmacs", "br0")
+	macsByPort, lastConnByPort := parseBrctlShowmacs(showmacsOut, brPortMap, arpMap)
+
+	chassisMAC, _, remotePort, err := p.getLLDPNeighbor()
+	gwMAC := chassisMAC
+	if err != nil || gwMAC == "" {
+		gwIP := p.nvramGet("lan_gateway")
+		if gwIP == "" {
+			gwIP = "10.100.1.1"
+		}
+		gwMAC = parseArpGatewayMAC(gwIP)
+		remotePort = 1
 	}
 
 	// Physical port mapping for Asuswrt (XT8 / BCM4908 / BCM53134):
@@ -657,53 +784,58 @@ func (p *AsusProvider) GetPortTable() ([]telemetry.Port, []telemetry.EthernetPor
 
 		c := counters[spec.dev]
 
+		portMacs := macsByPort[spec.idx]
+		lastConn := lastConnByPort[spec.idx]
+		if spec.isUplink && gwMAC != "" && lastConn == nil {
+			lastConn = &telemetry.PortLastConnection{
+				Connected: up,
+				MAC:       gwMAC,
+				IP:        p.nvramGet("lan_gateway"),
+				LastSeen:  time.Now().Unix(),
+			}
+		}
+
 		ports = append(ports, telemetry.Port{
-			PortIdx:     spec.idx,
-			Name:        spec.name,
-			Media:       media,
-			Up:          up,
-			Speed:       speed,
-			FullDuplex:  fullDuplex,
-			Enable:      true,
-			Enabled:     true,
-			IsUplink:    spec.isUplink,
-			OpMode:      "switch",
-			Forward:     "all",
-			Autoneg:     true,
-			PortPoe:     false,
-			StpState:    stpState,
-			StpPathcost: stpCost,
-			RxBytes:     c.rxBytes,
-			TxBytes:     c.txBytes,
-			RxPackets:   c.rxPackets,
-			TxPackets:   c.txPackets,
-			RxErrors:    c.rxErrors,
-			TxErrors:    c.txErrors,
-			RxDropped:   c.rxDropped,
-			TxDropped:   c.txDropped,
+			PortIdx:        spec.idx,
+			Name:           spec.name,
+			Media:          media,
+			Up:             up,
+			Speed:          speed,
+			FullDuplex:     fullDuplex,
+			Enable:         true,
+			Enabled:        true,
+			IsUplink:       spec.isUplink,
+			OpMode:         "switch",
+			Forward:        "all",
+			Autoneg:        true,
+			PortPoe:        false,
+			StpState:       stpState,
+			StpPathcost:    stpCost,
+			RxBytes:        c.rxBytes,
+			TxBytes:        c.txBytes,
+			RxPackets:      c.rxPackets,
+			TxPackets:      c.txPackets,
+			RxErrors:       c.rxErrors,
+			TxErrors:       c.txErrors,
+			RxDropped:      c.rxDropped,
+			TxDropped:      c.txDropped,
+			MacTable:       portMacs,
+			LastConnection: lastConn,
 		})
 	}
 
 	eth0Port := ports[0]
-	ethTable := []telemetry.EthernetPort{
-		{
-			Name:       "eth0",
+	ethTable := make([]telemetry.EthernetPort, 0, len(ports))
+	for _, pt := range ports {
+		devName := fmt.Sprintf("eth%d", pt.PortIdx-1)
+		ethTable = append(ethTable, telemetry.EthernetPort{
+			Name:       devName,
 			MAC:        hostMAC,
-			Speed:      eth0Port.Speed,
-			FullDuplex: eth0Port.FullDuplex,
-			NumPort:    1,
-		},
-	}
-
-	chassisMAC, _, remotePort, err := p.getLLDPNeighbor()
-	gwMAC := chassisMAC
-	if err != nil || gwMAC == "" {
-		gwIP := p.nvramGet("lan_gateway")
-		if gwIP == "" {
-			gwIP = "10.100.1.1"
-		}
-		gwMAC = parseArpGatewayMAC(gwIP)
-		remotePort = 1
+			PortIdx:    pt.PortIdx,
+			Speed:      pt.Speed,
+			FullDuplex: pt.FullDuplex,
+			NumPort:    len(ports),
+		})
 	}
 
 	uplink := &telemetry.Uplink{

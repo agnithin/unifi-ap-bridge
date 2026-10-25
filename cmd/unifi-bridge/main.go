@@ -292,10 +292,11 @@ func main() {
 		}
 
 		if uplink != nil {
-			if cfg.UplinkMAC != "" {
+			if cfg.UplinkMAC != "" && uplink.UplinkMAC == "" {
 				uplink.UplinkMAC = cfg.UplinkMAC
 			}
-			if cfg.UplinkRemotePort > 0 {
+			// Preserve dynamically detected LLDP remote port; only fallback to config if LLDP did not discover it
+			if uplink.UplinkRemotePort <= 0 && cfg.UplinkRemotePort > 0 {
 				uplink.UplinkRemotePort = cfg.UplinkRemotePort
 			}
 		}

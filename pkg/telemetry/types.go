@@ -76,35 +76,54 @@ type RadioStat struct {
 	CuSelfTx int    `json:"cu_self_tx"` // AP transmit airtime % (0-100)
 }
 
+type PortMacEntry struct {
+	MAC    string `json:"mac"`
+	Age    int    `json:"age,omitempty"`
+	Uptime int    `json:"uptime,omitempty"`
+	Vlan   int    `json:"vlan,omitempty"`
+	Static bool   `json:"static,omitempty"`
+}
+
+type PortLastConnection struct {
+	Connected   bool   `json:"connected"`
+	MAC         string `json:"mac,omitempty"`
+	IP          string `json:"ip,omitempty"`
+	ConnectedAt int64  `json:"connected_at,omitempty"`
+	LastSeen    int64  `json:"last_seen,omitempty"`
+}
+
 type Port struct {
-	PortIdx      int    `json:"port_idx"`
-	Name         string `json:"name"`
-	Media        string `json:"media"`
-	Up           bool   `json:"up"`
-	Speed        int    `json:"speed"` // 10, 100, 1000, 2500
-	FullDuplex   bool   `json:"full_duplex"`
-	Enable       bool   `json:"enable"`
-	Enabled      bool   `json:"enabled"`
-	IsUplink     bool   `json:"is_uplink"`
-	OpMode       string `json:"op_mode,omitempty"`
-	Forward      string `json:"forward,omitempty"`
-	Autoneg      bool   `json:"autoneg,omitempty"`
-	PortPoe      bool   `json:"port_poe,omitempty"`
-	StpState     string `json:"stp_state,omitempty"`
-	StpPathcost  int    `json:"stp_pathcost,omitempty"`
-	RxBytes      int64  `json:"rx_bytes"`
-	TxBytes      int64  `json:"tx_bytes"`
-	RxPackets    int64  `json:"rx_packets"`
-	TxPackets    int64  `json:"tx_packets"`
-	RxErrors     int64  `json:"rx_errors"`
-	TxErrors     int64  `json:"tx_errors"`
-	RxDropped    int64  `json:"rx_dropped"`
-	TxDropped    int64  `json:"tx_dropped"`
+	PortIdx        int                 `json:"port_idx"`
+	Name           string              `json:"name"`
+	Media          string              `json:"media"`
+	Up             bool                `json:"up"`
+	Speed          int                 `json:"speed"` // 10, 100, 1000, 2500
+	FullDuplex     bool                `json:"full_duplex"`
+	Enable         bool                `json:"enable"`
+	Enabled        bool                `json:"enabled"`
+	IsUplink       bool                `json:"is_uplink"`
+	OpMode         string              `json:"op_mode,omitempty"`
+	Forward        string              `json:"forward,omitempty"`
+	Autoneg        bool                `json:"autoneg,omitempty"`
+	PortPoe        bool                `json:"port_poe,omitempty"`
+	StpState       string              `json:"stp_state,omitempty"`
+	StpPathcost    int                 `json:"stp_pathcost,omitempty"`
+	RxBytes        int64               `json:"rx_bytes"`
+	TxBytes        int64               `json:"tx_bytes"`
+	RxPackets      int64               `json:"rx_packets"`
+	TxPackets      int64               `json:"tx_packets"`
+	RxErrors       int64               `json:"rx_errors"`
+	TxErrors       int64               `json:"tx_errors"`
+	RxDropped      int64               `json:"rx_dropped"`
+	TxDropped      int64               `json:"tx_dropped"`
+	MacTable       []PortMacEntry      `json:"mac_table,omitempty"`
+	LastConnection *PortLastConnection `json:"last_connection,omitempty"`
 }
 
 type EthernetPort struct {
 	Name       string `json:"name"`
 	MAC        string `json:"mac"`
+	PortIdx    int    `json:"port_idx,omitempty"`
 	Speed      int    `json:"speed"`
 	FullDuplex bool   `json:"full_duplex"`
 	NumPort    int    `json:"num_port"`

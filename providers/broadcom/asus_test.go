@@ -142,3 +142,66 @@ func TestParseNetDev(t *testing.T) {
 		t.Errorf("eth3 counters mismatch: %+v", eth3)
 	}
 }
+
+func TestParseArpTable(t *testing.T) {
+	raw := `IP address       HW type     Flags       HW address            Mask     Device
+10.100.1.8       0x1         0x2         10:2c:b1:73:3d:00     *        br0
+10.100.1.99      0x1         0x2         90:3c:1d:58:12:30     *        br0
+10.100.1.200     0x1         0x0         00:00:00:00:00:00     *        br0`
+
+	arp := parseArpTable(raw)
+	if len(arp) != 2 {
+		t.Fatalf("expected 2 valid arp entries, got %d", len(arp))
+	}
+	if arp["10:2c:b1:73:3d:00"] != "10.100.1.8" {
+		t.Errorf("arp ip mismatch: %s", arp["10:2c:b1:73:3d:00"])
+	}
+	if arp["90:3c:1d:58:12:30"] != "10.100.1.99" {
+		t.Errorf("arp ip mismatch: %s", arp["90:3c:1d:58:12:30"])
+	}
+}
+
+func TestParseBrctlShowmacs(t *testing.T) {
+	raw := `port no	mac addr		is local?	ageing timer
+  3	10:2c:b1:73:3d:00	no		   5.61
+ 10	00:11:32:cf:04:f0	no		   0.45
+  1	fc:34:97:4f:ac:60	yes		   0.00
+  2	a0:b1:c2:d3:e4:f5	no		  12.30`
+
+	brPortMap := map[int]string{
+		1:  "eth1", // Port 2 (LAN 1)
+		2:  "eth2", // Port 3 (LAN 2)
+		3:  "eth3", // Port 4 (LAN 3)
+		10: "eth0", // Port 1 (WAN / Uplink)
+	}
+
+	arpMap := map[string]string{
+		"10:2c:b1:73:3d:00": "10.100.1.8",
+		"a0:b1:c2:d3:e4:f5": "10.100.1.50",
+	}
+
+	macsByPort, lastConnByPort := parseBrctlShowmacs(raw, brPortMap, arpMap)
+
+	// Port 4 (eth3) should have 10:2c:b1:73:3d:00
+	p4Macs := macsByPort[4]
+	if len(p4Macs) != 1 {
+		t.Fatalf("expected 1 mac on port 4, got %d", len(p4Macs))
+	}
+	if p4Macs[0].MAC != "10:2c:b1:73:3d:00" || p4Macs[0].Age != 5 {
+		t.Errorf("unexpected port 4 mac: %+v", p4Macs[0])
+	}
+	if lastConnByPort[4] == nil || lastConnByPort[4].IP != "10.100.1.8" || lastConnByPort[4].MAC != "10:2c:b1:73:3d:00" {
+		t.Errorf("unexpected port 4 last connection: %+v", lastConnByPort[4])
+	}
+
+	// Port 3 (eth2) should have a0:b1:c2:d3:e4:f5
+	p3Macs := macsByPort[3]
+	if len(p3Macs) != 1 || p3Macs[0].MAC != "a0:b1:c2:d3:e4:f5" {
+		t.Errorf("unexpected port 3 mac: %+v", p3Macs)
+	}
+
+	// Port 1 (eth0) is uplink, should be ignored
+	if len(macsByPort[1]) != 0 {
+		t.Errorf("expected 0 macs on uplink port 1, got %d", len(macsByPort[1]))
+	}
+}

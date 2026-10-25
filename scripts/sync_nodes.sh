@@ -187,7 +187,7 @@ for node_ip in $NODE_IPS; do
             echo "[*] Propagating update to node ${node_ip}..."
             # Stream updated scripts and binary package (excluding node-unique state.json)
             tar -czf - -C "$INSTALL_DIR" apply_config.sh sync_nodes.sh unifi-bridge.sh update.sh watchdog.sh version.txt webui config/config.json unifi-bridge.tar.gz 2>/dev/null | \
-                CLUSTER_SSH_TIMEOUT=120 cluster_ssh "$node_ip" "tar -xzf - -C $INSTALL_DIR 2>/dev/null; [ -f $INSTALL_DIR/unifi-bridge.sh ] && ln -sf $INSTALL_DIR/unifi-bridge.sh /jffs/scripts/unifi-bridge; chmod 755 $INSTALL_DIR/*.sh; mkdir -p $INSTALL_DIR/.ssh; chmod 755 $INSTALL_DIR; chmod 700 $INSTALL_DIR/.ssh; $INSTALL_DIR/start.sh" >/dev/null 2>&1
+                CLUSTER_SSH_TIMEOUT=120 cluster_ssh "$node_ip" "tar -xzf - -C $INSTALL_DIR 2>/dev/null; [ -f $INSTALL_DIR/config/config.json ] && sed -i 's/\"uplink_remote_port\": [0-9]*/\"uplink_remote_port\": 0/' $INSTALL_DIR/config/config.json; [ -f $INSTALL_DIR/unifi-bridge.sh ] && ln -sf $INSTALL_DIR/unifi-bridge.sh /jffs/scripts/unifi-bridge; chmod 755 $INSTALL_DIR/*.sh; mkdir -p $INSTALL_DIR/.ssh; chmod 755 $INSTALL_DIR; chmod 700 $INSTALL_DIR/.ssh; $INSTALL_DIR/start.sh" >/dev/null 2>&1
             if [ $? -eq 0 ]; then
                 sync_status="Update Applied (Unverified)"
             else
@@ -195,8 +195,9 @@ for node_ip in $NODE_IPS; do
             fi
         # If action is 'sync', push local config to remote node
         elif [ "$ACTION" = "sync" ] && [ -f "$CONFIG_FILE" ]; then
-            # Remote config with node-specific state path
-            CLUSTER_SSH_TIMEOUT=120 cluster_ssh "$node_ip" "mkdir -p $INSTALL_DIR/config $INSTALL_DIR/.ssh; chmod 755 $INSTALL_DIR; chmod 700 $INSTALL_DIR/.ssh; umask 077; cat > $INSTALL_DIR/config/config.json && chmod 600 $INSTALL_DIR/config/config.json && $INSTALL_DIR/start.sh" < "$CONFIG_FILE" >/dev/null 2>&1
+            # Remote config with node-specific state path and dynamic LLDP remote port
+            sed -e 's/"uplink_remote_port": [0-9]*/"uplink_remote_port": 0/' "$CONFIG_FILE" | \
+                CLUSTER_SSH_TIMEOUT=120 cluster_ssh "$node_ip" "mkdir -p $INSTALL_DIR/config $INSTALL_DIR/.ssh; chmod 755 $INSTALL_DIR; chmod 700 $INSTALL_DIR/.ssh; umask 077; cat > $INSTALL_DIR/config/config.json && chmod 600 $INSTALL_DIR/config/config.json && $INSTALL_DIR/start.sh" >/dev/null 2>&1
             if [ $? -eq 0 ]; then
                 sync_status="Config Synced"
             else

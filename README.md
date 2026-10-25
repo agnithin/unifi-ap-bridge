@@ -29,10 +29,13 @@ See [audit state and action items](docs/AUDIT_STATE.md) and the [architecture re
   * Telemetry reports all physical interfaces from `/sys/class/net/ethX` and `/proc/net/dev`:
     * **Port 1 (Uplink)**: 2.5 Gbps WAN/LAN port with link speed, full duplex, and live byte/packet counters.
     * **Ports 2–4 (LAN)**: 1 Gbps Gigabit LAN ports with carrier state, speed, duplex, and real-time wire traffic metrics.
-  * Reports physical port state and traffic. Identifying a downstream client and its topology attachment requires separate controller verification.
+  * **Switch Bridge FDB Client Discovery (v1.2.2+):**
+    * Inspects the Linux bridge forwarding database (`brctl showmacs br0` and `/sys/class/net/br0/brif/<iface>/port_no`) and matches learned MACs against `/proc/net/arp`.
+    * Emits `mac_table` and `last_connection` per physical port, allowing UniFi Port Manager to associate downstream wired clients (such as smart home bridges or Ethernet PCs) directly to their physical AP LAN port (`sw_mac` and `sw_port` in controller).
 * **LLDP Neighbor Discovery & Topology Telemetry (v1.2.2+):**
   * Automatically queries LLDP neighbors via `lldpcli -f json show neighbors` to discover the upstream gateway device MAC (Cloud Gateway Max `6c:63:f8:30:9a:05`), port MACs, and physical parent ports (Port 1 for Main AP, Port 3 for Node AP).
-  * Populates `uplink_mac`, `last_uplink`, and `lldp_table` from available neighbor data. Controller parent-port rendering remains under investigation; emitting these fields does not prove the topology is resolved.
+  * Preserves dynamically discovered remote ports so cluster configuration synchronization does not overwrite satellite nodes with Main's uplink port, preventing port collisions on the upstream gateway switch.
+  * Populates `uplink_mac`, `last_uplink`, and `lldp_table` from available neighbor data, aligning with gateway `downlink_table` entries.
 * **Router CPU & Memory Utilization Telemetry (v1.2.0+):**
   * Reports real-time CPU load percentage and active memory utilization (`system-stats` and legacy `sys_stats`) derived from `/proc/loadavg` and `/proc/meminfo`.
   * Renders live CPU and RAM status cards in the Asuswrt WebUI and CLI.
@@ -220,8 +223,8 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="$BUILD_FLAGS"
 * [x] **UniFi Inform Engine:** Wire protocol implementation supporting AES-128-CBC bootstrap and AES-128-GCM adopted encryption.
 * [x] **Broadcom Wireless Telemetry:** Automatic discovery of physical and virtual VAPs across 2.4 GHz and 5 GHz bands.
 * [x] **Wi-Fi 6 (`802.11ax`) & Wi-Fi 4 (`802.11n`) Classification:** Flawless generation mapping in UniFi Controller.
-* [x] **Physical Switch Port Telemetry (`U6-IW` Emulation) (v1.2.0):** 2.5G WAN uplink and 1G LAN ports reporting live carrier state, speed, full duplex, STP state, and traffic counters directly into the UniFi Port Manager.
-* [x] **LLDP Telemetry (v1.2.2):** Discover neighbors and emit uplink fields. End-to-end gateway parent-port topology verification remains open.
+* [x] **Physical Switch Port Telemetry & Bridge FDB Client Discovery (`U6-IW` Emulation) (v1.2.2):** 2.5G WAN uplink and 1G LAN ports reporting live carrier state, speed, full duplex, STP state, traffic counters, and learned client MAC tables (`mac_table`) directly into the UniFi Port Manager.
+* [x] **LLDP Topology Telemetry & Conflict Prevention (v1.2.2):** Discovers upstream neighbors via `lldpcli`, preserving distinct remote ports (Port 1 for Main, Port 3 for Node) and aligning with gateway `downlink_table` entries.
 * [x] **Router CPU/Memory Stats & WiFi Experience Scoring (v1.2.0):** Live `/proc/loadavg` and `/proc/meminfo` metrics; dynamic 0–100% satisfaction scores based on RSSI, SNR, and packet retry penalties.
 * [x] **RF Channel Utilization & Airtime Telemetry (v1.1.0):** Broadcom `chanim_stats` streaming `cu_total`, `cu_self_rx`, and `cu_self_tx` into UniFi RF graphs and router WebUI.
 * [x] **Cumulative Client Traffic Usage Counters (v1.1.0):** Parsing `tx/rx` unicast bytes, packets, retries, rates, and association uptime from `wl sta_info`.

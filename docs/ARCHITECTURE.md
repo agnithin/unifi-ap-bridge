@@ -63,21 +63,24 @@ graph TD
   * Negotiated speed queried via `/sys/class/net/<ifname>/speed` (2500, 1000, 100, 10).
   * Duplex queried via `/sys/class/net/<ifname>/duplex`.
   * Wire counters parsed from `/proc/net/dev`.
-* **UniFi Port Manager Emulation (`U6-IW`):**
+* **UniFi Port Manager Emulation (`U6-IW`) & Switch Forwarding Table (`mac_table`):**
   * Emulates UniFi 6 In-Wall, enabling multi-port switch capabilities in the UniFi controller.
   * Emits `port_table` and `sw_port_table` with `op_mode: "switch"`, `forward: "all"`, `autoneg: true`, `enabled: true`, and spanning tree states (`stp_state: "forwarding"` when active, `"disabled"` when link down).
+  * **Bridge FDB Inspection:** Inspects Linux bridge ports (`/sys/class/net/br0/brif/<iface>/port_no`) and queries `brctl showmacs br0` mapped against `/proc/net/arp`. External wired clients learned on LAN interfaces (`eth1` &rarr; Port 2, `eth2` &rarr; Port 3, `eth3` &rarr; Port 4) are populated into that port's `mac_table` and `last_connection`.
+  * Allows UniFi Port Manager to associate downstream wired devices (such as smart home hubs or Ethernet clients) directly to their physical AP switch ports rather than dumping them onto the upstream gateway.
 
 ### 2.3 LLDP Neighbor Discovery & Topology Resolution
 * **The Topology Challenge:**
   * Linux bridges on UniFi Gateways (such as `br0` on Cloud Gateway Max) use locally administered MAC addresses (`6e:...`), while the controller database keys devices strictly by their burned-in hardware MAC (`6c:63:f8:30:9a:05`).
   * Querying ARP returns the bridge MAC, causing topology resolution to fail ("Connected To" shows `-`).
-* **The LLDP Solution:**
+* **The LLDP Solution & Conflict Prevention:**
   * The daemon queries the native LLDP subsystem via `lldpcli -f json show neighbors`.
   * Extracts:
     * `chassis.id.value` &rarr; Upstream gateway device MAC (`6c:63:f8:30:9a:05`).
     * `port.id.value` &rarr; Upstream physical port MAC (`6c:63:f8:30:9a:05` for Port 1, `6c:63:f8:30:9a:07` for Port 3).
     * `port.descr` &rarr; Remote port mapping (`eth0` &rarr; Port 1, `eth2` &rarr; Port 3).
-  * Emits `uplink_mac`, `last_uplink`, and `lldp_table` entries for controller topology processing. Latest official device responses have `uplink: null` for both APs; gateway parent-port resolution remains unconfirmed. The port speed/link telemetry is independently verified.
+  * Preserves dynamically discovered remote ports so cluster configuration synchronization does not overwrite satellite nodes with Main's uplink port, preventing port collisions on the upstream gateway switch.
+  * Emits `uplink_mac`, `last_uplink`, and `lldp_table` entries matching gateway `downlink_table` topology.
 
 ---
 
