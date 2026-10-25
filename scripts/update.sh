@@ -205,14 +205,17 @@ begin_transaction() {
     [ ! -e "$TXN_DIR" ] || { echo "Unfinished addon transaction exists; inspect $TXN_DIR" >&2; return 1; }
     (umask 077; mkdir -p "$TXN_DIR/snapshot") || return 1
     : > "$TXN_DIR/manifest" || return 1
+    : > "$TXN_DIR/manifest.full" || return 1
     printf '%s\n' "$managed_assets" | while IFS= read -r rel; do
         [ -n "$rel" ] || continue
         if [ -f "$INSTALL_DIR/$rel" ]; then
             mkdir -p "$TXN_DIR/snapshot/$(dirname "$rel")" || exit 1
             cp -p "$INSTALL_DIR/$rel" "$TXN_DIR/snapshot/$rel" || exit 1
-            printf 'present %s\n' "$rel" >> "$TXN_DIR/manifest" || exit 1
+            printf 'present %s\n' "$rel" >> "$TXN_DIR/manifest.full" || exit 1
+            [ "$rel" = install.sh ] || printf 'present %s\n' "$rel" >> "$TXN_DIR/manifest" || exit 1
         else
-            printf 'absent %s\n' "$rel" >> "$TXN_DIR/manifest" || exit 1
+            printf 'absent %s\n' "$rel" >> "$TXN_DIR/manifest.full" || exit 1
+            [ "$rel" = install.sh ] || printf 'absent %s\n' "$rel" >> "$TXN_DIR/manifest" || exit 1
         fi
     done || { rm -rf "$TXN_DIR"; return 1; }
     prior_member="unifi-bridge-${ARCH_SUFFIX}"
@@ -269,9 +272,9 @@ watchdog.sh"
     for rel in start.sh apply_config.sh sync_nodes.sh unifi-bridge.sh update.sh watchdog.sh; do
         [ "$(openssl dgst -sha256 "$TXN_DIR/snapshot/$rel" 2>/dev/null | awk '{print $NF}')" = "$(openssl dgst -sha256 "$prior_dir/$rel" 2>/dev/null | awk '{print $NF}')" ] || { echo "Prior installed script set does not match its bundle" >&2; rm -rf "$TXN_DIR"; return 1; }
     done
-    if [ -f "$TXN_DIR/snapshot/install.sh" ]; then
-        [ "$(openssl dgst -sha256 "$TXN_DIR/snapshot/install.sh" 2>/dev/null | awk '{print $NF}')" = "$(openssl dgst -sha256 "$prior_dir/install.sh" 2>/dev/null | awk '{print $NF}')" ] || { echo "Prior installed installer does not match its bundle" >&2; rm -rf "$TXN_DIR"; return 1; }
-    fi
+    # Some deployed updaters did not manage install.sh. Preserve that legacy
+    # file as an opaque rollback asset instead of pretending it matches the
+    # old archive; the target bundle replaces it only after recovery promotion.
     [ "$(openssl dgst -sha256 "$TXN_DIR/snapshot/webui/unifi-bridge.asp" 2>/dev/null | awk '{print $NF}')" = "$(openssl dgst -sha256 "$prior_dir/unifi-bridge.asp" 2>/dev/null | awk '{print $NF}')" ] || { echo "Prior installed WebUI does not match its bundle" >&2; rm -rf "$TXN_DIR"; return 1; }
     if "$prior_binary" -config "$CONFIG_FILE" -is-enabled; then
         prior_status=$(cat "$STATUS_JS" 2>/dev/null)
@@ -353,22 +356,40 @@ same_file_mode() {
     [ "$expected_mode" = "$actual_mode" ]
 }
 
+file_mode_is() {
+    actual_mode=$(file_mode "$1") || return 1
+    case "$2" in
+        755) expected_mode="-rwxr-xr-x" ;;
+        644) expected_mode="-rw-r--r--" ;;
+        *) return 1 ;;
+    esac
+    [ "$actual_mode" = "$expected_mode" ]
+}
+
 verify_installed_generation() {
     staged_dir="$1"; staged_archive="$2"; staged_checksum="$3"
     for rel in install.sh start.sh apply_config.sh sync_nodes.sh unifi-bridge.sh update.sh watchdog.sh version.txt; do
         [ -f "$staged_dir/$rel" ] && [ -f "$INSTALL_DIR/$rel" ] &&
             same_file_contents "$staged_dir/$rel" "$INSTALL_DIR/$rel" || return 1
+        if [ "$rel" = version.txt ]; then
+            file_mode_is "$INSTALL_DIR/$rel" 644 || return 1
+        else
+            file_mode_is "$INSTALL_DIR/$rel" 755 || return 1
+        fi
     done
     [ -f "$staged_dir/unifi-bridge.asp" ] && [ -f "$INSTALL_DIR/webui/unifi-bridge.asp" ] &&
-        same_file_contents "$staged_dir/unifi-bridge.asp" "$INSTALL_DIR/webui/unifi-bridge.asp" || return 1
+        same_file_contents "$staged_dir/unifi-bridge.asp" "$INSTALL_DIR/webui/unifi-bridge.asp" &&
+        file_mode_is "$INSTALL_DIR/webui/unifi-bridge.asp" 644 || return 1
     [ -f "$staged_archive" ] && [ -f "$INSTALL_DIR/unifi-bridge.tar.gz" ] &&
-        same_file_contents "$staged_archive" "$INSTALL_DIR/unifi-bridge.tar.gz" || return 1
+        same_file_contents "$staged_archive" "$INSTALL_DIR/unifi-bridge.tar.gz" &&
+        file_mode_is "$INSTALL_DIR/unifi-bridge.tar.gz" 644 || return 1
     [ -f "$staged_checksum" ] && [ -f "$INSTALL_DIR/unifi-bridge.tar.gz.sha256" ] &&
-        same_file_contents "$staged_checksum" "$INSTALL_DIR/unifi-bridge.tar.gz.sha256"
+        same_file_contents "$staged_checksum" "$INSTALL_DIR/unifi-bridge.tar.gz.sha256" &&
+        file_mode_is "$INSTALL_DIR/unifi-bridge.tar.gz.sha256" 644
 }
 
 verify_restored_generation() {
-    [ -f "$TXN_DIR/manifest" ] || return 1
+    [ -f "$TXN_DIR/manifest.full" ] || return 1
     skip_recovery_entry="${1:-0}"
     restore_mismatch=""
     while IFS=' ' read -r state rel; do
@@ -397,7 +418,21 @@ verify_restored_generation() {
             restore_mismatch="$rel"
             return 1
         fi
-    done < "$TXN_DIR/manifest"
+    done < "$TXN_DIR/manifest.full"
+}
+
+validate_full_manifest() {
+    [ -f "$TXN_DIR/manifest.full" ] || return 1
+    expected_manifest_file="$tmp_dir/manifest.full.expected"
+    printf '%s\n' "$managed_assets" | while IFS= read -r rel; do
+        [ -n "$rel" ] || continue
+        if [ -f "$TXN_DIR/snapshot/$rel" ]; then
+            printf 'present %s\n' "$rel"
+        else
+            printf 'absent %s\n' "$rel"
+        fi
+    done > "$expected_manifest_file" || return 1
+    same_file_contents "$expected_manifest_file" "$TXN_DIR/manifest.full"
 }
 
 validate_staged_generation() {
@@ -510,6 +545,35 @@ rollback_and_verify() {
     fi
     write_update_status "ERROR" "$branch" "$local_ver" "${remote_ver:-}" "$reason; previous addon generation restored and verified"
     return 1
+}
+
+verify_prior_runtime() {
+    # No candidate asset other than start.sh has changed yet. Confirm the
+    # existing prior daemon without invoking the unverified candidate entry.
+    if "$prior_binary" -config "$CONFIG_FILE" -is-enabled; then
+        status_snapshot=$(cat "$STATUS_JS" 2>/dev/null)
+        live_pids=$(pidof unifi-bridge 2>/dev/null | tr -s ' ' | sed 's/^ //;s/ $//')
+        live_pid=$(printf '%s' "$status_snapshot" | sed -n 's/.*"pid":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)
+        updated=$(printf '%s' "$status_snapshot" | sed -n 's/.*"status_updated_at":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)
+        now=$(date +%s)
+        inform=$(printf '%s' "$status_snapshot" | sed -n 's/.*"last_successful_inform":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+        process_exe=$(readlink "/proc/$live_pid/exe" 2>/dev/null)
+        [ -n "$live_pids" ] && ! printf '%s' "$live_pids" | grep -q ' ' && [ "$live_pids" = "$live_pid" ] &&
+            [ "$process_exe" = "/tmp/unifi-bridge/unifi-bridge" ] && [ -n "$inform" ] &&
+            [ "$updated" -le "$now" ] 2>/dev/null && [ $((now - updated)) -le 180 ] 2>/dev/null &&
+            printf '%s' "$status_snapshot" | grep -Fq "\"version\": \"$prior_version\"" &&
+            printf '%s' "$status_snapshot" | grep -Fq "\"commit\": \"$prior_commit\"" &&
+            printf '%s' "$status_snapshot" | grep -Fq '"last_status": "Active ('
+    else
+        enabled_rc=$?
+        live_pids=$(pidof unifi-bridge 2>/dev/null | tr -d ' \t\r\n')
+        status_snapshot=$(cat "$STATUS_JS" 2>/dev/null)
+        [ "$enabled_rc" -eq 3 ] && [ -z "$live_pids" ] &&
+            printf '%s' "$status_snapshot" | grep -Eq '"enabled"[[:space:]]*:[[:space:]]*false' &&
+            printf '%s' "$status_snapshot" | grep -Eq '"running"[[:space:]]*:[[:space:]]*false' &&
+            printf '%s' "$status_snapshot" | grep -Eq "\"version\"[[:space:]]*:[[:space:]]*\"$prior_version\"" &&
+            printf '%s' "$status_snapshot" | grep -Eq "\"commit\"[[:space:]]*:[[:space:]]*\"$prior_commit\""
+    fi
 }
 
 verify_live() {
@@ -759,8 +823,20 @@ watchdog.sh"
         rm -rf "$tmp_dir"; return 1
     fi
     if [ -e "$TXN_DIR" ]; then
-        write_update_status "ERROR" "$branch" "$local_ver" "-" "Unfinished addon update journal requires recovery before mutation"
-        rm -rf "$tmp_dir"; return 1
+        journal_state=$(cat "$TXN_DIR/active" 2>/dev/null | tr -d ' \t\r\n')
+        # Main's captured legacy startup cannot recover a journal before the
+        # candidate entry is renamed. Retire that inert journal only when its
+        # exact complete manifest and every installed asset still match the
+        # durable snapshot; any ambiguity leaves evidence untouched.
+        if [ "$journal_state" = ACTIVATING ] && validate_full_manifest && verify_restored_generation; then
+            if ! clear_transaction; then
+                write_update_status "ERROR" "$branch" "$local_ver" "-" "Unmodified prior generation verified but inert journal cleanup failed"
+                rm -rf "$tmp_dir"; return 1
+            fi
+        else
+            write_update_status "ERROR" "$branch" "$local_ver" "-" "Unfinished addon update journal requires recovery; snapshot did not prove a complete unchanged generation"
+            rm -rf "$tmp_dir"; return 1
+        fi
     fi
     if ! begin_transaction; then
         write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Could not persist previous addon generation; installed files were not changed"
@@ -782,6 +858,32 @@ watchdog.sh"
         rm -rf "$tmp_dir"; return 1
     fi
     sync
+    recovery_start_mismatch=""
+    same_file_contents "$tmp_dir/staged/start.sh" "$INSTALL_DIR/start.sh" || recovery_start_mismatch="content"
+    file_mode_is "$INSTALL_DIR/start.sh" 755 || recovery_start_mismatch="${recovery_start_mismatch:+$recovery_start_mismatch+}mode"
+    if [ -n "$recovery_start_mismatch" ]; then
+        if ! restore_prior_entry || ! verify_restored_generation || ! verify_prior_runtime; then
+            write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Recovery startup $recovery_start_mismatch verification failed; prior entry/runtime recovery could not be verified; journal retained"
+            rm -rf "$tmp_dir"; return 1
+        fi
+        if ! clear_transaction; then
+            write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Recovery startup $recovery_start_mismatch verification failed; prior entry/runtime restored but journal cleanup failed"
+            rm -rf "$tmp_dir"; return 1
+        fi
+        write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Recovery startup $recovery_start_mismatch verification failed; previous entry, assets and runtime restored and verified"
+        rm -rf "$tmp_dir"; return 1
+    fi
+    # Old installed entries can recover only the legacy manifest. Promote the
+    # full manifest only after the new recovery-capable entry is installed and
+    # verified; no installer or other generation asset changes before then.
+    if ! cp -p "$TXN_DIR/manifest.full" "$TXN_DIR/manifest.promote" ||
+       ! mv -f "$TXN_DIR/manifest.promote" "$TXN_DIR/manifest"; then
+        rollback_and_verify "Full recovery manifest promotion failed"; rm -rf "$tmp_dir"; return 1
+    fi
+    sync
+    if ! same_file_contents "$TXN_DIR/manifest.full" "$TXN_DIR/manifest"; then
+        rollback_and_verify "Full recovery manifest promotion did not verify"; rm -rf "$tmp_dir"; return 1
+    fi
     for f in install.sh apply_config.sh sync_nodes.sh unifi-bridge.sh update.sh watchdog.sh; do
         [ "$f" = start.sh ] && continue
         if ! atomic_install "${tmp_dir}/staged/$f" "$INSTALL_DIR/$f" 755; then

@@ -200,8 +200,28 @@ class ApplyFailureTests(unittest.TestCase):
     def make_main_compatibility_generation(self):
         # Main's observed bootstrap layout: prior daemon/scripts and prior
         # bundle metadata, with the candidate updater installed in both places.
+        # Its standalone installer also predates the archive and is unmanaged.
+        self.write(self.install / "install.sh", "#!/bin/sh\necho legacy-installer\n")
+        self.write(self.install / "start.sh", self.compatibility_start_source("start_be106.sh"))
         self.write(self.install / "update.sh", (ROOT / "scripts/update.sh").read_text())
         self.make_prior_bundle()
+
+    def make_node_compatibility_generation(self):
+        # Node's 6224430 startup can recover journals, but its allowlist does
+        # not include install.sh. Preserve that exact old behavior as a fixture.
+        self.write(self.install / "install.sh", "#!/bin/sh\necho older-node-installer\n")
+        self.write(self.install / "start.sh", self.compatibility_start_source("start_6224430.sh"))
+        self.write(self.install / "update.sh", (ROOT / "scripts/update.sh").read_text())
+        self.make_prior_bundle()
+
+    def compatibility_start_source(self, name):
+        source = (ROOT / "scripts/fixtures" / name).read_text()
+        source = source.replace('/tmp/', '__TMPROOT__/')
+        source = source.replace('/jffs/addons/unifi-bridge', str(self.install))
+        source = source.replace('__TMPROOT__/unifi-bridge-start.lock', str(self.root / 'start.lock'))
+        source = source.replace('__TMPROOT__/unifi-bridge-mutation.lock', str(self.root / 'mutation.lock'))
+        source = source.replace('__TMPROOT__/', str(self.root / 'tmp') + '/')
+        return source
 
     def generation_snapshot(self):
         paths = [
@@ -292,6 +312,197 @@ class ApplyFailureTests(unittest.TestCase):
         request_id = "777126"
         result = self.run_apply(args=["apply-exact", "dev", COMMIT, request_id])
         self.assert_mixed_generation_recovery(result, before, request_id)
+
+    def test_legacy_main_entry_failure_before_recovery_entry_leaves_prior_unchanged(self):
+        self.make_main_compatibility_generation()
+        before = self.generation_snapshot()
+        self.write(self.bin / "cp",
+            "#!/usr/bin/env python3\nimport sys\n"
+            "if any('/staged/start.sh' in x for x in sys.argv): sys.exit(1)\n"
+            "import subprocess; sys.exit(subprocess.call(['/bin/cp']+sys.argv[1:]))\n")
+        result = self.run_apply(args=["apply-exact", "dev", COMMIT, "777129"])
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.generation_snapshot(), before)
+        self.assertFalse((self.install / ".update-transaction").exists())
+        self.assertTrue(self.running.exists())
+        self.assertFalse((self.root / "mutation.lock").exists())
+        self.assertFalse((self.root / "start.lock").exists())
+
+    def test_manifest_promotion_failure_rolls_back_before_installer_replacement(self):
+        self.make_main_compatibility_generation()
+        before = self.generation_snapshot()
+        self.write(self.bin / "mv",
+            "#!/usr/bin/env python3\nimport sys,subprocess\n"
+            "if any('manifest.promote' in x for x in sys.argv): sys.exit(1)\n"
+            "sys.exit(subprocess.call(['/bin/mv']+sys.argv[1:]))\n")
+        result = self.run_apply(args=["apply-exact", "dev", COMMIT, "777130"])
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, output)
+        status = json.loads((self.web / "update_status.js").read_text().split("=", 1)[1].strip().rstrip(";"))
+        self.assertIn("Full recovery manifest promotion failed", status["message"])
+        self.assertIn("restored and verified", status["message"])
+        self.assertEqual(self.generation_snapshot(), before)
+        self.assertFalse((self.install / ".update-transaction").exists())
+        self.assertFalse((self.root / "update.lock").exists())
+        self.assertFalse((self.root / "mutation.lock").exists())
+        self.assertFalse((self.root / "start.lock").exists())
+
+    def test_corrupt_recovery_entry_copy_restores_prior_entry_without_running_candidate(self):
+        self.make_main_compatibility_generation()
+        before = self.generation_snapshot()
+        self.write(self.bin / "cp",
+            "#!/usr/bin/env python3\nimport sys,subprocess\n"
+            "result=subprocess.call(['/bin/cp']+sys.argv[1:])\n"
+            "if result == 0 and any('start.sh.update.' in x for x in sys.argv):\n"
+            "  open(sys.argv[-1], 'ab').write(b'\\n# injected corrupt copy\\n')\n"
+            "sys.exit(result)\n")
+        result = self.run_apply(args=["apply-exact", "dev", COMMIT, "777131"])
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, output)
+        status = json.loads((self.web / "update_status.js").read_text().split("=", 1)[1].strip().rstrip(";"))
+        self.assertIn("Recovery startup content verification failed", status["message"])
+        self.assertIn("previous entry, assets and runtime restored and verified", status["message"])
+        self.assertEqual(self.generation_snapshot(), before)
+        self.assertTrue(self.running.exists())
+        self.assertFalse((self.install / ".update-transaction").exists())
+        self.assertFalse((self.root / "mutation.lock").exists())
+        self.assertFalse((self.root / "start.lock").exists())
+
+    def test_interruption_after_entry_install_recovers_generated_legacy_journal(self):
+        self.make_main_compatibility_generation()
+        before = self.generation_snapshot()
+        self.write(self.bin / "cp",
+            "#!/usr/bin/env python3\nimport os,sys,subprocess\n"
+            "result=subprocess.call(['/bin/cp']+sys.argv[1:])\n"
+            "if result == 0 and any('manifest.promote' in x for x in sys.argv):\n"
+            "  os.kill(os.getppid(), 9)\n"
+            "sys.exit(result)\n")
+        interrupted = self.run_apply(args=["apply-exact", "dev", COMMIT, "777132"])
+        self.assertNotEqual(interrupted.returncode, 0)
+        txn = self.install / ".update-transaction"
+        self.assertTrue((txn / "active").exists())
+        self.assertTrue((txn / "manifest.full").exists())
+        self.assertNotIn("install.sh", (txn / "manifest").read_text())
+        self.assertIn("install.sh", (txn / "manifest.full").read_text())
+        self.assertNotEqual((self.install / "start.sh").read_bytes(), before["start.sh"][0])
+
+        # SIGKILL models power loss: the lock owner has exited but cleanup
+        # traps could not run. Recovery tooling removes only this fixture's
+        # stale locks after subprocess completion proves the owner is gone.
+        for lock in (self.root / "mutation.lock", self.root / "update.lock", self.root / "start.lock"):
+            if lock.is_dir():
+                shutil.rmtree(lock)
+        recovery_env = dict(self.env, STATUS_FILE=str(self.root / "tmp/var/wwwext/unifi-bridge/status.js"))
+        recovered = subprocess.run(["sh", str(self.install / "start.sh")],
+            env=recovery_env, capture_output=True, text=True, timeout=8)
+        self.assertEqual(recovered.returncode, 0, recovered.stdout + recovered.stderr)
+        self.assertEqual(self.generation_snapshot(), before)
+        self.assertTrue(self.running.exists())
+        self.assertFalse(txn.exists(), "normal startup verifies prior state and completes recovery cleanup")
+
+    def make_inert_main_journal(self):
+        self.make_main_compatibility_generation()
+        before = self.generation_snapshot()
+        self.write(self.bin / "cp",
+            "#!/usr/bin/env python3\nimport os,sys,subprocess\nfrom pathlib import Path\n"
+            "marker=Path(os.environ['CP_KILL_MARKER'])\n"
+            "result=subprocess.call(['/bin/cp']+sys.argv[1:])\n"
+            "if result == 0 and any('start.sh.update.' in x for x in sys.argv) and not marker.exists():\n"
+            "  marker.touch()\n  os.kill(os.getppid(), 9)\n"
+            "sys.exit(result)\n")
+        env = dict(self.env, CP_KILL_MARKER=str(self.root / "cp-killed"))
+        interrupted = self.run_apply(env=env, args=["apply-exact", "dev", COMMIT, "777133"])
+        self.assertNotEqual(interrupted.returncode, 0)
+        txn = self.install / ".update-transaction"
+        self.assertTrue((txn / "active").exists())
+        self.assertTrue((txn / "manifest.full").exists())
+        self.assertEqual(self.generation_snapshot(), before,
+            "all prior managed assets remain unchanged before candidate entry rename")
+        for lock in (self.root / "mutation.lock", self.root / "update.lock", self.root / "start.lock"):
+            if lock.is_dir():
+                shutil.rmtree(lock)
+        return env, txn, before
+
+    def test_inert_main_journal_is_retired_only_after_exact_snapshot_match(self):
+        env, txn, before = self.make_inert_main_journal()
+        retry = self.run_apply(env=env, args=["apply-exact", "dev", COMMIT, "777134"])
+        output = retry.stdout + retry.stderr
+        self.assertNotEqual(retry.returncode, 0, output)  # candidate startup fixture intentionally fails
+        status = json.loads((self.web / "update_status.js").read_text().split("=", 1)[1].strip().rstrip(";"))
+        self.assertNotIn("snapshot did not prove", status["message"])
+        self.assertIn("previous addon generation restored and verified", status["message"])
+        self.assertFalse(txn.exists())
+        self.assertEqual(self.generation_snapshot(), before)
+
+    def test_inert_main_journal_with_asset_mismatch_is_retained(self):
+        env, txn, _before = self.make_inert_main_journal()
+        self.write(self.install / "watchdog.sh", "#!/bin/sh\necho altered\n")
+        mismatch = self.generation_snapshot()
+        retry = self.run_apply(env=env, args=["apply-exact", "dev", COMMIT, "777135"])
+        output = retry.stdout + retry.stderr
+        self.assertNotEqual(retry.returncode, 0, output)
+        status = json.loads((self.web / "update_status.js").read_text().split("=", 1)[1].strip().rstrip(";"))
+        self.assertIn("snapshot did not prove a complete unchanged generation", status["message"])
+        self.assertTrue(txn.exists())
+        self.assertEqual(self.generation_snapshot(), mismatch)
+
+    def test_inert_main_journal_rejects_unterminated_manifest_and_final_asset_change(self):
+        env, txn, _before = self.make_inert_main_journal()
+        manifest = txn / "manifest.full"
+        manifest.write_bytes(manifest.read_bytes().rstrip(b"\n"))
+        self.write(self.install / "webui/unifi-bridge.asp", "altered final manifest asset")
+        mismatch = self.generation_snapshot()
+        retry = self.run_apply(env=env, args=["apply-exact", "dev", COMMIT, "777136"])
+        output = retry.stdout + retry.stderr
+        self.assertNotEqual(retry.returncode, 0, output)
+        status = json.loads((self.web / "update_status.js").read_text().split("=", 1)[1].strip().rstrip(";"))
+        self.assertIn("snapshot did not prove a complete unchanged generation", status["message"])
+        self.assertTrue(txn.exists())
+        self.assertEqual(self.generation_snapshot(), mismatch)
+
+    def test_622_legacy_entry_accepts_compat_manifest_and_rejects_full_manifest(self):
+        self.make_node_compatibility_generation()
+        txn = self.install / ".update-transaction"
+        (txn / "snapshot").mkdir(parents=True)
+        full, legacy = [], []
+        managed = [
+            "unifi-bridge.tar.gz", "unifi-bridge.tar.gz.sha256", "install.sh", "start.sh",
+            "apply_config.sh", "sync_nodes.sh", "unifi-bridge.sh", "update.sh",
+            "watchdog.sh", "version.txt", "webui/unifi-bridge.asp",
+        ]
+        snapshot = self.generation_snapshot()
+        for rel in managed:
+            value = snapshot[rel]
+            if value is None:
+                full.append(f"absent {rel}\n")
+                if rel != "install.sh":
+                    legacy.append(f"absent {rel}\n")
+            else:
+                data, mode = value
+                target = txn / "snapshot" / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data); target.chmod(mode)
+                full.append(f"present {rel}\n")
+                if rel != "install.sh":
+                    legacy.append(f"present {rel}\n")
+        (txn / "manifest.full").write_text("".join(full))
+        (txn / "manifest").write_text("".join(legacy))
+        (txn / "active").write_text("ACTIVATING\n")
+        legacy_entry = self.root / "legacy-start.sh"
+        legacy_entry.write_text(self.compatibility_start_source("start_6224430.sh"))
+        legacy_entry.chmod(0o755)
+        result = subprocess.run(["sh", str(legacy_entry), "--recover-only"], env=self.env,
+            capture_output=True, text=True, timeout=8)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(txn.exists(), "recover-only must leave transaction cleanup to the updater")
+        self.assertIn("install.sh", "".join(full))
+        self.assertNotIn("install.sh", "".join(legacy))
+
+        (txn / "manifest").write_text("".join(full))
+        rejected = subprocess.run(["sh", str(legacy_entry), "--recover-only"], env=self.env,
+            capture_output=True, text=True, timeout=8)
+        self.assertNotEqual(rejected.returncode, 0, rejected.stdout + rejected.stderr)
+        self.assertTrue(txn.exists(), "unsupported full manifest must retain recovery evidence")
 
     def test_apply_exact_removed_stage_tree_rolls_back_mixed_prior(self):
         self.make_main_compatibility_generation()
@@ -460,7 +671,7 @@ class ApplyFailureTests(unittest.TestCase):
                    '#!/bin/sh\ntouch "$RUNNING"\ncat > "$STATUS_FILE" <<EOF\n'
                    'window.unifiBridgeStatus = {"running": true, "enabled": true, "version": "1.2.5", "commit": "' + COMMIT + '", "pid": 1234, "status_updated_at": ' + '$(date +%s)' + ', "last_successful_inform": "2026-10-25 17:20:00", "last_status": "Active (GCM)"};\nEOF\n')
         result=self.run_apply()
-        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr+(self.web/"update_status.js").read_text())
         status=json.loads((self.web/"update_status.js").read_text().split("=",1)[1].strip().rstrip(";"))
         self.assertEqual(status["status"],"SUCCESS")
         self.assertEqual((self.install/"version.txt").read_text(),"1.2.5\n")
