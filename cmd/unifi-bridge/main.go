@@ -340,13 +340,7 @@ func main() {
 		}
 
 		if uplink != nil {
-			if cfg.UplinkMAC != "" && uplink.UplinkMAC == "" {
-				uplink.UplinkMAC = cfg.UplinkMAC
-			}
-			// Preserve dynamically detected LLDP remote port; only fallback to config if LLDP did not discover it
-			if uplink.UplinkRemotePort <= 0 && cfg.UplinkRemotePort > 0 {
-				uplink.UplinkRemotePort = cfg.UplinkRemotePort
-			}
+			applyConfiguredUplinkFallback(uplink, cfg)
 		}
 
 		telemetry.AssignRadioStationCounts(radioStats, vaps)
@@ -484,5 +478,18 @@ func main() {
 				logEvent("[unifi-bridge] Heartbeat error: %v", err)
 			}
 		}
+	}
+}
+
+func applyConfiguredUplinkFallback(uplink *telemetry.Uplink, cfg *Config) {
+	if uplink == nil || (uplink.LinkKnown && !uplink.Up) {
+		return
+	}
+	if cfg.UplinkMAC != "" && uplink.UplinkMAC == "" {
+		uplink.UplinkMAC = cfg.UplinkMAC
+	}
+	verifiedLLDP := uplink.UplinkSource == "lldp_uplink" || uplink.UplinkSource == "lldp_uplink_cached"
+	if !verifiedLLDP && uplink.UplinkRemotePort <= 0 && cfg.UplinkRemotePort > 0 {
+		uplink.UplinkRemotePort = cfg.UplinkRemotePort
 	}
 }

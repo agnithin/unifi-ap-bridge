@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -58,6 +59,27 @@ type staticCacheEntry struct {
 }
 
 type sampleCommandCacheKey struct{}
+type sampleFileCacheKey struct{}
+type sampleFileCache struct {
+	values map[string][]byte
+	errors map[string]error
+}
+type sampleParentCacheKey struct{}
+type sampleParentCache struct {
+	done       bool
+	chassis    string
+	portID     string
+	remotePort int
+	cached     bool
+	err        error
+}
+type sampleCarrierCacheKey struct{}
+type sampleCarrierCache struct {
+	values map[string]struct {
+		value int
+		known bool
+	}
+}
 type commandResult struct {
 	output string
 	err    error
@@ -68,23 +90,55 @@ type sampleCommandCache struct {
 }
 
 type AsusProvider struct {
-	runner      CmdRunner
-	radioNames  map[string]string
-	previousCPU cpuSample
-	cacheMu     sync.Mutex
-	staticCache map[string]staticCacheEntry
-	now         func() time.Time
+	runner         CmdRunner
+	radioNames     map[string]string
+	previousCPU    cpuSample
+	retryBaselines map[string]retryCounterBaseline
+	cacheMu        sync.Mutex
+	staticCache    map[string]staticCacheEntry
+	now            func() time.Time
+	readFile       func(string) ([]byte, error)
+	readDir        func(string) ([]os.DirEntry, error)
+	parentCache    *verifiedParent
+}
+
+type verifiedParent struct {
+	localInterface string
+	chassisMAC     string
+	portID         string
+	remotePort     int
+	verifiedAt     time.Time
+}
+
+const parentCacheTTL = 2 * time.Minute
+
+type retryCounterBaseline struct {
+	packets        int64
+	retries        int64
+	source         string
+	packetSource   string
+	uptime         int64
+	uptimePresent  bool
+	packetsPresent bool
+	retriesPresent bool
+	at             time.Time
 }
 
 func NewAsusProvider(runner CmdRunner) *AsusProvider {
 	if runner == nil {
 		runner = defaultCmdRunner
 	}
-	return &AsusProvider{runner: runner, staticCache: make(map[string]staticCacheEntry), now: time.Now}
+	return &AsusProvider{runner: runner, staticCache: make(map[string]staticCacheEntry), retryBaselines: make(map[string]retryCounterBaseline), now: time.Now, readFile: os.ReadFile, readDir: os.ReadDir}
 }
 
 func (p *AsusProvider) Collect(ctx context.Context, mapping map[string]string) (*providers.Sample, error) {
 	ctx = context.WithValue(ctx, sampleCommandCacheKey{}, &sampleCommandCache{results: make(map[string]commandResult)})
+	ctx = context.WithValue(ctx, sampleFileCacheKey{}, &sampleFileCache{values: make(map[string][]byte), errors: make(map[string]error)})
+	ctx = context.WithValue(ctx, sampleParentCacheKey{}, &sampleParentCache{})
+	ctx = context.WithValue(ctx, sampleCarrierCacheKey{}, &sampleCarrierCache{values: make(map[string]struct {
+		value int
+		known bool
+	})})
 	started := time.Now()
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -97,6 +151,7 @@ func (p *AsusProvider) Collect(ctx context.Context, mapping map[string]string) (
 	if err != nil {
 		return nil, fmt.Errorf("collect vaps: %w", err)
 	}
+	p.applyRetryInterval(vaps, started)
 	sample := &providers.Sample{Radios: radios, VAPs: vaps, StartedAt: started, StageErrors: make(map[string]string)}
 	setStageError := func(stage string, err error) error {
 		if err == nil {
@@ -143,6 +198,47 @@ func (p *AsusProvider) Collect(ctx context.Context, mapping map[string]string) (
 	}
 	sample.CompletedAt = time.Now()
 	return sample, nil
+}
+
+func (p *AsusProvider) readSampleFile(ctx context.Context, path string) ([]byte, error) {
+	reader := p.readFile
+	if reader == nil {
+		reader = os.ReadFile
+	}
+	cache, ok := ctx.Value(sampleFileCacheKey{}).(*sampleFileCache)
+	if !ok {
+		return reader(path)
+	}
+	if value, exists := cache.values[path]; exists {
+		return append([]byte(nil), value...), nil
+	}
+	if err, exists := cache.errors[path]; exists {
+		return nil, err
+	}
+	value, err := reader(path)
+	if err != nil {
+		cache.errors[path] = err
+		return nil, err
+	}
+	cache.values[path] = append([]byte(nil), value...)
+	return value, nil
+}
+
+func (p *AsusProvider) readCarrier(ctx context.Context, iface string) (int, bool) {
+	if cache, ok := ctx.Value(sampleCarrierCacheKey{}).(*sampleCarrierCache); ok {
+		if result, exists := cache.values[iface]; exists {
+			return result.value, result.known
+		}
+		value, known := readSysfsIntWith(p.readFile, "/sys/class/net/"+iface+"/carrier")
+		known = known && (value == 0 || value == 1)
+		cache.values[iface] = struct {
+			value int
+			known bool
+		}{value, known}
+		return value, known
+	}
+	value, known := readSysfsIntWith(p.readFile, "/sys/class/net/"+iface+"/carrier")
+	return value, known && (value == 0 || value == 1)
 }
 
 func (p *AsusProvider) Name() string {
@@ -398,6 +494,10 @@ func (p *AsusProvider) GetVAPsContext(ctx context.Context, wlanMapping map[strin
 	}
 
 	vaps := make([]telemetry.VAP, 0, len(candidates))
+	var netDev map[string]netDevCounters
+	if raw, err := p.readSampleFile(ctx, "/proc/net/dev"); err == nil {
+		netDev = parseNetDev(string(raw))
+	}
 
 	for _, iface := range candidates {
 		if err := ctx.Err(); err != nil {
@@ -427,10 +527,13 @@ func (p *AsusProvider) GetVAPsContext(ctx context.Context, wlanMapping map[strin
 			continue
 		}
 
-		bssidRaw, _ := p.wlCmdContext(ctx, iface, "bssid")
+		bssidRaw, err := p.wlCmdContext(ctx, iface, "bssid")
+		if err != nil {
+			return nil, fmt.Errorf("read %s BSSID: %w", iface, err)
+		}
 		bssid, err := inform.NormalizeMAC(bssidRaw)
 		if err != nil {
-			bssid = bssidRaw
+			return nil, fmt.Errorf("read %s BSSID: invalid value", iface)
 		}
 
 		chanspecRaw, err := p.wlCmdContext(ctx, iface, "chanspec")
@@ -457,31 +560,31 @@ func (p *AsusProvider) GetVAPsContext(ctx context.Context, wlanMapping map[strin
 			return nil, err
 		}
 
-		var vapTxBytes, vapRxBytes, vapTxPackets, vapRxPackets int64
-		for _, s := range stations {
-			vapTxBytes += s.TxBytes
-			vapRxBytes += s.RxBytes
-			vapTxPackets += s.TxPackets
-			vapRxPackets += s.RxPackets
+		var vapTxBytes, vapRxBytes, vapTxPackets, vapRxPackets *int64
+		if counters, ok := netDev[iface]; ok {
+			vapTxBytes, vapRxBytes = int64ptr(counters.txBytes), int64ptr(counters.rxBytes)
+			vapTxPackets, vapRxPackets = int64ptr(counters.txPackets), int64ptr(counters.rxPackets)
 		}
 
 		vap := telemetry.VAP{
-			Name:      vapName,
-			Radio:     band,
-			RadioName: radioName,
-			MAC:       bssid,
-			BSSID:     bssid,
-			ESSID:     ssid,
-			Channel:   channel,
-			State:     "RUN",
-			Up:        true,
-			IsGuest:   false,
-			NumSta:    len(stations),
-			TxBytes:   vapTxBytes,
-			RxBytes:   vapRxBytes,
-			TxPackets: vapTxPackets,
-			RxPackets: vapRxPackets,
-			StaTable:  stations,
+			Name:          vapName,
+			InterfaceName: iface,
+			Radio:         band,
+			RadioName:     radioName,
+			MAC:           bssid,
+			BSSID:         bssid,
+			ESSID:         ssid,
+			Channel:       channel,
+			State:         "RUN",
+			Up:            true,
+			CountersKnown: vapTxBytes != nil,
+			IsGuest:       false,
+			NumSta:        len(stations),
+			TxBytes:       vapTxBytes,
+			RxBytes:       vapRxBytes,
+			TxPackets:     vapTxPackets,
+			RxPackets:     vapRxPackets,
+			StaTable:      stations,
 		}
 
 		if wlanID, ok := wlanMapping[ssid]; ok && len(wlanID) == 24 {
@@ -492,6 +595,50 @@ func (p *AsusProvider) GetVAPsContext(ctx context.Context, wlanMapping map[strin
 	}
 
 	return vaps, nil
+}
+
+func int64ptr(v int64) *int64 { return &v }
+
+func (p *AsusProvider) applyRetryInterval(vaps []telemetry.VAP, sampledAt time.Time) {
+	if p.retryBaselines == nil {
+		p.retryBaselines = make(map[string]retryCounterBaseline)
+	}
+	seen := make(map[string]struct{})
+	for vi := range vaps {
+		for si := range vaps[vi].StaTable {
+			sta := &vaps[vi].StaTable[si]
+			ifName := vaps[vi].InterfaceName
+			if ifName == "" {
+				ifName = vaps[vi].Name
+			}
+			key := ifName + "|" + strings.ToLower(vaps[vi].BSSID) + "|" + strings.ToLower(sta.MAC)
+			seen[key] = struct{}{}
+			previous, exists := p.retryBaselines[key]
+			current := retryCounterBaseline{packets: sta.TxPackets, retries: sta.TxRetries, source: sta.RetryCounterSource, packetSource: sta.TxPacketCounterSource, uptime: sta.Uptime, uptimePresent: sta.UptimePresent, at: sampledAt}
+			compatible := exists && sta.TxPacketsPresent && sta.TxRetriesPresent && sta.UptimePresent && previous.uptimePresent && sta.TxPacketCounterSource == "tx_ucast_pkts" && previous.packetSource == current.packetSource && sta.RetryCounterSource == "tx_pkts_retries" && previous.source == current.source && previous.at.Before(sampledAt) && previous.packetsPresent && previous.retriesPresent
+			if compatible && sta.UptimePresent && previous.uptimePresent && sta.Uptime < previous.uptime {
+				compatible = false
+			}
+			if compatible && (sta.TxPackets < previous.packets || sta.TxRetries < previous.retries) {
+				compatible = false
+			}
+			if compatible {
+				deltaPackets := sta.TxPackets - previous.packets
+				deltaRetries := sta.TxRetries - previous.retries
+				if deltaPackets > 0 && sta.Signal != 0 {
+					sta.Satisfaction = CalculateSatisfaction(sta.Signal, sta.RSSI, deltaPackets, deltaRetries)
+				}
+			}
+			current.packetsPresent = sta.TxPacketsPresent
+			current.retriesPresent = sta.TxRetriesPresent
+			p.retryBaselines[key] = current
+		}
+	}
+	for key := range p.retryBaselines {
+		if _, ok := seen[key]; !ok {
+			delete(p.retryBaselines, key)
+		}
+	}
 }
 
 func (p *AsusProvider) getStationsForIface(iface, vapName, bssid, ssid string, channel int, band string) []telemetry.Station {
@@ -526,7 +673,7 @@ func (p *AsusProvider) getStationsForIfaceContext(ctx context.Context, iface, va
 
 		normMAC, err := inform.NormalizeMAC(rawMAC)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("parse %s association list: malformed station identifier %q", iface, rawMAC)
 		}
 
 		sta := telemetry.Station{
@@ -673,6 +820,7 @@ type netDevCounters struct {
 	txPackets int64
 	txErrors  int64
 	txDropped int64
+	valid     bool
 }
 
 func parseNetDev(content string) map[string]netDevCounters {
@@ -685,15 +833,22 @@ func parseNetDev(content string) map[string]netDevCounters {
 		parts := strings.SplitN(line, ":", 2)
 		iface := strings.TrimSpace(parts[0])
 		fields := strings.Fields(parts[1])
-		if len(fields) >= 16 {
-			rxB, _ := strconv.ParseInt(fields[0], 10, 64)
-			rxP, _ := strconv.ParseInt(fields[1], 10, 64)
-			rxE, _ := strconv.ParseInt(fields[2], 10, 64)
-			rxD, _ := strconv.ParseInt(fields[3], 10, 64)
-			txB, _ := strconv.ParseInt(fields[8], 10, 64)
-			txP, _ := strconv.ParseInt(fields[9], 10, 64)
-			txE, _ := strconv.ParseInt(fields[10], 10, 64)
-			txD, _ := strconv.ParseInt(fields[11], 10, 64)
+		if iface == "" || len(fields) < 16 {
+			continue
+		}
+		parsed := make([]int64, 16)
+		valid := true
+		for i, field := range fields[:16] {
+			value, err := strconv.ParseUint(field, 10, 63)
+			if err != nil {
+				valid = false
+				break
+			}
+			parsed[i] = int64(value)
+		}
+		if valid {
+			rxB, rxP, rxE, rxD := parsed[0], parsed[1], parsed[2], parsed[3]
+			txB, txP, txE, txD := parsed[8], parsed[9], parsed[10], parsed[11]
 			res[iface] = netDevCounters{
 				rxBytes:   rxB,
 				rxPackets: rxP,
@@ -703,6 +858,7 @@ func parseNetDev(content string) map[string]netDevCounters {
 				txPackets: txP,
 				txErrors:  txE,
 				txDropped: txD,
+				valid:     true,
 			}
 		}
 	}
@@ -771,56 +927,171 @@ func (p *AsusProvider) getLLDPNeighbor() (chassisMAC string, portMAC string, rem
 }
 
 func (p *AsusProvider) getLLDPNeighborContext(ctx context.Context) (chassisMAC string, portMAC string, remotePort int, err error) {
+	chassisMAC, portMAC, remotePort, _, err = p.resolveLLDPNeighborContext(ctx)
+	return
+}
+
+func (p *AsusProvider) resolveLLDPNeighborContext(ctx context.Context) (chassisMAC string, portID string, remotePort int, cached bool, err error) {
+	if sample, ok := ctx.Value(sampleParentCacheKey{}).(*sampleParentCache); ok {
+		if sample.done {
+			return sample.chassis, sample.portID, sample.remotePort, sample.cached, sample.err
+		}
+		defer func() {
+			sample.done = true
+			sample.chassis, sample.portID, sample.remotePort, sample.cached, sample.err = chassisMAC, portID, remotePort, cached, err
+		}()
+	}
 	out, err := p.runCommand(ctx, "lldpcli", "-f", "json", "show", "neighbors")
 	if err != nil || len(out) == 0 {
-		return "", "", 0, fmt.Errorf("lldpcli unavailable: %v", err)
+		if ctx.Err() != nil {
+			return "", "", 0, false, ctx.Err()
+		}
+		if err == nil {
+			err = fmt.Errorf("empty lldpcli response")
+		}
+		return p.cachedParent(err)
 	}
 
 	var data lldpCliOutput
 	if err := json.Unmarshal([]byte(out), &data); err != nil {
-		return "", "", 0, fmt.Errorf("json unmarshal failed: %v", err)
+		return p.cachedParent(fmt.Errorf("json unmarshal failed: %w", err))
 	}
 
 	ifaceData, ok := data.LLDP.Interface["eth0"]
+	if !ok || len(ifaceData.Chassis) == 0 {
+		// A successful, valid response without an eth0 neighbor is authoritative.
+		p.parentCache = nil
+		return "", "", 0, false, nil
+	}
+	if len(ifaceData.Chassis) != 1 {
+		return p.cachedParent(fmt.Errorf("ambiguous eth0 neighbor"))
+	}
+	var neighborID struct {
+		Type  string `json:"type"`
+		Value string `json:"value"`
+	}
+	for _, item := range ifaceData.Chassis {
+		neighborID = item.ID
+	}
+	if !isMACIDSubtype(neighborID.Type) {
+		return p.cachedParent(fmt.Errorf("unsupported chassis ID subtype %q", neighborID.Type))
+	}
+	chassisMAC, err = inform.NormalizeMAC(neighborID.Value)
+	if err != nil || !isUnicastMAC(chassisMAC) {
+		return p.cachedParent(fmt.Errorf("invalid chassis MAC"))
+	}
+	portID = strings.TrimSpace(ifaceData.Port.ID.Value)
+	portType := strings.ToLower(strings.TrimSpace(ifaceData.Port.ID.Type))
+	if portType == "mac" || portType == "mac address" {
+		portID, err = inform.NormalizeMAC(portID)
+		if err != nil || !isUnicastMAC(portID) {
+			return p.cachedParent(fmt.Errorf("invalid port MAC"))
+		}
+	} else if portID != "" && !isPortNameSubtype(portType) && !isLocalIDSubtype(portType) {
+		return p.cachedParent(fmt.Errorf("unsupported port ID subtype %q", portType))
+	}
+	descr := strings.TrimSpace(ifaceData.Port.Descr)
+	idName, idNameKnown := "", false
+	if isPortNameSubtype(portType) {
+		idName, idNameKnown = normalizeEthernetIfname(ifaceData.Port.ID.Value)
+	}
+	descrName, descrNameKnown := normalizeEthernetIfname(descr)
+	if idNameKnown && descrNameKnown && idName != descrName {
+		return p.cachedParent(fmt.Errorf("conflicting remote port identifiers"))
+	}
+	remotePort = remotePortIndex(idName)
+	if !idNameKnown {
+		remotePort = remotePortIndex(descrName)
+	}
+	if portID == "" {
+		portID = descr
+	}
+	if portID == "" {
+		return p.cachedParent(fmt.Errorf("empty port ID"))
+	}
+	verified := p.now()
+	p.parentCache = &verifiedParent{localInterface: "eth0", chassisMAC: chassisMAC, portID: portID, remotePort: remotePort, verifiedAt: verified}
+	return chassisMAC, portID, remotePort, false, nil
+}
+
+func (p *AsusProvider) cachedParent(cause error) (string, string, int, bool, error) {
+	parent := p.parentCache
+	if parent == nil {
+		return "", "", 0, false, cause
+	}
+	now := p.now()
+	if now.Before(parent.verifiedAt) || now.Sub(parent.verifiedAt) >= parentCacheTTL || parent.localInterface != "eth0" {
+		p.parentCache = nil
+		return "", "", 0, false, cause
+	}
+	return parent.chassisMAC, parent.portID, parent.remotePort, true, nil
+}
+
+func isMACIDSubtype(subtype string) bool {
+	switch strings.ToLower(strings.TrimSpace(subtype)) {
+	case "mac", "mac address":
+		return true
+	default:
+		return false
+	}
+}
+
+func isPortNameSubtype(subtype string) bool {
+	switch strings.ToLower(strings.TrimSpace(subtype)) {
+	case "interface name", "ifname", "interface name (ifname)":
+		return true
+	default:
+		return false
+	}
+}
+
+func isLocalIDSubtype(subtype string) bool {
+	return strings.EqualFold(strings.TrimSpace(subtype), "local")
+}
+
+func isUnicastMAC(mac string) bool {
+	if len(mac) != 17 {
+		return false
+	}
+	first, err := strconv.ParseUint(mac[:2], 16, 8)
+	return err == nil && first&1 == 0 && mac != "00:00:00:00:00:00"
+}
+
+func parseRemoteEthernetPort(subtype, value string) (int, bool) {
+	if !isPortNameSubtype(subtype) {
+		return 0, false
+	}
+	name, ok := normalizeEthernetIfname(value)
 	if !ok {
-		for _, v := range data.LLDP.Interface {
-			ifaceData = v
-			ok = true
-			break
+		return 0, false
+	}
+	port := remotePortIndex(name)
+	return port, port != 0
+}
+
+func normalizeEthernetIfname(value string) (string, bool) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if !strings.HasPrefix(value, "eth") || len(value) <= 3 {
+		return "", false
+	}
+	number := value[3:]
+	for _, r := range number {
+		if r < '0' || r > '9' {
+			return "", false
 		}
 	}
-	if !ok {
-		return "", "", 0, fmt.Errorf("no lldp interface found")
+	n, err := strconv.Atoi(number)
+	if err != nil {
+		return "", false
 	}
+	return "eth" + strconv.Itoa(n), true
+}
 
-	for _, c := range ifaceData.Chassis {
-		if c.ID.Value != "" {
-			chassisMAC = strings.ToLower(strings.TrimSpace(c.ID.Value))
-			break
-		}
+func remotePortIndex(ifname string) int {
+	if len(ifname) != 4 || !strings.HasPrefix(ifname, "eth") || ifname[3] < '0' || ifname[3] > '3' {
+		return 0
 	}
-
-	portMAC = strings.ToLower(strings.TrimSpace(ifaceData.Port.ID.Value))
-	descr := strings.ToLower(strings.TrimSpace(ifaceData.Port.Descr))
-
-	remotePort = 0
-	if strings.HasPrefix(descr, "eth") {
-		numStr := strings.TrimPrefix(descr, "eth")
-		if n, e := strconv.Atoi(numStr); e == nil {
-			remotePort = n + 1 // eth0 -> Port 1, eth2 -> Port 3
-		}
-	} else if len(portMAC) == 17 && len(chassisMAC) == 17 {
-		cLast, _ := strconv.ParseInt(chassisMAC[15:17], 16, 64)
-		pLast, _ := strconv.ParseInt(portMAC[15:17], 16, 64)
-		if pLast >= cLast && (pLast-cLast) < 10 {
-			remotePort = int(pLast - cLast + 1)
-		}
-	}
-
-	if chassisMAC == "" {
-		return "", "", 0, fmt.Errorf("empty chassis mac")
-	}
-	return chassisMAC, portMAC, remotePort, nil
+	return int(ifname[3]-'0') + 1
 }
 
 func (p *AsusProvider) GetLLDPTable() ([]telemetry.LLDPEntry, error) {
@@ -828,11 +1099,12 @@ func (p *AsusProvider) GetLLDPTable() ([]telemetry.LLDPEntry, error) {
 }
 
 func (p *AsusProvider) GetLLDPTableContext(ctx context.Context) ([]telemetry.LLDPEntry, error) {
-	chassisMAC, portMAC, _, err := p.getLLDPNeighborContext(ctx)
+	if carrier, known := p.readCarrier(ctx, "eth0"); known && carrier == 0 {
+		p.parentCache = nil
+		return nil, nil
+	}
+	chassisMAC, portMAC, _, _, err := p.resolveLLDPNeighborContext(ctx)
 	if err == nil && chassisMAC != "" {
-		if portMAC == "" {
-			portMAC = chassisMAC
-		}
 		return []telemetry.LLDPEntry{
 			{
 				ChassisID:     chassisMAC,
@@ -844,27 +1116,10 @@ func (p *AsusProvider) GetLLDPTableContext(ctx context.Context) ([]telemetry.LLD
 		}, nil
 	}
 
-	gwIP, _ := p.nvramGetContext(ctx, "lan_gateway")
-	if gwIP == "" {
-		gwIP = "10.100.1.1"
-	}
-	gwMAC := parseArpGatewayMAC(gwIP)
-	if gwMAC != "" {
-		return []telemetry.LLDPEntry{
-			{
-				ChassisID:     gwMAC,
-				PortID:        gwMAC,
-				LocalPortName: "eth0",
-				LocalPortIdx:  1,
-				IsWired:       true,
-			},
-		}, nil
-	}
-
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return nil, nil
+	return nil, err
 }
 
 func readSysfsInt(path string) int {
@@ -877,6 +1132,32 @@ func readSysfsInt(path string) int {
 		return 0
 	}
 	return v
+}
+
+func readSysfsIntWith(readFile func(string) ([]byte, error), path string) (int, bool) {
+	if readFile == nil {
+		return 0, false
+	}
+	data, err := readFile(path)
+	if err != nil {
+		return 0, false
+	}
+	value, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return 0, false
+	}
+	return value, true
+}
+
+func readSysfsStringWith(readFile func(string) ([]byte, error), path string) string {
+	if readFile == nil {
+		return ""
+	}
+	data, err := readFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }
 
 func readSysfsString(path string) string {
@@ -929,7 +1210,11 @@ func parseBrctlShowmacs(data string, bridgePortMap map[int]string, arpMap map[st
 		isLocal := strings.ToLower(fields[2])
 		ageStr := fields[3]
 
-		if isLocal == "yes" || len(mac) != 17 {
+		if isLocal == "yes" {
+			continue
+		}
+		mac, err := inform.NormalizeMAC(mac)
+		if err != nil || !isUnicastMAC(mac) {
 			continue
 		}
 
@@ -948,9 +1233,20 @@ func parseBrctlShowmacs(data string, bridgePortMap map[int]string, arpMap map[st
 			continue
 		}
 
-		ageSec := 0
-		if ageF, err := strconv.ParseFloat(ageStr, 64); err == nil {
-			ageSec = int(ageF)
+		ageF, err := strconv.ParseFloat(ageStr, 64)
+		if err != nil || math.IsNaN(ageF) || math.IsInf(ageF, 0) || ageF < 0 || ageF > float64(math.MaxInt) {
+			continue
+		}
+		ageSec := int(ageF)
+		duplicate := false
+		for _, entry := range macsByPort[portIdx] {
+			if entry.MAC == mac {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			continue
 		}
 
 		macsByPort[portIdx] = append(macsByPort[portIdx], telemetry.PortMacEntry{
@@ -976,26 +1272,190 @@ func parseBrctlShowmacs(data string, bridgePortMap map[int]string, arpMap map[st
 	return macsByPort, lastConnByPort
 }
 
+type bridgeInventory struct {
+	ports         map[int]string
+	vlanFiltering bool
+	vlanByIf      map[string][]int
+}
+
 func getBridgePortMap() map[int]string {
-	m := make(map[int]string)
-	entries, err := os.ReadDir("/sys/class/net/br0/brif")
-	if err != nil {
-		return m
+	return getBridgePortMapWith(os.ReadDir, os.ReadFile)
+}
+
+func getBridgePortMapWith(readDir func(string) ([]os.DirEntry, error), readFile func(string) ([]byte, error)) map[int]string {
+	bridges := discoverBridgeInventory(context.Background(), readDir, readFile, nil)
+	merged := make(map[int]string)
+	for _, bridge := range bridges {
+		for idx, ifname := range bridge.ports {
+			merged[idx] = ifname
+		}
 	}
-	for _, entry := range entries {
-		ifname := entry.Name()
-		portNoPath := filepath.Join("/sys/class/net/br0/brif", ifname, "port_no")
-		data, err := os.ReadFile(portNoPath)
+	return merged
+}
+
+func discoverBridgeInventory(ctx context.Context, readDir func(string) ([]os.DirEntry, error), readFile func(string) ([]byte, error), run func(context.Context, string, ...string) (string, error)) map[string]bridgeInventory {
+	if readDir == nil {
+		readDir = os.ReadDir
+	}
+	if readFile == nil {
+		readFile = os.ReadFile
+	}
+	bridges := make(map[string]bridgeInventory)
+	netEntries, err := readDir("/sys/class/net")
+	if err != nil {
+		return bridges
+	}
+	for _, netEntry := range netEntries {
+		if ctx.Err() != nil {
+			return bridges
+		}
+		name := netEntry.Name()
+		brifPath := filepath.Join("/sys/class/net", name, "brif")
+		members, err := readDir(brifPath)
 		if err != nil {
 			continue
 		}
-		str := strings.TrimSpace(string(data))
-		str = strings.TrimPrefix(str, "0x")
-		if val, err := strconv.ParseInt(str, 16, 64); err == nil {
-			m[int(val)] = ifname
+		inv := bridgeInventory{ports: make(map[int]string), vlanByIf: make(map[string][]int)}
+		for _, member := range members {
+			portNoPath := filepath.Join(brifPath, member.Name(), "port_no")
+			data, err := readFile(portNoPath)
+			if err != nil {
+				continue
+			}
+			n := strings.TrimPrefix(strings.TrimSpace(string(data)), "0x")
+			port, err := strconv.ParseInt(n, 16, 32)
+			if err == nil && port > 0 {
+				inv.ports[int(port)] = member.Name()
+			}
+		}
+		filtering, err := readFile(filepath.Join("/sys/class/net", name, "bridge", "vlan_filtering"))
+		inv.vlanFiltering = err == nil && strings.TrimSpace(string(filtering)) == "1"
+		if inv.vlanFiltering && run != nil {
+			for _, member := range members {
+				if ctx.Err() != nil {
+					return bridges
+				}
+				if out, err := run(ctx, "bridge", "vlan", "show", "dev", member.Name()); err == nil {
+					for iface, vlans := range parseBridgeVLANShow(out) {
+						inv.vlanByIf[iface] = vlans
+					}
+				}
+			}
+		}
+		bridges[name] = inv
+	}
+	return bridges
+}
+
+func parseBridgeVLANShow(data string) map[string][]int {
+	result := make(map[string][]int)
+	current := ""
+	seen := make(map[string]map[int]bool)
+	for _, line := range strings.Split(data, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
+			if fields[0] == "port" || fields[0] == "dev" {
+				current = ""
+				continue
+			}
+			current = fields[0]
+		}
+		if current == "" {
+			continue
+		}
+		values := fields[1:]
+		if strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
+			values = fields
+		}
+		for _, field := range values {
+			field = strings.TrimSuffix(field, "*")
+			if strings.Contains(field, "-") {
+				bounds := strings.Split(field, "-")
+				if len(bounds) != 2 {
+					addVLAN(seen, current, 0)
+					continue
+				}
+				first, errFirst := strconv.Atoi(bounds[0])
+				last, errLast := strconv.Atoi(bounds[1])
+				if errFirst != nil || errLast != nil || first < 1 || last > 4094 || first > last {
+					addVLAN(seen, current, 0)
+					continue
+				}
+				for vlan := first; vlan <= last; vlan++ {
+					addVLAN(seen, current, vlan)
+				}
+				continue
+			}
+			v, err := strconv.Atoi(field)
+			if err != nil || v < 1 || v > 4094 {
+				continue
+			}
+			addVLAN(seen, current, v)
 		}
 	}
-	return m
+	for iface, ids := range seen {
+		for id := range ids {
+			result[iface] = append(result[iface], id)
+		}
+		sort.Ints(result[iface])
+	}
+	return result
+}
+
+func addVLAN(seen map[string]map[int]bool, iface string, vlan int) {
+	if seen[iface] == nil {
+		seen[iface] = make(map[int]bool)
+	}
+	seen[iface][vlan] = true
+}
+
+func effectiveVLAN(inv bridgeInventory, iface string) int {
+	if !inv.vlanFiltering {
+		return 0
+	}
+	v := inv.vlanByIf[iface]
+	if len(v) != 1 {
+		return 0
+	}
+	return v[0]
+}
+
+func bridgeNameForInterface(bridges map[string]bridgeInventory, iface string) (string, bool) {
+	for name, inv := range bridges {
+		for _, member := range inv.ports {
+			if member == iface {
+				return name, true
+			}
+		}
+	}
+	return "", false
+}
+
+func assignPortVLANs(entries map[int][]telemetry.PortMacEntry, portMap map[int]string, inv bridgeInventory) {
+	for portIdx, macs := range entries {
+		vlan := effectiveVLAN(inv, portMap[portIdx])
+		if vlan == 0 {
+			continue
+		}
+		for i := range macs {
+			macs[i].Vlan = vlan
+		}
+		entries[portIdx] = macs
+	}
+}
+
+func physicalPortMap(bridgePorts map[int]string) map[int]string {
+	indexes := map[string]int{"eth0": 1, "eth1": 2, "eth2": 3, "eth3": 4}
+	result := make(map[int]string)
+	for _, ifname := range bridgePorts {
+		if idx := indexes[ifname]; idx != 0 {
+			result[idx] = ifname
+		}
+	}
+	return result
 }
 
 func (p *AsusProvider) GetPortTable() ([]telemetry.Port, []telemetry.EthernetPort, *telemetry.Uplink, error) {
@@ -1006,7 +1466,44 @@ func (p *AsusProvider) GetPortTableContext(ctx context.Context) ([]telemetry.Por
 	if err := ctx.Err(); err != nil {
 		return nil, nil, nil, err
 	}
-	netDevRaw, _ := os.ReadFile("/proc/net/dev")
+	ifaces := []struct {
+		idx      int
+		dev      string
+		name     string
+		isUplink bool
+		defMedia string
+	}{
+		{1, "eth0", "Port 1", true, "2.5GE"},
+		{2, "eth1", "Port 2", false, "GE"},
+		{3, "eth2", "Port 3", false, "GE"},
+		{4, "eth3", "Port 4", false, "GE"},
+	}
+	carrierState := struct {
+		value int
+		known bool
+	}{}
+	carriers := make(map[string]struct {
+		value int
+		known bool
+	}, len(ifaces))
+	for _, spec := range ifaces {
+		value, known := p.readCarrier(ctx, spec.dev)
+		carriers[spec.dev] = struct {
+			value int
+			known bool
+		}{value, known}
+		if spec.isUplink {
+			carrierState = carriers[spec.dev]
+		}
+	}
+	if carrierState.known && carrierState.value == 0 {
+		p.parentCache = nil
+	}
+	readFile := p.readFile
+	if readFile == nil {
+		readFile = os.ReadFile
+	}
+	netDevRaw, _ := p.readSampleFile(ctx, "/proc/net/dev")
 	counters := parseNetDev(string(netDevRaw))
 
 	hostMAC, err := p.nvramGetContext(ctx, "lan_hwaddr")
@@ -1017,19 +1514,62 @@ func (p *AsusProvider) GetPortTableContext(ctx context.Context) ([]telemetry.Por
 		hostMAC = norm
 	}
 
-	brPortMap := getBridgePortMap()
-	arpData, _ := os.ReadFile("/proc/net/arp")
+	bridges := discoverBridgeInventory(ctx, p.readDir, readFile, p.runCommand)
+	arpData, _ := readFile("/proc/net/arp")
 	arpMap := parseArpTable(string(arpData))
-
-	showmacsOut, cmdErr := p.runCommand(ctx, "brctl", "showmacs", "br0")
-	if cmdErr != nil && ctx.Err() != nil {
-		return nil, nil, nil, ctx.Err()
+	macsByPort := make(map[int][]telemetry.PortMacEntry)
+	for bridgeName, inv := range bridges {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, nil, err
+		}
+		showmacsOut, cmdErr := p.runCommand(ctx, "brctl", "showmacs", bridgeName)
+		if cmdErr != nil {
+			if ctx.Err() != nil {
+				return nil, nil, nil, ctx.Err()
+			}
+			continue
+		}
+		bridgeMacs, _ := parseBrctlShowmacs(showmacsOut, inv.ports, arpMap)
+		assignPortVLANs(bridgeMacs, physicalPortMap(inv.ports), inv)
+		for portIdx, entries := range bridgeMacs {
+			for _, entry := range entries {
+				duplicate := false
+				for _, existing := range macsByPort[portIdx] {
+					if existing.MAC == entry.MAC {
+						duplicate = true
+						break
+					}
+				}
+				if !duplicate {
+					macsByPort[portIdx] = append(macsByPort[portIdx], entry)
+				}
+			}
+		}
 	}
-	macsByPort, lastConnByPort := parseBrctlShowmacs(showmacsOut, brPortMap, arpMap)
+	lastConnByPort := make(map[int]*telemetry.PortLastConnection)
+	for portIdx, entries := range macsByPort {
+		if len(entries) != 1 {
+			continue
+		}
+		entry := entries[0]
+		lastConnByPort[portIdx] = &telemetry.PortLastConnection{Connected: true, MAC: entry.MAC, IP: arpMap[entry.MAC], LastSeen: time.Now().Unix() - int64(entry.Age)}
+	}
 
-	chassisMAC, _, remotePort, err := p.getLLDPNeighborContext(ctx)
+	chassisMAC, _, remotePort, parentCached, err := "", "", 0, false, error(nil)
+	if !carrierState.known || carrierState.value == 1 {
+		chassisMAC, _, remotePort, parentCached, err = p.resolveLLDPNeighborContext(ctx)
+		if ctx.Err() != nil {
+			return nil, nil, nil, ctx.Err()
+		}
+	}
 	gwMAC := chassisMAC
-	if err != nil || gwMAC == "" {
+	uplinkSource := ""
+	if chassisMAC != "" && parentCached {
+		uplinkSource = "lldp_uplink_cached"
+	} else if chassisMAC != "" {
+		uplinkSource = "lldp_uplink"
+	}
+	if gwMAC == "" && !(carrierState.known && carrierState.value == 0) {
 		gwIP, err := p.nvramGetContext(ctx, "lan_gateway")
 		if err != nil {
 			return nil, nil, nil, err
@@ -1039,6 +1579,7 @@ func (p *AsusProvider) GetPortTableContext(ctx context.Context) ([]telemetry.Por
 		}
 		gwMAC = parseArpGatewayMAC(gwIP)
 		remotePort = 0
+		uplinkSource = "arp_gateway"
 	}
 	lanGateway, err := p.nvramGetContext(ctx, "lan_gateway")
 	if err != nil {
@@ -1049,34 +1590,16 @@ func (p *AsusProvider) GetPortTableContext(ctx context.Context) ([]telemetry.Por
 		return nil, nil, nil, err
 	}
 
-	// Physical port mapping for Asuswrt (XT8 / BCM4908 / BCM53134):
-	// eth0 = 2.5G WAN/Uplink
-	// eth1 = 1G LAN 1
-	// eth2 = 1G LAN 2
-	// eth3 = 1G LAN 3
-	ifaces := []struct {
-		idx      int
-		dev      string
-		name     string
-		isUplink bool
-		defMedia string
-	}{
-		{idx: 1, dev: "eth0", name: "Port 1", isUplink: true, defMedia: "2.5GE"},
-		{idx: 2, dev: "eth1", name: "Port 2", isUplink: false, defMedia: "GE"},
-		{idx: 3, dev: "eth2", name: "Port 3", isUplink: false, defMedia: "GE"},
-		{idx: 4, dev: "eth3", name: "Port 4", isUplink: false, defMedia: "GE"},
-	}
-
 	ports := make([]telemetry.Port, 0, len(ifaces))
 	for _, spec := range ifaces {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, nil, err
 		}
-		carrier := readSysfsInt(fmt.Sprintf("/sys/class/net/%s/carrier", spec.dev))
-		speed := readSysfsInt(fmt.Sprintf("/sys/class/net/%s/speed", spec.dev))
-		duplexStr := readSysfsString(fmt.Sprintf("/sys/class/net/%s/duplex", spec.dev))
+		carrier := carriers[spec.dev]
+		speed, _ := readSysfsIntWith(readFile, fmt.Sprintf("/sys/class/net/%s/speed", spec.dev))
+		duplexStr := readSysfsStringWith(readFile, fmt.Sprintf("/sys/class/net/%s/duplex", spec.dev))
 
-		up := carrier == 1
+		up := carrier.known && carrier.value == 1
 		fullDuplex := duplexStr == "full"
 		media := spec.defMedia
 		if speed >= 2500 {
@@ -1090,8 +1613,12 @@ func (p *AsusProvider) GetPortTableContext(ctx context.Context) ([]telemetry.Por
 		}
 
 		stpStates := map[string]string{"0": "disabled", "1": "listening", "2": "learning", "3": "forwarding", "4": "blocking"}
-		stpState := stpStates[readSysfsString("/sys/class/net/br0/brif/"+spec.dev+"/state")]
-		stpCost := readSysfsInt("/sys/class/net/br0/brif/" + spec.dev + "/path_cost")
+		stpState := ""
+		stpCost := 0
+		if bridgeName, ok := bridgeNameForInterface(bridges, spec.dev); ok {
+			stpState = stpStates[readSysfsStringWith(readFile, filepath.Join("/sys/class/net", bridgeName, "brif", spec.dev, "state"))]
+			stpCost, _ = readSysfsIntWith(readFile, filepath.Join("/sys/class/net", bridgeName, "brif", spec.dev, "path_cost"))
+		}
 		if stpCost < 0 {
 			stpCost = 0
 		}
@@ -1100,12 +1627,19 @@ func (p *AsusProvider) GetPortTableContext(ctx context.Context) ([]telemetry.Por
 
 		portMacs := macsByPort[spec.idx]
 		lastConn := lastConnByPort[spec.idx]
-		if spec.isUplink && gwMAC != "" && lastConn == nil {
+		if carrier.known && !up {
+			portMacs, lastConn = nil, nil
+		}
+		if spec.isUplink && up && gwMAC != "" && lastConn == nil {
+			lastSeen := int64(0)
+			if strings.HasPrefix(uplinkSource, "lldp_uplink") && p.parentCache != nil {
+				lastSeen = p.parentCache.verifiedAt.Unix()
+			}
 			lastConn = &telemetry.PortLastConnection{
 				Connected: up,
 				MAC:       gwMAC,
 				IP:        lanGateway,
-				LastSeen:  time.Now().Unix(),
+				LastSeen:  lastSeen,
 			}
 		}
 
@@ -1115,6 +1649,8 @@ func (p *AsusProvider) GetPortTableContext(ctx context.Context) ([]telemetry.Por
 			Name:           spec.name,
 			Media:          media,
 			Up:             up,
+			LinkKnown:      carrier.known,
+			CountersKnown:  c.valid,
 			Speed:          speed,
 			FullDuplex:     fullDuplex,
 			Enable:         true,
@@ -1146,6 +1682,8 @@ func (p *AsusProvider) GetPortTableContext(ctx context.Context) ([]telemetry.Por
 		ethTable = append(ethTable, telemetry.EthernetPort{
 			Name:       devName,
 			MAC:        hostMAC,
+			Up:         pt.Up,
+			LinkKnown:  pt.LinkKnown,
 			PortIdx:    pt.PortIdx,
 			Speed:      pt.Speed,
 			FullDuplex: pt.FullDuplex,
@@ -1165,9 +1703,10 @@ func (p *AsusProvider) GetPortTableContext(ctx context.Context) ([]telemetry.Por
 		PortIdx:          1,
 		Media:            "2.5GE",
 		MaxSpeed:         2500,
-		UplinkSource:     "lldp_uplink",
+		UplinkSource:     uplinkSource,
 		UplinkMAC:        gwMAC,
 		UplinkRemotePort: remotePort,
+		LinkKnown:        carrierState.known,
 		RxBytes:          eth0Port.RxBytes,
 		TxBytes:          eth0Port.TxBytes,
 		RxPackets:        eth0Port.RxPackets,

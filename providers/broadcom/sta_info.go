@@ -29,22 +29,27 @@ var (
 )
 
 type ParsedStaInfo struct {
-	Signal     int
-	Noise      int
-	RSSI       int
-	RadioProto string
-	Is11ax     bool
-	Is11ac     bool
-	Is11n      bool
-	TxRate     int
-	RxRate     int
-	Uptime     int64
-	IdleTime   int64
-	TxBytes    int64
-	RxBytes    int64
-	TxPackets  int64
-	RxPackets  int64
-	TxRetries  int64
+	Signal           int
+	Noise            int
+	RSSI             int
+	RadioProto       string
+	Is11ax           bool
+	Is11ac           bool
+	Is11n            bool
+	TxRate           int
+	RxRate           int
+	Uptime           int64
+	IdleTime         int64
+	TxBytes          int64
+	RxBytes          int64
+	TxPackets        int64
+	RxPackets        int64
+	TxRetries        int64
+	TxPacketsPresent bool
+	TxPacketSource   string
+	TxRetriesPresent bool
+	RetriesSource    string
+	UptimePresent    bool
 }
 
 // ParseStaInfo parses the text output of `wl sta_info <mac>`.
@@ -145,10 +150,14 @@ func ParseStaInfo(output string, fallbackBand string) ParsedStaInfo {
 	if match := txUcastPktsRegex.FindStringSubmatch(output); len(match) > 1 {
 		if val, err := strconv.ParseInt(match[1], 10, 64); err == nil {
 			info.TxPackets = val
+			info.TxPacketsPresent = true
+			info.TxPacketSource = "tx_ucast_pkts"
 		}
 	} else if match := txTotalPktsRegex.FindStringSubmatch(output); len(match) > 1 {
 		if val, err := strconv.ParseInt(match[1], 10, 64); err == nil {
 			info.TxPackets = val
+			info.TxPacketsPresent = true
+			info.TxPacketSource = "tx_total_pkts"
 		}
 	}
 
@@ -164,11 +173,18 @@ func ParseStaInfo(output string, fallbackBand string) ParsedStaInfo {
 	if match := txRetriesRegex.FindStringSubmatch(output); len(match) > 1 {
 		if val, err := strconv.ParseInt(match[1], 10, 64); err == nil {
 			info.TxRetries = val
+			info.TxRetriesPresent = true
+			if strings.Contains(strings.ToLower(match[0]), "data pkts retried") {
+				info.RetriesSource = "tx_data_pkts_retried"
+			} else {
+				info.RetriesSource = "tx_pkts_retries"
+			}
 		}
 	}
 	if match := uptimeRegex.FindStringSubmatch(output); len(match) > 1 {
 		if val, err := strconv.ParseInt(match[1], 10, 64); err == nil {
 			info.Uptime = val
+			info.UptimePresent = true
 		}
 	}
 	if match := idleRegex.FindStringSubmatch(output); len(match) > 1 {
@@ -198,15 +214,22 @@ func EnrichStation(sta *telemetry.Station, info ParsedStaInfo) {
 	sta.TxPackets = info.TxPackets
 	sta.RxPackets = info.RxPackets
 	sta.TxRetries = info.TxRetries
+	sta.TxPacketsPresent = info.TxPacketsPresent
+	sta.TxPacketCounterSource = info.TxPacketSource
+	sta.TxRetriesPresent = info.TxRetriesPresent
+	sta.RetryCounterSource = info.RetriesSource
+	sta.UptimePresent = info.UptimePresent
 	sta.TxRate = info.TxRate
 	sta.RxRate = info.RxRate
 	sta.Uptime = info.Uptime
 	sta.IdleTime = info.IdleTime
-	sta.Satisfaction = CalculateSatisfaction(sta.Signal, sta.RSSI, sta.TxPackets, sta.TxRetries)
+	// Retry quality needs a compatible interval delta. A cumulative counter or
+	// a missing measurement must not be presented as a current experience score.
+	sta.Satisfaction = 0
 }
 
-// CalculateSatisfaction computes a 0-100 UniFi WiFi Experience health score
-// based on RSSI/signal strength and transmit packet retry rates.
+// CalculateSatisfaction computes a bridge heuristic from signal and a
+// compatible packet/retry interval. It is not UniFi's proprietary score.
 func CalculateSatisfaction(signal, rssi int, txPackets, txRetries int64) int {
 	if signal == 0 {
 		return 0
@@ -224,7 +247,7 @@ func CalculateSatisfaction(signal, rssi int, txPackets, txRetries int64) int {
 	}
 
 	if txPackets > 0 && txRetries > 0 {
-		ratio := float64(txRetries) / float64(txPackets+txRetries)
+		ratio := float64(txRetries) / (float64(txPackets) + float64(txRetries))
 		penalty := int(ratio * 100 * 2) // e.g. 5% retries = 10% penalty
 		if penalty > 35 {
 			penalty = 35

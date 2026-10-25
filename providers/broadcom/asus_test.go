@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/agnithin/unifi-ap-bridge/pkg/telemetry"
 )
 
 func TestAsusProvider(t *testing.T) {
@@ -53,6 +55,12 @@ func TestAsusProvider(t *testing.T) {
 	}
 
 	provider := NewAsusProvider(mockRunner)
+	provider.readFile = func(path string) ([]byte, error) {
+		if path == "/proc/net/dev" {
+			return []byte("Inter-| Receive | Transmit\n face |bytes packets errs drop fifo frame compressed multicast|bytes packets errs drop fifo colls carrier compressed\n eth6: 1 2 0 0 0 0 0 0 1048576 1000 0 0 0 0 0 0\n"), nil
+		}
+		return nil, errors.New("not in fixture")
+	}
 
 	host, err := provider.GetHostInfo()
 	if err != nil {
@@ -106,8 +114,8 @@ func TestAsusProvider(t *testing.T) {
 	if sta.TxBytes != 1048576 || sta.RxBytes != 524288 || sta.TxPackets != 1000 || sta.RxPackets != 500 {
 		t.Errorf("sta traffic counters mismatch: %+v", sta)
 	}
-	if vap5G.TxBytes != 1048576 || vap5G.RxBytes != 524288 || vap5G.TxPackets != 1000 || vap5G.RxPackets != 500 {
-		t.Errorf("vap traffic counters mismatch: %+v", vap5G)
+	if vap5G.TxBytes == nil || vap5G.RxBytes == nil || vap5G.TxPackets == nil || vap5G.RxPackets == nil || *vap5G.TxBytes != 1048576 || *vap5G.RxBytes != 1 || *vap5G.TxPackets != 1000 || *vap5G.RxPackets != 2 || !vap5G.CountersKnown {
+		t.Errorf("expected measured VAP-interface counters: %+v", vap5G)
 	}
 
 	// Verify Radio Stats (RF Channel Utilization)
@@ -270,6 +278,212 @@ func TestRadioCollectionRejectsFailedRequiredReads(t *testing.T) {
 	}
 }
 
+func TestLLDPValidationAndVerifiedParentCache(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	valid := `{"lldp":{"interface":{"eth0":{"chassis":{"1":{"id":{"type":"mac","value":"6c:63:f8:30:9a:05"}}},"port":{"id":{"type":"mac","value":"6c:63:f8:30:9a:06"},"descr":"eth2"}}}}}`
+	response := valid
+	runner := func(ctx context.Context, name string, args ...string) (string, error) {
+		if name == "lldpcli" {
+			return response, nil
+		}
+		return "", nil
+	}
+	p := NewAsusProvider(runner)
+	p.now = func() time.Time { return now }
+	chassis, portID, remote, cached, err := p.resolveLLDPNeighborContext(context.Background())
+	if err != nil || cached || chassis != "6c:63:f8:30:9a:05" || portID != "6c:63:f8:30:9a:06" || remote != 3 {
+		t.Fatalf("valid LLDP neighbor parsed incorrectly: %q %q %d cached=%v err=%v", chassis, portID, remote, cached, err)
+	}
+	response = strings.Replace(valid, `"descr":"eth2"`, `"descr":"uplink"`, 1)
+	now = now.Add(10 * time.Second)
+	_, _, remote, cached, err = p.resolveLLDPNeighborContext(context.Background())
+	if err != nil || cached || remote != 0 || p.parentCache.remotePort != 0 {
+		t.Fatalf("new neighbor with unknown remote port retained stale port: remote=%d cached=%v parent=%+v err=%v", remote, cached, p.parentCache, err)
+	}
+	response = `{invalid json`
+	now = now.Add(time.Minute)
+	_, _, remote, cached, err = p.resolveLLDPNeighborContext(context.Background())
+	if err != nil || !cached || remote != 0 {
+		t.Fatalf("brief LLDP failure did not use verified parent: remote=%d cached=%v err=%v", remote, cached, err)
+	}
+	response = `{"lldp":{"interface":{"eth1":{}}}}`
+	_, _, _, cached, err = p.resolveLLDPNeighborContext(context.Background())
+	if err != nil || cached || p.parentCache != nil {
+		t.Fatalf("authoritative eth1-only response retained eth0 parent: cached=%v parent=%+v err=%v", cached, p.parentCache, err)
+	}
+	response = valid
+	_, _, _, _, err = p.resolveLLDPNeighborContext(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	response = `{invalid json`
+	now = now.Add(parentCacheTTL)
+	if _, _, _, _, err = p.resolveLLDPNeighborContext(context.Background()); err == nil || p.parentCache != nil {
+		t.Fatal("LLDP parent was reused at the exact cache expiry boundary")
+	}
+	response = valid
+	_, _, _, _, err = p.resolveLLDPNeighborContext(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	response = `{invalid json`
+	now = time.Unix(1_005, 0)
+	if _, _, _, _, err = p.resolveLLDPNeighborContext(context.Background()); err == nil || p.parentCache != nil {
+		t.Fatal("clock rollback extended or retained cached LLDP parent")
+	}
+
+	response = strings.Replace(valid, `"type":"mac","value":"6c:63:f8:30:9a:05"`, `"type":"local","value":"gateway"`, 1)
+	p.parentCache = nil
+	if _, _, _, _, err = p.resolveLLDPNeighborContext(context.Background()); err == nil {
+		t.Fatal("non-MAC chassis subtype was accepted")
+	}
+	response = strings.Replace(valid, `"descr":"eth2"`, `"descr":"eth3"`, 1)
+	response = strings.Replace(response, `"value":"6c:63:f8:30:9a:06"`, `"value":"eth2"`, 1)
+	response = strings.Replace(response, `"type":"mac","value":"eth2"`, `"type":"interface name","value":"eth2"`, 1)
+	if _, _, _, _, err = p.resolveLLDPNeighborContext(context.Background()); err == nil {
+		t.Fatal("conflicting remote port identifiers were accepted")
+	}
+	for _, value := range []string{"eth0", "eth2", "eth3"} {
+		if _, ok := parseRemoteEthernetPort("interface name", value); !ok {
+			t.Errorf("complete interface name %q was rejected", value)
+		}
+	}
+	for _, value := range []string{"eth4", "eth12", "3", "port 3"} {
+		if port, ok := parseRemoteEthernetPort("interface name", value); ok || port != 0 {
+			t.Errorf("unsupported remote port %q was guessed as %d", value, port)
+		}
+	}
+}
+
+func TestRetryExperienceRequiresCompatibleIntervalAndResetsSafely(t *testing.T) {
+	p := NewAsusProvider(nil)
+	start := time.Unix(100, 0)
+	makeVAP := func(packets, retries int64, source string, uptime int64, present bool) []telemetry.VAP {
+		return []telemetry.VAP{{Name: "ath1", InterfaceName: "wl1.1", BSSID: "02:00:00:00:00:01", StaTable: []telemetry.Station{{
+			MAC: "02:00:00:00:00:11", Signal: -60, RSSI: 30,
+			TxPackets: packets, TxRetries: retries, TxPacketsPresent: present, TxRetriesPresent: present,
+			TxPacketCounterSource: "tx_ucast_pkts", RetryCounterSource: source, Uptime: uptime, UptimePresent: true,
+		}}}}
+	}
+	first := makeVAP(100, 4, "tx_pkts_retries", 50, true)
+	p.applyRetryInterval(first, start)
+	if first[0].StaTable[0].Satisfaction != 0 {
+		t.Fatal("first cumulative sample must not produce a retry score")
+	}
+	second := makeVAP(200, 14, "tx_pkts_retries", 60, true)
+	p.applyRetryInterval(second, start.Add(10*time.Second))
+	if score := second[0].StaTable[0].Satisfaction; score <= 0 || score >= 100 {
+		t.Fatalf("expected interval heuristic score, got %d", score)
+	}
+	retriesOnly := makeVAP(200, 24, "tx_pkts_retries", 70, true)
+	p.applyRetryInterval(retriesOnly, start.Add(15*time.Second))
+	if retriesOnly[0].StaTable[0].Satisfaction != 0 {
+		t.Fatal("retry-only delta without packet progress produced a score")
+	}
+	reset := makeVAP(2, 1, "tx_pkts_retries", 1, true)
+	p.applyRetryInterval(reset, start.Add(20*time.Second))
+	if reset[0].StaTable[0].Satisfaction != 0 {
+		t.Fatal("counter/association reset must clear retry quality")
+	}
+	afterReset := makeVAP(20, 3, "tx_pkts_retries", 11, true)
+	p.applyRetryInterval(afterReset, start.Add(30*time.Second))
+	if afterReset[0].StaTable[0].Satisfaction == 0 {
+		t.Fatal("compatible post-reset interval did not score")
+	}
+	changedSource := makeVAP(30, 4, "tx_data_pkts_retried", 21, true)
+	p.applyRetryInterval(changedSource, start.Add(40*time.Second))
+	if changedSource[0].StaTable[0].Satisfaction != 0 {
+		t.Fatal("retry source change must invalidate interval")
+	}
+	departed := []telemetry.VAP{{Name: "ath1", InterfaceName: "wl1.1", BSSID: "02:00:00:00:00:01"}}
+	p.applyRetryInterval(departed, start.Add(50*time.Second))
+	if len(p.retryBaselines) != 0 {
+		t.Fatalf("departed station baseline was retained: %+v", p.retryBaselines)
+	}
+	wrapProvider := NewAsusProvider(nil)
+	nearWrap := makeVAP(int64(^uint64(0)>>1)-5, int64(^uint64(0)>>1)-3, "tx_pkts_retries", 40, true)
+	wrapProvider.applyRetryInterval(nearWrap, start)
+	wrapped := makeVAP(4, 2, "tx_pkts_retries", 50, true)
+	wrapProvider.applyRetryInterval(wrapped, start.Add(10*time.Second))
+	if wrapped[0].StaTable[0].Satisfaction != 0 {
+		t.Fatal("unknown-width counter wrap was interpreted as a valid interval")
+	}
+}
+
+func TestConfirmedUplinkLossClearsParentAndFDBAttachments(t *testing.T) {
+	var lldpCalls atomic.Int32
+	runner := func(ctx context.Context, name string, args ...string) (string, error) {
+		if name == "nvram" {
+			joined := strings.Join(args, " ")
+			switch joined {
+			case "get lan_hwaddr":
+				return "00:11:22:33:44:55", nil
+			case "get lan_gateway":
+				return "10.0.0.1", nil
+			case "get lan_ipaddr":
+				return "10.0.0.2", nil
+			}
+		}
+		if name == "lldpcli" {
+			lldpCalls.Add(1)
+			return "", nil
+		}
+		if name == "brctl" {
+			return "", nil
+		}
+		return "", nil
+	}
+	readFile := func(path string) ([]byte, error) {
+		switch {
+		case strings.HasSuffix(path, "/carrier"):
+			return []byte("0"), nil
+		case strings.HasSuffix(path, "/speed"):
+			return []byte("0"), nil
+		case strings.HasSuffix(path, "/duplex"):
+			return []byte("unknown"), nil
+		case path == "/proc/net/dev":
+			return []byte(""), nil
+		case path == "/proc/net/arp":
+			return []byte("IP address HW type Flags HW address Mask Device\n"), nil
+		default:
+			return nil, errors.New("missing fixture")
+		}
+	}
+	p := NewAsusProvider(runner)
+	p.readFile = readFile
+	p.readDir = func(string) ([]os.DirEntry, error) { return nil, errors.New("no bridge fixtures") }
+	p.parentCache = &verifiedParent{localInterface: "eth0", chassisMAC: "6c:63:f8:30:9a:05", portID: "eth2", remotePort: 3, verifiedAt: time.Now()}
+	ports, _, uplink, err := p.GetPortTableContext(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.parentCache != nil || lldpCalls.Load() != 0 {
+		t.Fatalf("confirmed link loss retained or re-read parent: cache=%+v calls=%d", p.parentCache, lldpCalls.Load())
+	}
+	if !uplink.LinkKnown || uplink.Up || uplink.UplinkMAC != "" || uplink.UplinkRemotePort != 0 {
+		t.Fatalf("stale uplink survived confirmed link loss: %+v", uplink)
+	}
+	if len(ports[0].MacTable) != 0 || ports[0].LastConnection != nil {
+		t.Fatalf("uplink attachments survived confirmed link loss: %+v", ports[0])
+	}
+}
+
+func TestPerSampleProcSnapshotIsReadOnce(t *testing.T) {
+	var calls atomic.Int32
+	p := NewAsusProvider(nil)
+	p.readFile = func(string) ([]byte, error) { calls.Add(1); return []byte("eth5: fixture"), nil }
+	ctx := context.WithValue(context.Background(), sampleFileCacheKey{}, &sampleFileCache{values: make(map[string][]byte), errors: make(map[string]error)})
+	for i := 0; i < 2; i++ {
+		data, err := p.readSampleFile(ctx, "/proc/net/dev")
+		if err != nil || string(data) != "eth5: fixture" {
+			t.Fatalf("unexpected cached proc snapshot: %q %v", data, err)
+		}
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("proc snapshot read %d times within one sample", calls.Load())
+	}
+}
+
 func TestStaticInterfaceCacheExpiryAndFailedRefresh(t *testing.T) {
 	now := time.Unix(100, 0)
 	var calls atomic.Int32
@@ -382,6 +596,10 @@ func TestParseNetDev(t *testing.T) {
 	if eth3.rxBytes != 5000 || eth3.txBytes != 6000 {
 		t.Errorf("eth3 counters mismatch: %+v", eth3)
 	}
+	malformed := raw + "\n eth4: 1 2 not-a-number 0 0 0 0 0 3 4 0 0 0 0 0 0\n eth5: -1 2 0 0 0 0 0 0 3 4 0 0 0 0 0 0\n eth6: 1 2 0"
+	if got := parseNetDev(malformed); len(got) != 2 {
+		t.Fatalf("malformed/truncated counters must remain unavailable, got %+v", got)
+	}
 }
 
 func TestParseArpTable(t *testing.T) {
@@ -444,6 +662,103 @@ func TestParseBrctlShowmacs(t *testing.T) {
 	// Port 1 (eth0) is uplink, should be ignored
 	if len(macsByPort[1]) != 0 {
 		t.Errorf("expected 0 macs on uplink port 1, got %d", len(macsByPort[1]))
+	}
+}
+
+type testDirEntry string
+
+func (e testDirEntry) Name() string               { return string(e) }
+func (e testDirEntry) IsDir() bool                { return true }
+func (e testDirEntry) Type() os.FileMode          { return os.ModeDir }
+func (e testDirEntry) Info() (os.FileInfo, error) { return nil, errors.New("unused") }
+
+func TestBridgeDiscoveryAndEffectiveVLAN(t *testing.T) {
+	dirs := map[string][]os.DirEntry{
+		"/sys/class/net":               {testDirEntry("br-lan"), testDirEntry("br-guest")},
+		"/sys/class/net/br-lan/brif":   {testDirEntry("eth1"), testDirEntry("eth2")},
+		"/sys/class/net/br-guest/brif": {testDirEntry("eth3")},
+	}
+	files := map[string]string{
+		"/sys/class/net/br-lan/brif/eth1/port_no":     "0x2",
+		"/sys/class/net/br-guest/brif/eth3/port_no":   "0x4",
+		"/sys/class/net/br-lan/bridge/vlan_filtering": "1", "/sys/class/net/br-guest/bridge/vlan_filtering": "1",
+	}
+	files["/sys/class/net/br-lan/brif/eth2/port_no"] = "0x3"
+	readDir := func(path string) ([]os.DirEntry, error) {
+		if v, ok := dirs[path]; ok {
+			return v, nil
+		}
+		return nil, os.ErrNotExist
+	}
+	readFile := func(path string) ([]byte, error) {
+		if v, ok := files[path]; ok {
+			return []byte(v), nil
+		}
+		return nil, os.ErrNotExist
+	}
+	var vlanCalls []string
+	run := func(_ context.Context, name string, args ...string) (string, error) {
+		if name == "bridge" {
+			vlanCalls = append(vlanCalls, strings.Join(args, " "))
+			return "port vlan ids\neth1 20 PVID Egress Untagged\n", nil
+		}
+		return "", nil
+	}
+	bridges := discoverBridgeInventory(context.Background(), readDir, readFile, run)
+	if len(bridges) != 2 || bridges["br-lan"].ports[2] != "eth1" || bridges["br-guest"].ports[4] != "eth3" {
+		t.Fatalf("failed to discover multiple Linux bridges: %+v", bridges)
+	}
+	if len(vlanCalls) != 3 {
+		t.Fatalf("expected per-member VLAN inspection, got %v", vlanCalls)
+	}
+	if got := effectiveVLAN(bridges["br-lan"], "eth1"); got != 20 {
+		t.Fatalf("single effective VLAN=%d, want 20", got)
+	}
+	if got := effectiveVLAN(bridges["br-lan"], "eth2"); got != 0 {
+		t.Fatalf("unknown VLAN guessed as %d", got)
+	}
+	bridges["br-lan"] = bridgeInventory{vlanFiltering: true, vlanByIf: map[string][]int{"eth1": {20, 30}}}
+	if got := effectiveVLAN(bridges["br-lan"], "eth1"); got != 0 {
+		t.Fatalf("trunk VLAN guessed as %d", got)
+	}
+	ranged := parseBridgeVLANShow("port vlan ids\neth1 20 PVID Egress Untagged\n                  30-40\n")
+	if got := effectiveVLAN(bridgeInventory{vlanFiltering: true, vlanByIf: ranged}, "eth1"); got != 0 {
+		t.Fatalf("VLAN range was dropped and fabricated single VLAN %d from %v", got, ranged["eth1"])
+	}
+	invalidRange := parseBridgeVLANShow("port vlan ids\neth1 20\n                  30-bad\n")
+	if got := effectiveVLAN(bridgeInventory{vlanFiltering: true, vlanByIf: invalidRange}, "eth1"); got != 0 {
+		t.Fatalf("malformed VLAN range became VLAN %d", got)
+	}
+	// The bridge's port_no values differ from physical UniFi port indexes:
+	// bridge port 1 is eth1 (physical Port 2), bridge port 2 is eth2.
+	entries := map[int][]telemetry.PortMacEntry{2: {{MAC: "02:00:00:00:00:01"}}, 3: {{MAC: "02:00:00:00:00:02"}}}
+	assignPortVLANs(entries, physicalPortMap(map[int]string{1: "eth1", 2: "eth2"}), bridgeInventory{vlanFiltering: true, vlanByIf: map[string][]int{"eth1": {20}, "eth2": {30}}})
+	if entries[2][0].Vlan != 20 || entries[3][0].Vlan != 30 {
+		t.Fatalf("effective VLAN not assigned: %+v", entries[2])
+	}
+}
+
+func TestCarrierIsStableWithinOneSample(t *testing.T) {
+	reads := 0
+	p := NewAsusProvider(nil)
+	p.readFile = func(path string) ([]byte, error) {
+		if path != "/sys/class/net/eth0/carrier" {
+			return nil, os.ErrNotExist
+		}
+		reads++
+		if reads == 1 {
+			return []byte("1\n"), nil
+		}
+		return []byte("0\n"), nil
+	}
+	ctx := context.WithValue(context.Background(), sampleCarrierCacheKey{}, &sampleCarrierCache{values: make(map[string]struct {
+		value int
+		known bool
+	})})
+	first, firstKnown := p.readCarrier(ctx, "eth0")
+	second, secondKnown := p.readCarrier(ctx, "eth0")
+	if !firstKnown || !secondKnown || first != 1 || second != 1 || reads != 1 {
+		t.Fatalf("carrier changed within sample: first=%d/%v second=%d/%v reads=%d", first, firstKnown, second, secondKnown, reads)
 	}
 }
 
@@ -515,5 +830,9 @@ func TestFDBAgeIsLastSeenAndMultipleClientsAreUnambiguous(t *testing.T) {
 	_, last = parseBrctlShowmacs("3 02:00:00:00:00:11 no 5.0", map[int]string{3: "eth3"}, nil)
 	if last[4].ConnectedAt != 0 {
 		t.Fatal("FDB age treated as connection duration")
+	}
+	macs, last = parseBrctlShowmacs("3 02:00:00:00:00:11 no 5.0\n3 02:00:00:00:00:11 no 3.0\n3 02:00:00:00:00:12 no -1\n3 02:00:00:00:00:13 no NaN", map[int]string{3: "eth3"}, nil)
+	if len(macs[4]) != 1 || macs[4][0].MAC != "02:00:00:00:00:11" || last[4] == nil {
+		t.Fatalf("duplicate or invalid FDB entries were handled as clients: macs=%+v last=%+v", macs, last)
 	}
 }

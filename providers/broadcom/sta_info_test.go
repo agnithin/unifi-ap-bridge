@@ -132,6 +132,9 @@ smoothed rssi: -67`
 	if parsed.TxRetries != 16301 {
 		t.Errorf("TxRetries got %d, want %d", parsed.TxRetries, 16301)
 	}
+	if !parsed.TxPacketsPresent || parsed.TxPacketSource != "tx_ucast_pkts" || !parsed.TxRetriesPresent || parsed.RetriesSource != "tx_pkts_retries" || !parsed.UptimePresent {
+		t.Errorf("counter presence/source metadata missing: %+v", parsed)
+	}
 	if parsed.TxRate != 816660 {
 		t.Errorf("TxRate got %d, want %d", parsed.TxRate, 816660)
 	}
@@ -157,8 +160,21 @@ smoothed rssi: -67`
 	if sta.Uptime != 5595 || sta.IdleTime != 4 {
 		t.Errorf("EnrichStation time mismatch: uptime=%d, idle=%d", sta.Uptime, sta.IdleTime)
 	}
-	if sta.Satisfaction < 70 || sta.Satisfaction > 100 {
-		t.Errorf("expected reasonable satisfaction score (70-100), got %d", sta.Satisfaction)
+	if sta.Satisfaction != 0 {
+		t.Errorf("a single cumulative sample must leave interval satisfaction unknown, got %d", sta.Satisfaction)
+	}
+}
+
+func TestParseStaInfo_RetryScoreSourcePair(t *testing.T) {
+	raw := `in network 100 seconds
+tx ucast pkts: 200
+tx pkts retries: 8`
+	parsed := ParseStaInfo(raw, "na")
+	if !parsed.TxPacketsPresent || parsed.TxPacketSource != "tx_ucast_pkts" || parsed.TxPackets != 200 {
+		t.Fatalf("unicast packet source not captured: %+v", parsed)
+	}
+	if !parsed.TxRetriesPresent || parsed.RetriesSource != "tx_pkts_retries" || parsed.TxRetries != 8 {
+		t.Fatalf("data retry source not captured: %+v", parsed)
 	}
 }
 

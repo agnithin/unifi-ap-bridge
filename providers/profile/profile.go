@@ -178,28 +178,31 @@ func (p *ProfileProvider) GetVAPs(wlanMapping map[string]string) ([]telemetry.VA
 		}
 
 		vaps = append(vaps, telemetry.VAP{
-			Name:      vc.Name,
-			Radio:     band,
-			RadioName: vc.Radio,
-			MAC:       bssid,
-			BSSID:     bssid,
-			ESSID:     vc.SSID,
-			Channel:   vc.Channel,
-			State:     "RUN",
-			Up:        true,
-			IsGuest:   false,
-			NumSta:    len(stations),
-			WlanID:    wlanID,
-			TxBytes:   vapTxBytes,
-			RxBytes:   vapRxBytes,
-			TxPackets: vapTxPackets,
-			RxPackets: vapRxPackets,
-			StaTable:  stations,
+			Name:          vc.Name,
+			Radio:         band,
+			RadioName:     vc.Radio,
+			MAC:           bssid,
+			BSSID:         bssid,
+			ESSID:         vc.SSID,
+			Channel:       vc.Channel,
+			State:         "RUN",
+			Up:            true,
+			CountersKnown: true,
+			IsGuest:       false,
+			NumSta:        len(stations),
+			WlanID:        wlanID,
+			TxBytes:       int64Ptr(vapTxBytes),
+			RxBytes:       int64Ptr(vapRxBytes),
+			TxPackets:     int64Ptr(vapTxPackets),
+			RxPackets:     int64Ptr(vapRxPackets),
+			StaTable:      stations,
 		})
 	}
 
 	return vaps, nil
 }
+
+func int64Ptr(value int64) *int64 { return &value }
 
 func (p *ProfileProvider) GetRadioStats() ([]telemetry.RadioStat, error) {
 	return []telemetry.RadioStat{
@@ -210,16 +213,16 @@ func (p *ProfileProvider) GetRadioStats() ([]telemetry.RadioStat, error) {
 
 func (p *ProfileProvider) GetPortTable() ([]telemetry.Port, []telemetry.EthernetPort, *telemetry.Uplink, error) {
 	ports := []telemetry.Port{
-		{PortIdx: 1, Name: "Port 1", Media: "2.5GE", Up: true, Speed: 2500, FullDuplex: true, Enable: true, Enabled: true, IsUplink: true, OpMode: "switch", Forward: "all", Autoneg: true, StpState: "forwarding", StpPathcost: 8000, RxBytes: 1048576, TxBytes: 2097152},
-		{PortIdx: 2, Name: "Port 2", Media: "GE", Up: false, Speed: 0, FullDuplex: false, Enable: true, Enabled: true, IsUplink: false, OpMode: "switch", Forward: "all", Autoneg: true, StpState: "disabled", StpPathcost: 200000},
-		{PortIdx: 3, Name: "Port 3", Media: "GE", Up: false, Speed: 0, FullDuplex: false, Enable: true, Enabled: true, IsUplink: false, OpMode: "switch", Forward: "all", Autoneg: true, StpState: "disabled", StpPathcost: 200000},
-		{PortIdx: 4, Name: "Port 4", Media: "GE", Up: true, Speed: 1000, FullDuplex: true, Enable: true, Enabled: true, IsUplink: false, OpMode: "switch", Forward: "all", Autoneg: true, StpState: "forwarding", StpPathcost: 20000, RxBytes: 524288, TxBytes: 524288},
+		{PortIdx: 1, Name: "Port 1", Media: "2.5GE", Up: true, LinkKnown: true, CountersKnown: true, Speed: 2500, FullDuplex: true, Enable: true, Enabled: true, IsUplink: true, OpMode: "switch", Forward: "all", Autoneg: true, StpState: "forwarding", StpPathcost: 8000, RxBytes: 1048576, TxBytes: 2097152},
+		{PortIdx: 2, Name: "Port 2", Media: "GE", Up: false, LinkKnown: true, CountersKnown: true, Speed: 0, FullDuplex: false, Enable: true, Enabled: true, IsUplink: false, OpMode: "switch", Forward: "all", Autoneg: true, StpState: "disabled", StpPathcost: 200000},
+		{PortIdx: 3, Name: "Port 3", Media: "GE", Up: false, LinkKnown: true, CountersKnown: true, Speed: 0, FullDuplex: false, Enable: true, Enabled: true, IsUplink: false, OpMode: "switch", Forward: "all", Autoneg: true, StpState: "disabled", StpPathcost: 200000},
+		{PortIdx: 4, Name: "Port 4", Media: "GE", Up: true, LinkKnown: true, CountersKnown: true, Speed: 1000, FullDuplex: true, Enable: true, Enabled: true, IsUplink: false, OpMode: "switch", Forward: "all", Autoneg: true, StpState: "forwarding", StpPathcost: 20000, RxBytes: 524288, TxBytes: 524288},
 	}
 	ethTable := []telemetry.EthernetPort{
-		{Name: "eth0", MAC: p.data.MAC, PortIdx: 1, Speed: 2500, FullDuplex: true, NumPort: 4},
-		{Name: "eth1", MAC: p.data.MAC, PortIdx: 2, Speed: 0, FullDuplex: false, NumPort: 4},
-		{Name: "eth2", MAC: p.data.MAC, PortIdx: 3, Speed: 0, FullDuplex: false, NumPort: 4},
-		{Name: "eth3", MAC: p.data.MAC, PortIdx: 4, Speed: 1000, FullDuplex: true, NumPort: 4},
+		{Name: "eth0", MAC: p.data.MAC, PortIdx: 1, Up: true, LinkKnown: true, Speed: 2500, FullDuplex: true, NumPort: 4},
+		{Name: "eth1", MAC: p.data.MAC, PortIdx: 2, Up: false, LinkKnown: true, Speed: 0, FullDuplex: false, NumPort: 4},
+		{Name: "eth2", MAC: p.data.MAC, PortIdx: 3, Up: false, LinkKnown: true, Speed: 0, FullDuplex: false, NumPort: 4},
+		{Name: "eth3", MAC: p.data.MAC, PortIdx: 4, Up: true, LinkKnown: true, Speed: 1000, FullDuplex: true, NumPort: 4},
 	}
 	uplink := &telemetry.Uplink{
 		Name:             "eth0",
@@ -229,6 +232,7 @@ func (p *ProfileProvider) GetPortTable() ([]telemetry.Port, []telemetry.Ethernet
 		Speed:            2500,
 		FullDuplex:       true,
 		Up:               true,
+		LinkKnown:        true,
 		NumPort:          1,
 		PortIdx:          1,
 		Media:            "2.5GE",

@@ -22,6 +22,7 @@ func BuildInterfaceTable(ports []Port, identities []EthernetPort, uplink *Uplink
 		}
 		entry.NumPort = 1
 		entry.Up, entry.Speed, entry.FullDuplex = port.Up, port.Speed, port.FullDuplex
+		entry.LinkKnown, entry.CountersKnown = port.LinkKnown, port.CountersKnown
 		entry.RxBytes, entry.TxBytes = port.RxBytes, port.TxBytes
 		entry.RxPackets, entry.TxPackets = port.RxPackets, port.TxPackets
 		entry.RxErrors, entry.TxErrors = port.RxErrors, port.TxErrors

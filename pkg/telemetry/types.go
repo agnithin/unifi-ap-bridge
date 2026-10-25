@@ -20,36 +20,43 @@ type Station struct {
 	Is11ac     bool   `json:"is_11ac,omitempty"`
 	Is11n      bool   `json:"is_11n,omitempty"`
 	// Traffic & Airtime Telemetry
-	TxBytes      int64 `json:"tx_bytes"`
-	RxBytes      int64 `json:"rx_bytes"`
-	TxPackets    int64 `json:"tx_packets"`
-	RxPackets    int64 `json:"rx_packets"`
-	TxRetries    int64 `json:"tx_retries,omitempty"`
-	TxRate       int   `json:"tx_rate,omitempty"`      // in kbps (e.g. 58500)
-	RxRate       int   `json:"rx_rate,omitempty"`      // in kbps (e.g. 54000)
-	Uptime       int64 `json:"uptime,omitempty"`       // seconds connected
-	IdleTime     int64 `json:"idletime,omitempty"`     // seconds idle
-	Satisfaction int   `json:"satisfaction,omitempty"` // WiFi Experience score (0-100)
+	TxBytes               int64  `json:"tx_bytes"`
+	RxBytes               int64  `json:"rx_bytes"`
+	TxPackets             int64  `json:"tx_packets"`
+	RxPackets             int64  `json:"rx_packets"`
+	TxRetries             int64  `json:"tx_retries,omitempty"`
+	TxRate                int    `json:"tx_rate,omitempty"`      // in kbps (e.g. 58500)
+	RxRate                int    `json:"rx_rate,omitempty"`      // in kbps (e.g. 54000)
+	Uptime                int64  `json:"uptime,omitempty"`       // seconds connected
+	IdleTime              int64  `json:"idletime,omitempty"`     // seconds idle
+	Satisfaction          int    `json:"satisfaction,omitempty"` // WiFi Experience score (0-100)
+	TxPacketsPresent      bool   `json:"-"`
+	TxPacketCounterSource string `json:"-"`
+	TxRetriesPresent      bool   `json:"-"`
+	RetryCounterSource    string `json:"-"`
+	UptimePresent         bool   `json:"-"`
 }
 
 type VAP struct {
-	Name      string    `json:"name"`
-	Radio     string    `json:"radio"`
-	RadioName string    `json:"radio_name"`
-	MAC       string    `json:"mac"`
-	BSSID     string    `json:"bssid"`
-	ESSID     string    `json:"essid"`
-	Channel   int       `json:"channel"`
-	State     string    `json:"state"` // "RUN"
-	Up        bool      `json:"up"`
-	IsGuest   bool      `json:"is_guest"`
-	NumSta    int       `json:"num_sta"`
-	WlanID    string    `json:"id,omitempty"` // Legacy 24-hex controller ObjectId
-	TxBytes   int64     `json:"tx_bytes"`
-	RxBytes   int64     `json:"rx_bytes"`
-	TxPackets int64     `json:"tx_packets"`
-	RxPackets int64     `json:"rx_packets"`
-	StaTable  []Station `json:"sta_table"`
+	Name          string    `json:"name"`
+	InterfaceName string    `json:"-"`
+	Radio         string    `json:"radio"`
+	RadioName     string    `json:"radio_name"`
+	MAC           string    `json:"mac"`
+	BSSID         string    `json:"bssid"`
+	ESSID         string    `json:"essid"`
+	Channel       int       `json:"channel"`
+	State         string    `json:"state"` // "RUN"
+	Up            bool      `json:"up"`
+	CountersKnown bool      `json:"counters_known,omitempty"`
+	IsGuest       bool      `json:"is_guest"`
+	NumSta        int       `json:"num_sta"`
+	WlanID        string    `json:"id,omitempty"` // Legacy 24-hex controller ObjectId
+	TxBytes       *int64    `json:"tx_bytes,omitempty"`
+	RxBytes       *int64    `json:"rx_bytes,omitempty"`
+	TxPackets     *int64    `json:"tx_packets,omitempty"`
+	RxPackets     *int64    `json:"rx_packets,omitempty"`
+	StaTable      []Station `json:"sta_table"`
 }
 
 type Radio struct {
@@ -101,6 +108,8 @@ type Port struct {
 	Name           string              `json:"name"`
 	Media          string              `json:"media"`
 	Up             bool                `json:"up"`
+	LinkKnown      bool                `json:"link_known,omitempty"`
+	CountersKnown  bool                `json:"counters_known,omitempty"`
 	Speed          int                 `json:"speed"` // 10, 100, 1000, 2500
 	FullDuplex     bool                `json:"full_duplex"`
 	Enable         bool                `json:"enable"`
@@ -125,23 +134,25 @@ type Port struct {
 }
 
 type EthernetPort struct {
-	Up         bool   `json:"up"`
-	IP         string `json:"ip,omitempty"`
-	Netmask    string `json:"netmask,omitempty"`
-	RxBytes    int64  `json:"rx_bytes"`
-	TxBytes    int64  `json:"tx_bytes"`
-	RxPackets  int64  `json:"rx_packets"`
-	TxPackets  int64  `json:"tx_packets"`
-	RxErrors   int64  `json:"rx_errors"`
-	TxErrors   int64  `json:"tx_errors"`
-	RxDropped  int64  `json:"rx_dropped"`
-	TxDropped  int64  `json:"tx_dropped"`
-	Name       string `json:"name"`
-	MAC        string `json:"mac"`
-	PortIdx    int    `json:"port_idx,omitempty"`
-	Speed      int    `json:"speed"`
-	FullDuplex bool   `json:"full_duplex"`
-	NumPort    int    `json:"num_port"`
+	Up            bool   `json:"up"`
+	LinkKnown     bool   `json:"link_known,omitempty"`
+	CountersKnown bool   `json:"counters_known,omitempty"`
+	IP            string `json:"ip,omitempty"`
+	Netmask       string `json:"netmask,omitempty"`
+	RxBytes       int64  `json:"rx_bytes"`
+	TxBytes       int64  `json:"tx_bytes"`
+	RxPackets     int64  `json:"rx_packets"`
+	TxPackets     int64  `json:"tx_packets"`
+	RxErrors      int64  `json:"rx_errors"`
+	TxErrors      int64  `json:"tx_errors"`
+	RxDropped     int64  `json:"rx_dropped"`
+	TxDropped     int64  `json:"tx_dropped"`
+	Name          string `json:"name"`
+	MAC           string `json:"mac"`
+	PortIdx       int    `json:"port_idx,omitempty"`
+	Speed         int    `json:"speed"`
+	FullDuplex    bool   `json:"full_duplex"`
+	NumPort       int    `json:"num_port"`
 }
 
 type Uplink struct {
@@ -153,6 +164,7 @@ type Uplink struct {
 	Speed            int    `json:"speed"`
 	FullDuplex       bool   `json:"full_duplex"`
 	Up               bool   `json:"up"`
+	LinkKnown        bool   `json:"link_known,omitempty"`
 	NumPort          int    `json:"num_port"`
 	PortIdx          int    `json:"port_idx,omitempty"`
 	Media            string `json:"media,omitempty"`
