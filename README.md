@@ -250,6 +250,8 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="$BUILD_FLAGS"
 
 ### Prioritized backlog and operator decisions
 
+For the ordered work packets, acceptance tests, Luna/Sol escalation rules and worker launch prompt, start at [the autonomous worker plan](docs/AUDIT_STATE.md#11-autonomous-worker-plan--2026-10-25).
+
 The detailed evidence and acceptance criteria are in [the project audit/backlog](docs/AUDIT_STATE.md#8-approved-backlog-and-fix-batch--2026-10-25). The current batch passed local tests, ARM builds and [hosted validation](https://github.com/agnithin/unifi-ap-bridge/actions/runs/40210104250); it is now deployed on both APs. Runtime/three-radio/topology acceptance passed; settings UI and controlled recovery/persistence checks remain pending. See [rollout evidence](docs/AUDIT_STATE.md#9-v125-sequential-rollout-and-live-acceptance--2026-10-25).
 
 | Work | Status / next step |

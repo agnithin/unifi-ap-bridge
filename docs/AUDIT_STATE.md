@@ -390,3 +390,92 @@ Removed the delayed background success-to-UP_TO_DATE rewrite, which could otherw
 **Acceptance blocker:** Chrome reported another extension panel blocking automation on the Asus page. Browser settings-save/update-check acceptance remains pending user dismissal/login; this does not block the isolated source tests. Immutable bundles, automatic rollback, cross-operation locking and per-node final update outcomes remain open.
 
 **Hosted result:** updater-locking implementation `ecec3952ca6b674605f7693253b40a986b458adf` passed [CI run 40212251082](https://github.com/agnithin/unifi-ap-bridge/actions/runs/40212251082), including Go tests, shell/UI regressions and ARMv7/ARM64 builds. Dev artifacts were published. This does not change the installed `be106ec` APs or close the blocked Asus browser acceptance.
+
+## 11. Autonomous Worker Plan — 2026-10-25
+
+This is the execution entry point for the remaining audit work. Read this section first, the short current-status header, and only the source/tests needed for the active packet. Sections 7–10 contain supporting evidence; do not reload the full historical ledger for each task. The operator requested a token-efficient autonomous workflow; the launch contract below specifies the proposed standing scope instead of asking permission at every routine step.
+
+### Operating model and current checkpoint
+
+Use one fresh dedicated project session in `/Users/nithinag/workspace/unifi-ap-bridge`, with **gpt-6-luna** as the primary worker. Start with high reasoning for implementation; use lower effort only for mechanical documentation/status work. This model/effort choice is a starting recommendation, not a measured cost guarantee. Use a **gpt-6.1-sol** subagent for bounded design/review/escalation when required below. One implementation writer at a time; parallel agents are not the default. Do not run this session and a second worker against the same checkout concurrently.
+
+A separate session does not automatically have a callback channel into this chat or automatically upgrade its own model. Explicitly permit its Sol subagent in the launch prompt. The worker can receive that review and continue without involving the operator. If the client cannot provide that model/subagent capability, record a concise escalation packet and proceed with independent work; do not pretend the escalation occurred.
+
+- Installed baseline: both APs v1.2.5 dev, source `be106ec`; last runtime/UniFi UI evidence is Section 9, not a fresh sample at worker startup.
+- Latest code milestone: updater serialization `ecec395`; [CI 40212251082](https://github.com/agnithin/unifi-ap-bridge/actions/runs/40212251082) passed. Documentation checkpoint `72663d8`. Serialization is published in dev assets but not deployed to the APs. Read Git at startup rather than treating these hashes as permanently latest.
+- Preserve unrelated `scripts/__pycache__/` and any subsequent user changes. Do not clean the checkout indiscriminately.
+- Asus browser acceptance was blocked by another Chrome extension panel/login. Request the necessary human browser handoff once, then continue independent source packets; do not repeatedly poll a known blocked page.
+- Main/stable release remains separate. No merging main, stable tag publication, history rewrite, credential change, AP reboot, radio/network reconfiguration, firmware flashing or new active scan is included in the worker launch contract.
+
+### Ordered work packets
+
+Status for W1–W8: planned, not started by this plan. W0 is partly accepted with the remaining browser/persistence checks still open. Implement one packet at a time, preserving its stated boundary; combine tightly related updater packets into a meaningful CI/push checkpoint rather than pushing every edit.
+
+| Packet / audit link | Implementation scope and likely entry files | Completion evidence | Model / dependency |
+|---|---|---|---|
+| W0 — Acceptance baseline (B3–B5/B10) | Read fresh PID/status/heartbeat/links and deployed asset identity. When browser access is available, verify update checks on main/dev, installed-track preservation, health labels and settings no-op/custom-field preservation. Use an isolated config copy first; do not trigger a live sync or disable/reboot merely for coverage. | Dated compact runtime evidence; real browser outcome distinguished from fixture results. Existing tri-radio/topology acceptance is not repeated unless changed/stale or a regression is suspected. Human login/extension blocker is recorded once. | Luna for bounded checks; browser-capable reviewer if the client requires it. Independent source work continues while blocked. |
+| W1 — Complete immutable addon bundle (B1–B2) | `.github/workflows/release.yml`, `scripts/update.sh`, install/start packaging and updater fixtures. Define one versioned bundle containing binary, scripts, startup, WebUI and metadata from one source SHA. Fetch bundle and manifest from the same resolved release; verify architecture, archive paths/member types, checksum and staged version/commit. Reject mixed generations before any installation mutation. Preserve old binary assets for compatibility until migration is defined. | Local package generation and extraction proof; fixtures for mutable-ref movement, wrong SHA/version/architecture, missing member, unsafe path/link and bad checksum. ARM build in CI; source metadata must match executed binary. Update docs/install procedure only when exercised. | Sol reviews format/migration invariants once; Luna implements bounded design. No live update yet. |
+| W2 — Transactional installation and rollback (B2) | Updater/startup/tests after W1. Preserve previous complete asset generation; stage before mutation, serialize activation, validate matching live PID/commit and fresh successful inform; restore known-good assets on copy/start/heartbeat failure. Include intentionally disabled installations. Preserve config/state/SSH identities; report rollback failures honestly. Specify restart/power-interruption recovery. | Failure injection at copy, extraction, start and missing heartbeat; restored assets and operational prior process where testable; interrupted transaction recovery fixtures. No success until acceptance; no rollback from an unverified arbitrary archive. | Luna implementation, mandatory Sol correctness review before rollout. Depends W1. |
+| W3 — Shared mutation coordination / per-node outcomes (B2–B4/B10) | `apply_config.sh`, Go settings helper, updater and `sync_nodes.sh`. Specify a consistent lock/ownership order for settings, install and cluster operations without deadlock or stealing active locks. Keep node-specific topology/adoption identity. Return explicit per-node stage/version/commit/freshness/outcome; do not equate dispatch with completion. | Overlapping settings/update/sync fixtures, deadlock/time-bound tests, partial-node failure and stale-status tests; unknown verification is not failure or success. Disabled state survives actual distribution paths. | Sol reviews shared lock/state design; Luna implements. Depends W2 for installation semantics. |
+| W4 — Bounded Asus actions / structured cluster state (B10) | `webui/unifi-bridge.asp`, apply/sync backend and JS/Python tests. Reuse request-ID matching/timeouts/background transport for settings and sync. Render structured reachability, freshness, commit/version, config verification and last successful inform; escape all untrusted text. Define canonical shared-config comparison excluding per-node fields and secrets before claiming equality. | Timeout/error/stale response/overlap fixtures; semantic settings no-op retains unknown fields and installed track. Browser checks when available; no credentials or secret-derived identifiers in status/logs. | Luna; escalate config canonicalization/transport ambiguity. Depends W3. |
+| W5 — Bounded sampling and watchdog recovery (B7) | `providers/provider.go`, `providers/broadcom/asus.go`, daemon exchange loop, watchdog and tests. Bound external commands and whole samples; propagate cancellation, cache static data with expiry, preserve truthful stale/unknown markers. Specify watchdog backoff and stale-process handling without restarting Wi-Fi or duplicating the daemon. | Fake slow/hung commands prove deadlines/cancellation/no process leak; no adoption reset for collection timeouts; cached-data expiry and restart backoff tests. Read-only live duration/RSS sampling after reviewed rollout; do not invent CPU guarantees. | Sol for interface/deadline design; Luna for scoped parser/cache/watchdog changes. Independent of W4 when one writer owns its files. |
+| W6 — Counter / LLDP / VLAN correctness (B8–B9) | Broadcom parser/telemetry/tests. Use reset-safe interval retry metrics, stable VAP counters when driver supplies them, measured unknowns otherwise. Validate LLDP subtype/interface/port forms, cache last verified parent with freshness/expiry and link-loss invalidation. Discover effective VLAN/bridge data only from evidence; FDB age stays last-seen, never connection duration. | Fixtures for counter reset/wrap/client churn, unknown/multiple SSIDs/VLANs, LLDP failures/port changes, link loss and multiple learned clients. Read-only firmware samples; keep current topology UI behavior. | Luna for specified parsers; Sol review for stateful counter/topology semantics. W5 provides cache/deadline contracts. |
+| W7 — Consolidated dev rollout / remaining acceptance (B1–B5/B7–B10) | Build a complete tested generation, conduct reviewed Node-first bridge-only rollout, verify, then Main. Use W1–W3 verified migration/rollback mechanics. Recheck affected Asus/UniFi UI and runtime features. Batch source fixes to avoid unnecessary restarts. | CI SHA = bundle SHA = deployed SHA; fresh matching PID/GCM, three radios, expected links/topology/HomeBase, config/identity preservation, per-node results and bounded resource sample. Restore known-good addon on failure, stop Main rollout if Node fails. | Sol release review; Luna executes reviewed steps under the launch contract. Human login/mandatory tool approvals cannot be automated away. |
+| W8 — Small authenticated commands (B11/F5) | After correctness packets, implement an opt-in typed reboot handler only if actual controller command evidence is available. Require adopted authenticated GCM, validation, deduplication/replay policy and explicit unsupported-command diagnostics without secrets. Never run controller-provided shell strings. | Synthetic authenticated/unauthenticated/replay/unsupported-command tests with mocked platform runner; no real AP reboot in this scope. If wire command is unknown, return evidence gap rather than guessing. | Sol protocol/security review; Luna implements reviewed handler. Actual enablement/reboot acceptance remains a separate operator decision. |
+
+WLAN ObjectId auto-discovery/cache, guest/VLAN classification beyond W6 evidence, richer optional roam detail and community packaging are a later feature tranche. Firmware, UniFi-triggered addon upgrades, broad provisioning and active scanner/capture remain deferred. Fixes first; do not silently expand this queue into new features.
+
+### Token and review discipline
+
+1. Read Git state and the active packet; narrow `rg` and bounded reads before opening files. Do not ask another agent to re-audit the repository or summarize this conversation. Prefer deterministic parsers/tests over model-generated interpretations of long logs.
+2. One primary writer. Reuse its context within the packet; start a fresh context at a packet boundary when the ledger is enough. Do not blindly fork this long conversation. A fresh Sol escalation receives only the contract, relevant diff, failing test/evidence and exact question.
+3. Escalate after two unsuccessful attempts at the same substantive failure, a missing architecture/protocol decision, an unintended scope expansion, a security/adoption risk, or evidence contradicting the plan. The two-attempt rule is a cost guard, not permission to make two risky live attempts. Trivial deterministic typos do not consume a full escalation.
+4. Mandatory Sol review for bundle/install/rollback/shared-lock design, command authentication and any live rollout. Review only the changed packet, concrete invariants and tests. Agent review cannot grant new user permissions. Resolve findings and continue automatically within the standing contract.
+5. Run packet-specific regressions while editing. Full relevant Go race/vet/shell/UI/cluster checks once at a coherent milestone; CI/ARM builds once the source checkpoint is ready. Re-run only changed/failed checks unless a new concern warrants broader validation.
+6. Keep small logical local commits; one integration owner pushes dev after validation and review. No force-push. Docs-only results use `[skip ci]`. Do not publish new dev assets for every documentation or exploratory iteration.
+7. Update this ledger with task state, commit, checks, deployed state and next action; short summaries replace raw successful logs. Keep implemented, CI-passed, published, deployed and live-accepted as separate states. A partial fix does not close its original audit acceptance criteria.
+8. Continue independent packets when browser access or a decision is blocked. Ask the operator only for a specific outside-scope decision or required human handoff. Report unresolved blockers; do not end each packet by asking whether to continue.
+
+### Proposed standing launch contract
+
+The following is a copy/paste instruction for the dedicated worker. It becomes its explicit task authorization when the operator sends it; writing it here alone does not expand deployment/credential permissions. Sandbox, browser and organization policy still apply. Start the session in the bridge project so normal repository writes are within its permitted workspace; do not disable safeguards to avoid a misplaced workspace root.
+
+```text
+Work autonomously on /Users/nithinag/workspace/unifi-ap-bridge using Luna.
+Use docs/AUDIT_STATE.md Section 11 as the execution plan. Read the current
+status header and the active packet; load older evidence only when needed.
+
+Execute W0–W7 in order where dependencies apply, continuing independent
+source work if browser checks are blocked. W8 is code/tests only and follows
+the correctness work. Use one writer, not a parallel agent swarm.
+
+You may spawn a gpt-6.1-sol subagent for the bounded design/review/escalation
+rules in the plan. Give it fresh minimal context, not the whole chat.
+Resolve its findings and continue; do not ask me to broker routine handoffs.
+If subagents are unavailable, record the exact escalation and continue safe
+independent work rather than claiming the review was completed.
+
+I authorize scoped code/docs/tests, local commits and validated dev pushes.
+I also authorize reviewed Node-first then Main updates of this existing
+telemetry addon after CI passes, bridge-daemon restarts needed by that rollout,
+and restoring the verified previous addon if acceptance fails. Preserve
+config, adoption state, SSH keys and actual Wi-Fi/radio/network settings.
+Stop a failed canary from propagating; verify recovery before further rollout.
+
+Do not merge main, publish a stable tag, force-push, rotate credentials,
+reboot either AP, change Wi-Fi/radio/VLAN configuration, flash firmware,
+enable a new UniFi control handler, or run active scans. Those are outside
+this standing authorization. Browser security/login handoffs and mandatory
+platform approvals still require me when the tool requires them.
+
+Do not ask me to approve each normal implementation/test/dev-push step.
+Ask only for a specific outside-scope decision or unavoidable human handoff;
+continue independent work meanwhile. Update the canonical ledger after each
+milestone. Finish with done/pending/blocked status and deployed commit IDs.
+```
+
+### Why this setup
+
+One dedicated Luna session minimizes repeated parent/worker analysis for this largely sequential backlog. Sol is used where a stronger bounded review can prevent costly retries or unsafe rollout decisions, rather than kept reasoning on every shell action. Same-session subagents remain a useful alternative if automatic parent escalation is the priority, but every active agent adds model/tool work; parallelism primarily reduces elapsed time, not guaranteed token usage. This is a workflow recommendation, not a measured token-saving percentage.
+
+Official guidance: [Codex subagents, model choices and inherited permissions](https://learn.chatgpt.com/docs/agent-configuration/subagents). No persistent worker, cross-session router, automatic model switch or expanded permissions were configured by this documentation change.
