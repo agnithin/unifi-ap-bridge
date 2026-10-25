@@ -18,6 +18,7 @@ mkdir -p "/tmp/var/wwwext/$ADDON_NAME"
 # or interleave installed assets. Never steal a stale lock automatically: a PID
 # alone cannot prove ownership after PID reuse or a partially completed install.
 UPDATE_LOCK="/tmp/unifi-bridge-update.lock"
+START_LOCK="/tmp/unifi-bridge-start.lock"
 acquire_update_lock() {
     if ! (umask 077; mkdir "$UPDATE_LOCK") 2>/dev/null; then
         echo "Another bridge update/check owns $UPDATE_LOCK; retry after it completes. If interrupted, inspect service and lock ownership before recovery." >&2
@@ -30,6 +31,22 @@ acquire_update_lock() {
     trap 'release_update_lock' 0
     trap 'exit 130' INT
     trap 'exit 143' TERM
+}
+
+acquire_activation_lock() {
+    if ! (umask 077; mkdir "$START_LOCK") 2>/dev/null; then
+        echo "Another bridge start or activation owns $START_LOCK" >&2
+        return 1
+    fi
+    echo "$$" > "$START_LOCK/pid" || { rmdir "$START_LOCK" 2>/dev/null; return 1; }
+    trap 'release_activation_lock; release_update_lock' 0
+}
+
+release_activation_lock() {
+    if [ "$(cat "$START_LOCK/pid" 2>/dev/null)" = "$$" ]; then
+        rm -f "$START_LOCK/pid"
+        rmdir "$START_LOCK" 2>/dev/null || true
+    fi
 }
 
 release_update_lock() {
@@ -139,6 +156,254 @@ window.unifiBridgeUpdate = {
 EOF
     mv -f "$UPDATE_JS.tmp" "$UPDATE_JS"
     chmod 644 "$UPDATE_JS"
+}
+
+managed_assets="unifi-bridge.tar.gz
+unifi-bridge.tar.gz.sha256
+start.sh
+apply_config.sh
+sync_nodes.sh
+unifi-bridge.sh
+update.sh
+watchdog.sh
+version.txt
+webui/unifi-bridge.asp"
+TXN_DIR="$INSTALL_DIR/.update-transaction"
+
+begin_transaction() {
+    [ ! -e "$TXN_DIR" ] || { echo "Unfinished addon transaction exists; inspect $TXN_DIR" >&2; return 1; }
+    (umask 077; mkdir -p "$TXN_DIR/snapshot") || return 1
+    : > "$TXN_DIR/manifest" || return 1
+    printf '%s\n' "$managed_assets" | while IFS= read -r rel; do
+        [ -n "$rel" ] || continue
+        if [ -f "$INSTALL_DIR/$rel" ]; then
+            mkdir -p "$TXN_DIR/snapshot/$(dirname "$rel")" || exit 1
+            cp -p "$INSTALL_DIR/$rel" "$TXN_DIR/snapshot/$rel" || exit 1
+            printf 'present %s\n' "$rel" >> "$TXN_DIR/manifest" || exit 1
+        else
+            printf 'absent %s\n' "$rel" >> "$TXN_DIR/manifest" || exit 1
+        fi
+    done || { rm -rf "$TXN_DIR"; return 1; }
+    prior_member="unifi-bridge-${ARCH_SUFFIX}"
+    prior_dir="$tmp_dir/prior-snapshot"
+    mkdir -p "$prior_dir" || { rm -rf "$TXN_DIR"; return 1; }
+    if [ ! -f "$TXN_DIR/snapshot/unifi-bridge.tar.gz" ] || [ ! -f "$TXN_DIR/snapshot/unifi-bridge.tar.gz.sha256" ] ||
+       ! tar -tzf "$TXN_DIR/snapshot/unifi-bridge.tar.gz" > "$tmp_dir/prior-members" 2>/dev/null ||
+       ! tar -tvzf "$TXN_DIR/snapshot/unifi-bridge.tar.gz" > "$tmp_dir/prior-types" 2>/dev/null; then
+        echo "No extractable prior addon generation is available for safe rollback" >&2
+        rm -rf "$TXN_DIR"; return 1
+    fi
+    prior_listing=$(LC_ALL=C sort "$tmp_dir/prior-members")
+    prior_complete="apply_config.sh
+bundle.json
+install.sh
+start.sh
+sync_nodes.sh
+${prior_member}
+unifi-bridge.asp
+unifi-bridge.sh
+update.sh
+version.txt
+watchdog.sh"
+    if [ "$prior_listing" != "$prior_complete" ]; then
+        echo "Prior archive member set is not an approved addon generation" >&2
+        rm -rf "$TXN_DIR"; return 1
+    fi
+    prior_expected=$(awk -v name="$(basename "$TXN_DIR/snapshot/unifi-bridge.tar.gz")" 'NF==2 && $2==name {print $1}' "$TXN_DIR/snapshot/unifi-bridge.tar.gz.sha256")
+    prior_actual=$(openssl dgst -sha256 "$TXN_DIR/snapshot/unifi-bridge.tar.gz" 2>/dev/null | awk '{print $NF}')
+    [ "${#prior_expected}" -eq 64 ] && [ "$prior_expected" = "$prior_actual" ] || { echo "Prior generation checksum is missing or invalid" >&2; rm -rf "$TXN_DIR"; return 1; }
+    prior_invalid_types=$(awk 'substr($0,1,1)!="-" || substr($0,6,1)=="w" || substr($0,9,1)=="w" || substr($0,4,1) ~ /[sS]/ || substr($0,7,1) ~ /[sS]/ || substr($0,10,1) ~ /[tT]/ { print "invalid"; exit } END { if (!NR) print "invalid" }' "$tmp_dir/prior-types")
+    if [ -n "$prior_invalid_types" ] || ! tar -xzf "$TXN_DIR/snapshot/unifi-bridge.tar.gz" -C "$prior_dir" >/dev/null 2>&1; then
+        echo "Prior archive contains unsafe member types or could not be extracted" >&2
+        rm -rf "$TXN_DIR"; return 1
+    fi
+    prior_binary="$prior_dir/$prior_member"
+    if [ ! -f "$prior_binary" ]; then
+        echo "Prior addon archive has no binary for this architecture" >&2
+        rm -rf "$TXN_DIR"; return 1
+    fi
+    prior_identity=$("$prior_binary" -version 2>/dev/null) || { rm -rf "$TXN_DIR"; return 1; }
+    prior_version=$(printf '%s' "$prior_identity" | sed -n 's/^unifi-bridge \([^ ]*\).*/\1/p')
+    prior_commit=$(printf '%s' "$prior_identity" | sed -n 's/.*commit: \([^,]*\),.*/\1/p')
+    prior_meta_version=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$prior_dir/bundle.json")
+    prior_meta_commit=$(sed -n 's/^[[:space:]]*"commit"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$prior_dir/bundle.json")
+    prior_meta_arch=$(sed -n 's/^[[:space:]]*"architecture"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$prior_dir/bundle.json")
+    [ "$prior_meta_version" = "$prior_version" ] && [ "$prior_meta_commit" = "$prior_commit" ] && [ "$prior_meta_arch" = "$ARCH_SUFFIX" ] || { echo "Prior bundle metadata and executable identity disagree" >&2; rm -rf "$TXN_DIR"; return 1; }
+    prior_digest=$(openssl dgst -sha256 "$prior_binary" 2>/dev/null | awk '{print $NF}')
+    live_digest=$(openssl dgst -sha256 /tmp/unifi-bridge/unifi-bridge 2>/dev/null | awk '{print $NF}')
+    [ -n "$prior_digest" ] && [ "$prior_digest" = "$live_digest" ] || { echo "Prior archive binary does not match the current runtime executable" >&2; rm -rf "$TXN_DIR"; return 1; }
+    [ "$prior_version" = "$(cat "$TXN_DIR/snapshot/version.txt" 2>/dev/null | tr -d ' \t\r\n')" ] || { echo "Prior bundle and installed version disagree" >&2; rm -rf "$TXN_DIR"; return 1; }
+    case "$prior_commit" in *[!0-9a-f]*|'') prior_commit="" ;; esac
+    [ "${#prior_commit}" -eq 40 ] || { echo "Prior bundle source identity is not verifiable" >&2; rm -rf "$TXN_DIR"; return 1; }
+    for rel in start.sh apply_config.sh sync_nodes.sh unifi-bridge.sh update.sh watchdog.sh; do
+        [ "$(openssl dgst -sha256 "$TXN_DIR/snapshot/$rel" 2>/dev/null | awk '{print $NF}')" = "$(openssl dgst -sha256 "$prior_dir/$rel" 2>/dev/null | awk '{print $NF}')" ] || { echo "Prior installed script set does not match its bundle" >&2; rm -rf "$TXN_DIR"; return 1; }
+    done
+    [ "$(openssl dgst -sha256 "$TXN_DIR/snapshot/webui/unifi-bridge.asp" 2>/dev/null | awk '{print $NF}')" = "$(openssl dgst -sha256 "$prior_dir/unifi-bridge.asp" 2>/dev/null | awk '{print $NF}')" ] || { echo "Prior installed WebUI does not match its bundle" >&2; rm -rf "$TXN_DIR"; return 1; }
+    if "$prior_binary" -config "$CONFIG_FILE" -is-enabled; then
+        prior_status=$(cat "$STATUS_JS" 2>/dev/null)
+        prior_pids=$(pidof unifi-bridge 2>/dev/null | tr -s ' ' | sed 's/^ //;s/ $//')
+        prior_pid=$(printf '%s' "$prior_status" | sed -n 's/.*"pid":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)
+        prior_updated=$(printf '%s' "$prior_status" | sed -n 's/.*"status_updated_at":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)
+        prior_now=$(date +%s)
+        prior_exe=$(readlink "/proc/$prior_pid/exe" 2>/dev/null)
+        prior_inform=$(printf '%s' "$prior_status" | sed -n 's/.*"last_successful_inform":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+        [ -n "$prior_pids" ] && ! printf '%s' "$prior_pids" | grep -q ' ' && [ "$prior_pids" = "$prior_pid" ] &&
+            [ "$prior_exe" = "/tmp/unifi-bridge/unifi-bridge" ] && [ -n "$prior_inform" ] &&
+            [ "$prior_updated" -le "$prior_now" ] 2>/dev/null && [ $((prior_now - prior_updated)) -le 180 ] 2>/dev/null &&
+            printf '%s' "$prior_status" | grep -Fq "\"version\": \"$prior_version\"" &&
+            printf '%s' "$prior_status" | grep -Fq "\"commit\": \"$prior_commit\"" &&
+            printf '%s' "$prior_status" | grep -Fq '"last_status": "Active (' || {
+                echo "Prior running addon identity is not currently verified" >&2; rm -rf "$TXN_DIR"; return 1;
+            }
+    else
+        prior_enabled_rc=$?
+        prior_status=$(cat "$STATUS_JS" 2>/dev/null)
+        prior_pids=$(pidof unifi-bridge 2>/dev/null | tr -d ' \t\r\n')
+        # Disabled status is static and the watchdog intentionally does not
+        # refresh it. The validated installed helper plus absence of a process
+        # prove disabled state; freshness is required only after candidate start.
+        [ "$prior_enabled_rc" -eq 3 ] && [ -z "$prior_pids" ] &&
+            printf '%s' "$prior_status" | grep -Eq '"enabled"[[:space:]]*:[[:space:]]*false' &&
+            printf '%s' "$prior_status" | grep -Eq '"running"[[:space:]]*:[[:space:]]*false' &&
+            printf '%s' "$prior_status" | grep -Eq "\"version\"[[:space:]]*:[[:space:]]*\"$prior_version\"" &&
+            printf '%s' "$prior_status" | grep -Eq "\"commit\"[[:space:]]*:[[:space:]]*\"$prior_commit\"" || {
+                echo "Prior disabled addon identity is not currently verified" >&2; rm -rf "$TXN_DIR"; return 1;
+            }
+    fi
+    sync
+    printf 'ACTIVATING\n' > "$TXN_DIR/active.tmp" || return 1
+    mv -f "$TXN_DIR/active.tmp" "$TXN_DIR/active" || return 1
+    sync
+}
+
+atomic_install() {
+    source_file="$1"; dest_file="$2"; mode="$3"
+    dest_dir=$(dirname "$dest_file")
+    mkdir -p "$dest_dir" || return 1
+    temp_file="$dest_file.update.$$"
+    rm -f "$temp_file"
+    cp -f "$source_file" "$temp_file" && chmod "$mode" "$temp_file" && mv -f "$temp_file" "$dest_file"
+    result=$?
+    [ "$result" -eq 0 ] || rm -f "$temp_file"
+    return "$result"
+}
+
+restore_transaction() {
+    [ -f "$TXN_DIR/active" ] || return 1
+    UNIFI_BRIDGE_START_LOCK_HELD=1 "$INSTALL_DIR/start.sh" --recover-only || return 1
+    return 0
+}
+
+clear_transaction() {
+    complete="$INSTALL_DIR/.update-complete-$$"
+    mv "$TXN_DIR" "$complete" || return 1
+    sync
+    rm -rf "$complete"
+}
+
+restore_prior_entry_and_clear() {
+    atomic_install "$TXN_DIR/snapshot/start.sh" "$INSTALL_DIR/start.sh" 755 || return 1
+    sync
+    clear_transaction
+}
+
+rollback_and_verify() {
+    reason="$1"
+    rollback_started_at=$(date +%s)
+    write_update_status "ERROR" "$branch" "$local_ver" "${remote_ver:-}" "$reason; attempting verified rollback"
+    if ! restore_transaction; then
+        write_update_status "ERROR" "$branch" "$local_ver" "${remote_ver:-}" "$reason; ROLLBACK FAILED: prior addon assets could not be restored; journal retained"
+        return 1
+    fi
+    if ! UNIFI_BRIDGE_START_LOCK_HELD=1 "$INSTALL_DIR/start.sh"; then
+        write_update_status "ERROR" "$branch" "$local_ver" "${remote_ver:-}" "$reason; ROLLBACK UNVERIFIED: prior assets restored but startup failed"
+        return 1
+    fi
+    # Keep it simple and conservative: verify the prior process remains present
+    # and its status belongs to the prior generation. Disabled installs must
+    # publish disabled metadata and leave no bridge process.
+    prior_commit=$(sed -n 's/.*commit: \([^,]*\),.*/\1/p' "$TXN_DIR/snapshot/unifi-bridge.tar.gz" 2>/dev/null)
+    # The old executable is authoritative for a runnable prior generation.
+    prior_bin="$INSTALL_DIR/unifi-bridge.tar.gz"
+    if [ -f "$prior_bin" ]; then
+        mkdir -p "$tmp_dir/prior" && tar -xzf "$prior_bin" -C "$tmp_dir/prior" >/dev/null 2>&1 || {
+            write_update_status "ERROR" "$branch" "$local_ver" "${remote_ver:-}" "$reason; ROLLBACK UNVERIFIED: prior bundle could not be extracted"
+            return 1
+        }
+        prior_member="unifi-bridge-${ARCH_SUFFIX}"
+        prior_version=$($tmp_dir/prior/"$prior_member" -version 2>/dev/null)
+        prior_commit=$(printf '%s' "$prior_version" | sed -n 's/.*commit: \([^,]*\),.*/\1/p')
+        prior_ver=$(printf '%s' "$prior_version" | sed -n 's/^unifi-bridge \([^ ]*\).*/\1/p')
+    else
+        prior_commit=""; prior_ver=""
+    fi
+    if [ -n "$prior_commit" ] && [ -n "$prior_ver" ]; then
+        if $tmp_dir/prior/"$prior_member" -config "$CONFIG_FILE" -is-enabled; then
+            verify_live "$prior_ver" "$prior_commit" "$rollback_started_at"
+            if [ "$verified" -ne 1 ]; then
+                write_update_status "ERROR" "$branch" "$local_ver" "${remote_ver:-}" "$reason; ROLLBACK UNVERIFIED: prior assets restored but matching fresh heartbeat was not observed"
+                return 1
+            fi
+        else
+            prior_enabled_rc=$?
+            live_pids=$(pidof unifi-bridge 2>/dev/null | tr -d ' \t\r\n')
+            status_snapshot=$(cat "$STATUS_JS" 2>/dev/null)
+            if [ "$prior_enabled_rc" -ne 3 ] || [ -n "$live_pids" ] ||
+               ! printf '%s' "$status_snapshot" | grep -Eq '"enabled"[[:space:]]*:[[:space:]]*false' ||
+               ! printf '%s' "$status_snapshot" | grep -Eq '"running"[[:space:]]*:[[:space:]]*false' ||
+               ! printf '%s' "$status_snapshot" | grep -Eq "\"version\"[[:space:]]*:[[:space:]]*\"$prior_ver\"" ||
+               ! printf '%s' "$status_snapshot" | grep -Eq "\"commit\"[[:space:]]*:[[:space:]]*\"$prior_commit\""; then
+                write_update_status "ERROR" "$branch" "$local_ver" "${remote_ver:-}" "$reason; ROLLBACK UNVERIFIED: disabled prior state was not confirmed"
+                return 1
+            fi
+        fi
+    else
+        # A previously disabled installation has no resident daemon.
+        live_pids=$(pidof unifi-bridge 2>/dev/null | tr -d ' \t\r\n')
+        status_snapshot=$(cat "$STATUS_JS" 2>/dev/null)
+        case "$live_pids" in ''|*[!0-9]*) ;; *) live_pids="invalid" ;; esac
+        if [ -n "$live_pids" ] || ! printf '%s' "$status_snapshot" | grep -Fq '"enabled":false' ||
+           ! printf '%s' "$status_snapshot" | grep -Fq '"running":false'; then
+            write_update_status "ERROR" "$branch" "$local_ver" "${remote_ver:-}" "$reason; ROLLBACK UNVERIFIED: disabled prior state could not be confirmed"
+            return 1
+        fi
+    fi
+    if ! restore_prior_entry_and_clear; then
+        write_update_status "ERROR" "$branch" "$local_ver" "${remote_ver:-}" "$reason; prior process verified but recovery entry/journal cleanup failed"
+        return 1
+    fi
+    write_update_status "ERROR" "$branch" "$local_ver" "${remote_ver:-}" "$reason; previous addon generation restored and verified"
+    return 1
+}
+
+verify_live() {
+    want_version="$1"; want_commit="$2"; since="$3"
+    attempts=0; verified=0
+    while [ "$attempts" -lt 30 ]; do
+        pid_list=$(pidof unifi-bridge 2>/dev/null | tr -s ' ' | sed 's/^ //;s/ $//')
+        case "$pid_list" in ''|*[!0-9\ ]*) pid_list="invalid" ;; esac
+        case "$pid_list" in *' '*) pid_list="multiple" ;; esac
+        status_snapshot=$(cat "$STATUS_JS" 2>/dev/null)
+        live_pid="$pid_list"
+        updated=$(printf '%s\n' "$status_snapshot" | sed -n 's/.*"status_updated_at":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)
+        status_pid=$(printf '%s\n' "$status_snapshot" | sed -n 's/.*"pid":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)
+        process_exe=$(readlink "/proc/$live_pid/exe" 2>/dev/null)
+        last_inform=$(printf '%s\n' "$status_snapshot" | sed -n 's/.*"last_successful_inform":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+        case "$live_pid:$status_pid:$updated" in *[!0-9:]*|:*|*:) ;; *)
+            if [ "$live_pid" = "$status_pid" ] && [ "$updated" -ge "$since" ] &&
+               printf '%s\n' "$status_snapshot" | grep -Fq "\"version\": \"$want_version\"" &&
+               printf '%s\n' "$status_snapshot" | grep -Fq "\"commit\": \"$want_commit\"" &&
+               printf '%s\n' "$status_snapshot" | grep -Fq '"running": true' &&
+               printf '%s\n' "$status_snapshot" | grep -Fq '"enabled": true' &&
+               [ "$process_exe" = "/tmp/unifi-bridge/unifi-bridge" ] &&
+               [ -n "$last_inform" ] &&
+               printf '%s\n' "$status_snapshot" | grep -Fq '"last_status": "Active ('; then
+                verified=1; return 0
+            fi ;;
+        esac
+        attempts=$((attempts + 1)); sleep 2
+    done
+    return 1
 }
 
 cmd_check() {
@@ -269,6 +534,14 @@ cmd_apply() {
         write_update_status "ERROR" "$branch" "$local_ver" "-" "Bundle checksum mismatch; installed files were not changed"
         rm -rf "$tmp_dir"; return 1
     fi
+    # Persist a normalized manifest beside the installed local archive. Release
+    # manifests name the immutable download artifact; recovery uses the local
+    # name and must be able to validate every subsequently installed generation.
+    installed_checksum_file="${tmp_dir}/installed-bundle.sha256"
+    printf '%s  unifi-bridge.tar.gz\n' "$expected" > "$installed_checksum_file" || {
+        write_update_status "ERROR" "$branch" "$local_ver" "-" "Could not stage normalized bundle checksum; installed files were not changed"
+        rm -rf "$tmp_dir"; return 1
+    }
     binary_member="unifi-bridge-${ARCH_SUFFIX}"
     expected_members="apply_config.sh
 bundle.json
@@ -320,84 +593,86 @@ watchdog.sh"
         write_update_status "ERROR" "$branch" "$local_ver" "-" "Bundle metadata, version, architecture or source commit did not match the resolved release; installed files were not changed"
         rm -rf "$tmp_dir"; return 1
     fi
-    mkdir -p "$INSTALL_DIR/.ssh"
-    chmod 755 "$INSTALL_DIR"
-    chmod 700 "$INSTALL_DIR/.ssh"
-    cp -f "$bundle_archive" "$INSTALL_DIR/unifi-bridge.tar.gz" || {
-        write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Could not stage verified addon bundle"
+    if ! acquire_activation_lock; then
+        write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Another bridge start or activation is active; installed files were not changed"
         rm -rf "$tmp_dir"; return 1
-    }
+    fi
+    if ! begin_transaction; then
+        write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Could not persist previous addon generation; installed files were not changed"
+        rm -rf "$tmp_dir"; return 1
+    fi
+    if ! chmod 755 "$INSTALL_DIR" || ! mkdir -p "$INSTALL_DIR/.ssh" || ! chmod 700 "$INSTALL_DIR/.ssh"; then
+        rm -rf "$TXN_DIR"
+        write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Could not prepare addon permissions; managed assets were not changed"
+        rm -rf "$tmp_dir"; return 1
+    fi
 
-    # 3. Apply updated scripts & WebUI
+    # 3. Install the recovery entry point first, then every asset through a
+    # same-filesystem temporary file and rename. Mutable config/state/keys are
+    # outside the managed generation and are never rewritten by this update.
     echo "[*] Installing updated scripts to ${INSTALL_DIR}..."
+    if ! atomic_install "$tmp_dir/staged/start.sh" "$INSTALL_DIR/start.sh" 755; then
+        rm -rf "$TXN_DIR"
+        write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Recovery startup rename failed before generation mutation; prior files remain active"
+        rm -rf "$tmp_dir"; return 1
+    fi
+    sync
     for f in start.sh apply_config.sh sync_nodes.sh unifi-bridge.sh update.sh watchdog.sh; do
-        if ! cp -fp "${tmp_dir}/staged/$f" "$INSTALL_DIR/$f" || ! chmod 755 "$INSTALL_DIR/$f"; then
-            write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Script installation failed; inspect service status before retrying"
-            rm -rf "$tmp_dir"; return 1
+        [ "$f" = start.sh ] && continue
+        if ! atomic_install "${tmp_dir}/staged/$f" "$INSTALL_DIR/$f" 755; then
+            rollback_and_verify "Script installation failed at $f"; rm -rf "$tmp_dir"; return 1
         fi
     done
-    ln -sf "$INSTALL_DIR/unifi-bridge.sh" "/jffs/scripts/unifi-bridge"
     mkdir -p "$INSTALL_DIR/webui"
     slot="user3"
     [ -f "$INSTALL_DIR/.user_slot" ] && slot=$(cat "$INSTALL_DIR/.user_slot" 2>/dev/null | tr -d ' \t\r\n')
     [ -z "$slot" ] && slot="user3"
-    if ! cp -fp "${tmp_dir}/staged/version.txt" "$INSTALL_DIR/version.txt" ||
-       ! cp -fp "${tmp_dir}/staged/unifi-bridge.asp" "$INSTALL_DIR/webui/unifi-bridge.asp" ||
-       ! cp -fp "${tmp_dir}/staged/unifi-bridge.asp" "/tmp/var/wwwext/${slot}.asp"; then
-        write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "UI installation failed; inspect service status before retrying"
-        rm -rf "$tmp_dir"; return 1
-    fi
-    chmod 644 "$INSTALL_DIR/version.txt"
-
-    # 4. Update branch in config.json
-    if [ -f "$CONFIG_FILE" ]; then
-        if grep -q '"branch"' "$CONFIG_FILE"; then
-            sed -i "s/\"branch\":[[:space:]]*\"[^\"]*\"/\"branch\": \"${branch}\"/" "$CONFIG_FILE"
-        else
-            sed -i "s/}/,\n  \"branch\": \"${branch}\"\n}/" "$CONFIG_FILE"
-        fi
+    if ! atomic_install "${tmp_dir}/staged/version.txt" "$INSTALL_DIR/version.txt" 644 ||
+       ! atomic_install "${tmp_dir}/staged/unifi-bridge.asp" "$INSTALL_DIR/webui/unifi-bridge.asp" 644 ||
+       ! atomic_install "$bundle_archive" "$INSTALL_DIR/unifi-bridge.tar.gz" 644 ||
+       ! atomic_install "$installed_checksum_file" "$INSTALL_DIR/unifi-bridge.tar.gz.sha256" 644 ||
+       ! atomic_install "${tmp_dir}/staged/unifi-bridge.asp" "/tmp/var/wwwext/${slot}.asp" 644; then
+        rollback_and_verify "Persistent or live UI installation failed"; rm -rf "$tmp_dir"; return 1
     fi
 
-    # 5. Restart local daemon cleanly
+    # 4. Restart the local daemon and validate this exact invocation.
     echo "[*] Restarting UniFi AP Bridge daemon..."
     started_at=$(date +%s)
-    if ! "$INSTALL_DIR/start.sh"; then
-        write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Bridge startup failed; inspect service status before retrying"
-        rm -rf "$tmp_dir"; return 1
+    if ! UNIFI_BRIDGE_START_LOCK_HELD=1 "$INSTALL_DIR/start.sh"; then
+        rollback_and_verify "Candidate bridge startup failed"; rm -rf "$tmp_dir"; return 1
     fi
 
     # A shell launch is not proof that the daemon is running the new binary or
     # exchanging informs. Disabled installs intentionally have no heartbeat.
     if "$tmp_dir/staged/unifi-bridge-${ARCH_SUFFIX}" -config "$CONFIG_FILE" -is-enabled; then
-        attempts=0
-        verified=0
         staged_commit=$(printf '%s' "$staged_version" | sed -n 's/.*commit: \([^,]*\),.*/\1/p')
-        while [ "$attempts" -lt 30 ]; do
-            live_pid=$(pidof unifi-bridge 2>/dev/null | awk '{print $1}')
-            updated=$(grep '"status_updated_at":' "$STATUS_JS" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ,\t\r\n')
-            case "$live_pid:$updated" in *[!0-9:]*|:*|*:) ;;
-                *) if [ "$updated" -ge "$started_at" ] &&
-                      grep -Eq "\"pid\":[[:space:]]*${live_pid}[,[:space:]]" "$STATUS_JS" &&
-                      grep -Fq "\"version\": \"${remote_ver}\"" "$STATUS_JS" &&
-                      grep -Fq "\"commit\": \"${staged_commit}\"" "$STATUS_JS" &&
-                      grep -Fq '"last_status": "Active (' "$STATUS_JS"; then
-                    verified=1; break
-                   fi ;;
-            esac
-            attempts=$((attempts + 1))
-            sleep 2
-        done
-        if [ "$verified" -ne 1 ]; then
-            write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "New daemon heartbeat and build identity were not verified; inspect service status"
-            rm -rf "$tmp_dir"; return 1
+        if ! verify_live "$remote_ver" "$staged_commit" "$started_at"; then
+            rollback_and_verify "Candidate fresh identity and successful inform were not verified"; rm -rf "$tmp_dir"; return 1
         fi
     else
         enabled_result=$?
         if [ "$enabled_result" -ne 3 ]; then
-            write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Installed configuration could not be validated"
-            rm -rf "$tmp_dir"; return 1
+            rollback_and_verify "Installed configuration could not be validated"; rm -rf "$tmp_dir"; return 1
+        fi
+        live_pids=$(pidof unifi-bridge 2>/dev/null | tr -d ' \t\r\n')
+        status_snapshot=$(cat "$STATUS_JS" 2>/dev/null)
+        disabled_updated=$(printf '%s' "$status_snapshot" | sed -n 's/.*"status_updated_at":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)
+        if [ -n "$live_pids" ] || ! printf '%s' "$status_snapshot" | grep -Eq '"enabled"[[:space:]]*:[[:space:]]*false' ||
+           ! printf '%s' "$status_snapshot" | grep -Eq '"running"[[:space:]]*:[[:space:]]*false' ||
+           [ -z "$disabled_updated" ] || [ "$disabled_updated" -lt "$started_at" ] 2>/dev/null ||
+           ! printf '%s' "$status_snapshot" | grep -Eq "\"version\"[[:space:]]*:[[:space:]]*\"$remote_ver\"" ||
+           ! printf '%s' "$status_snapshot" | grep -Eq "\"commit\"[[:space:]]*:[[:space:]]*\"$staged_commit\""; then
+            rollback_and_verify "Disabled installation did not publish matching disabled status"; rm -rf "$tmp_dir"; return 1
         fi
     fi
+
+    printf 'ACCEPTED\n' > "$TXN_DIR/active.tmp" && mv -f "$TXN_DIR/active.tmp" "$TXN_DIR/active" && sync || {
+        rollback_and_verify "Could not persist accepted transaction state"; rm -rf "$tmp_dir"; return 1
+    }
+    clear_transaction || {
+        write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Candidate verified but transaction cleanup failed; inspect $TXN_DIR"
+        rm -rf "$tmp_dir"; return 1
+    }
 
     write_update_status "SUCCESS" "$branch" "$remote_ver" "$remote_ver" "Local addon updated to ${remote_ver} (${branch}); cluster rollout is reported separately"
 

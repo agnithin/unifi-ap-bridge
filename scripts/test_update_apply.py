@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import tarfile
 import tempfile
 import time
@@ -25,9 +26,13 @@ class ApplyFailureTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
+        (self.root / "tmp").mkdir()
         self.install = self.root / "addon"
         (self.install / "config").mkdir(parents=True)
         (self.install / "config/config.json").write_text('{"branch":"dev"}')
+        (self.install / "config/state.json").write_text('{"adopted":true,"identity":"preserve"}')
+        (self.install / ".ssh").mkdir()
+        (self.install / ".ssh/cluster_key").write_text("private identity fixture")
         (self.install / "version.txt").write_text("1.2.4\n")
         self.web = self.root / "www/unifi-bridge"
         self.web.mkdir(parents=True)
@@ -36,12 +41,20 @@ class ApplyFailureTests(unittest.TestCase):
         self.assets = self.root / "assets"
         self.assets.mkdir()
         (self.assets / "version.txt").write_text("1.2.5\n")
-        self.env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ["PATH"], ASSETS=str(self.assets))
+        self.running = self.root / "running"
+        self.env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ["PATH"], ASSETS=str(self.assets), STATUS_FILE=str(self.web / "status.js"), RUNNING=str(self.running))
         self.requests = self.root / "requests.txt"
         self.env["REQUEST_LOG"] = str(self.requests)
         self.write(self.bin / "uname", "#!/bin/sh\necho armv7l\n")
         self.write(self.bin / "sleep", "#!/bin/sh\nexit 0\n")
-        self.write(self.bin / "pidof", "#!/bin/sh\necho 1234\n")
+        self.write(self.bin / "pidof", '#!/bin/sh\n[ -f "$RUNNING" ] && echo 1234\n')
+        self.write(self.bin / "readlink", "#!/bin/sh\necho " + str(self.root / "tmp/unifi-bridge/unifi-bridge") + "\n")
+        self.write(self.bin / "killall", '#!/bin/sh\nrm -f "$RUNNING"\nexit 0\n')
+        self.write(self.bin / "nohup",
+                   '#!/bin/sh\nidentity=$("$1" -version 2>/dev/null)\ncase "$identity" in\n'
+                   '  "unifi-bridge 1.2.4"*) touch "$RUNNING"; cat > "$STATUS_FILE" <<EOF\n'
+                   'window.unifiBridgeStatus = {"running": true, "enabled": true, "version": "1.2.4", "commit": "' + COMMIT + '", "pid": 1234, "status_updated_at": ' + '$(date +%s)' + ', "last_successful_inform": "2026-10-25 17:19:00", "last_status": "Active (GCM)"};\nEOF\n;;\n'
+                   'esac\nexit 0\n')
         self.write(
             self.bin / "curl",
             "#!/usr/bin/env python3\n"
@@ -60,11 +73,31 @@ class ApplyFailureTests(unittest.TestCase):
         source = (ROOT / "scripts/update.sh").read_text()
         source = source.replace('INSTALL_DIR="/jffs/addons/$ADDON_NAME"', f'INSTALL_DIR="{self.install}"')
         source = source.replace("/tmp/unifi-bridge-update.lock", str(self.root / "update.lock"))
+        source = source.replace("/tmp/unifi-bridge-start.lock", str(self.root / "start.lock"))
+        source = source.replace("/tmp/unifi-bridge/unifi-bridge", str(self.root / "tmp/unifi-bridge/unifi-bridge"))
         source = source.replace("/tmp/var/wwwext", str(self.root / "www"))
         source = source.replace("/jffs/scripts", str(self.root / "links"))
         (self.root / "links").mkdir()
         self.script = self.root / "update.sh"
         self.script.write_text(source)
+        prior = self.install / "unifi-bridge.tar.gz"
+        prior_binary = self.root / "unifi-bridge-armv7"
+        self.write(prior_binary, '#!/bin/sh\ncase "$*" in *-version*) echo "unifi-bridge 1.2.4 (commit: ' + COMMIT + ', built: fixture)";; *-is-enabled*) exit 0;; esac\n')
+        (self.web / "status.js").write_text(
+            'window.unifiBridgeStatus = {"running": true, "enabled": true, "version": "1.2.4", "commit": "' + COMMIT + '", "pid": 1234, "status_updated_at": ' + str(int(time.time())) + ', "last_successful_inform": "2026-10-25 17:19:00", "last_status": "Active (GCM)"};\n'
+        )
+        self.running.touch()
+        prior_start = self.install / "start.sh"
+        self.write(prior_start,
+                   '#!/bin/sh\ntouch "$RUNNING"\ncat > "$STATUS_FILE" <<EOF\n'
+                   'window.unifiBridgeStatus = {"running": true, "enabled": true, "version": "1.2.4", "commit": "' + COMMIT + '", "pid": 1234, "status_updated_at": ' + '$(date +%s)' + ', "last_successful_inform": "2026-10-25 17:19:00", "last_status": "Active (GCM)"};\nEOF\n')
+        for name in ("apply_config.sh", "sync_nodes.sh", "unifi-bridge.sh", "update.sh", "watchdog.sh"):
+            self.write(self.install / name, "#!/bin/sh\nexit 0\n")
+        (self.install / "webui").mkdir()
+        (self.install / "webui/unifi-bridge.asp").write_text("old-ui")
+        self.make_prior_bundle()
+        runtime=self.root/"tmp/unifi-bridge";runtime.mkdir(parents=True)
+        shutil.copyfile(prior_binary,runtime/"unifi-bridge")
 
     def write(self, path, text):
         path.write_text(text)
@@ -76,7 +109,7 @@ class ApplyFailureTests(unittest.TestCase):
         files = {
             "apply_config.sh": b"#!/bin/sh\nexit 0\n",
             "install.sh": b"#!/bin/sh\nexit 0\n",
-            "start.sh": b"#!/bin/sh\nexit 0\n",
+            "start.sh": self.start_source().encode(),
             "sync_nodes.sh": b"#!/bin/sh\nexit 0\n",
             "unifi-bridge-armv7": (
                 f'#!/bin/sh\necho "unifi-bridge {version} (commit: {binary_commit or commit}, built: fixture)"\nexit {binary_exit}\n'
@@ -112,6 +145,32 @@ class ApplyFailureTests(unittest.TestCase):
         digest = hashlib.sha256(archive.read_bytes()).hexdigest()
         (self.assets / (bundle_name + ".sha256")).write_text(f"{digest}  {bundle_name}\n")
 
+    def make_prior_bundle(self):
+        files={
+            "apply_config.sh":(self.install/"apply_config.sh").read_bytes(),
+            "bundle.json":json.dumps({"version":"1.2.4","commit":COMMIT,"architecture":"armv7"},indent=2).encode()+b"\n",
+            "install.sh":b"#!/bin/sh\nexit 0\n",
+            "start.sh":(self.install/"start.sh").read_bytes(),
+            "sync_nodes.sh":(self.install/"sync_nodes.sh").read_bytes(),
+            "unifi-bridge-armv7":(self.root/"unifi-bridge-armv7").read_bytes(),
+            "unifi-bridge.asp":(self.install/"webui/unifi-bridge.asp").read_bytes(),
+            "unifi-bridge.sh":(self.install/"unifi-bridge.sh").read_bytes(),
+            "update.sh":(self.install/"update.sh").read_bytes(),
+            "version.txt":b"1.2.4\n",
+            "watchdog.sh":(self.install/"watchdog.sh").read_bytes(),
+        }
+        archive=self.install/"unifi-bridge.tar.gz"
+        with tarfile.open(archive,"w:gz",format=tarfile.USTAR_FORMAT) as tar:
+            for name,data in files.items():
+                info=tarfile.TarInfo(name);info.mode=0o755 if name.endswith(".sh") or name.startswith("unifi-bridge-arm") else 0o644;info.size=len(data);tar.addfile(info,io.BytesIO(data))
+        digest=hashlib.sha256(archive.read_bytes()).hexdigest()
+        (self.install/"unifi-bridge.tar.gz.sha256").write_text(f"{digest}  unifi-bridge.tar.gz\n")
+
+    def start_source(self):
+        source = (ROOT / "scripts/start.sh").read_text()
+        return (source.replace('/jffs/addons/unifi-bridge', str(self.install))
+                .replace('/tmp/', str(self.root / 'tmp') + '/'))
+
     def run_apply(self, env=None):
         return subprocess.run(
             ["sh", str(self.script), "apply", "dev", "fixture"],
@@ -128,7 +187,7 @@ class ApplyFailureTests(unittest.TestCase):
         self.assertEqual(status["status"], "ERROR")
         self.assertFalse((self.root / "update.lock").exists(), "failed update leaked its lock")
         self.assertEqual((self.install / "version.txt").read_text(), "1.2.4\n")
-        self.assertFalse((self.install / ".ssh").exists(), "invalid bundle mutated persistent install state")
+        self.assertEqual((self.install / ".ssh/cluster_key").read_text(), "private identity fixture", "invalid bundle changed SSH identity")
         return status
 
     def test_missing_bundle_fails_closed(self):
@@ -184,7 +243,7 @@ class ApplyFailureTests(unittest.TestCase):
     def test_unsupported_resolved_commit_fails_before_asset_lookup(self):
         result = self.run_apply(dict(self.env, RESOLVED_COMMIT="b" * 40))
         self.assertNotEqual(result.returncode, 0)
-        self.assertFalse((self.install / ".ssh").exists())
+        self.assertEqual((self.install / ".ssh/cluster_key").read_text(), "private identity fixture")
         self.assertFalse((self.root / "update.lock").exists())
 
     def test_resolved_commit_pins_asset_generation(self):
@@ -197,7 +256,78 @@ class ApplyFailureTests(unittest.TestCase):
         self.assertIn(f"/download/dev-{COMMIT}/{self.bundle_name}", requests)
         self.assertIn(f"/download/dev-{COMMIT}/{self.bundle_name}.sha256", requests)
         self.assertNotIn("/download/dev/", requests)
+        self.assertEqual((self.install / "version.txt").read_text(), "1.2.4\n")
+        update_status = json.loads((self.web / "update_status.js").read_text().split("=", 1)[1].strip().rstrip(";"))
+        self.assertFalse((self.install / ".update-transaction").exists(), update_status["message"])
+        self.assertIn("restored and verified", update_status["message"])
+        self.assertEqual((self.install / "config/config.json").read_text(), '{"branch":"dev"}')
+        self.assertEqual((self.install / "config/state.json").read_text(), '{"adopted":true,"identity":"preserve"}')
+        self.assertEqual((self.install / ".ssh/cluster_key").read_text(), "private identity fixture")
+
+    def test_active_asset_copy_failure_rolls_back_prior_generation(self):
+        self.write(self.bin / "cp", "#!/usr/bin/env python3\nimport os,sys,subprocess\n\nif any('apply_config.sh.update.' in x for x in sys.argv): sys.exit(1)\nsys.exit(subprocess.call(['/bin/cp']+sys.argv[1:]))\n")
+        prior_archive = (self.install / "unifi-bridge.tar.gz").read_bytes()
+        prior_start = (self.install / "start.sh").read_text()
+        result = self.run_apply()
+        self.assertNotEqual(result.returncode, 0)
+        status = json.loads((self.web / "update_status.js").read_text().split("=", 1)[1].strip().rstrip(";"))
+        self.assertIn("restored and verified", status["message"],result.stdout+result.stderr)
+        self.assertEqual((self.install / "version.txt").read_text(), "1.2.4\n")
+        self.assertEqual((self.install / "unifi-bridge.tar.gz").read_bytes(), prior_archive)
+        self.assertEqual((self.install / "start.sh").read_text(), prior_start)
+        self.assertFalse((self.install / ".update-transaction").exists())
+
+    def test_enabled_candidate_requires_fresh_identity_then_commits(self):
+        self.write(self.bin / "nohup",
+                   '#!/bin/sh\ntouch "$RUNNING"\ncat > "$STATUS_FILE" <<EOF\n'
+                   'window.unifiBridgeStatus = {"running": true, "enabled": true, "version": "1.2.5", "commit": "' + COMMIT + '", "pid": 1234, "status_updated_at": ' + '$(date +%s)' + ', "last_successful_inform": "2026-10-25 17:20:00", "last_status": "Active (GCM)"};\nEOF\n')
+        result=self.run_apply()
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        status=json.loads((self.web/"update_status.js").read_text().split("=",1)[1].strip().rstrip(";"))
+        self.assertEqual(status["status"],"SUCCESS")
+        self.assertEqual((self.install/"version.txt").read_text(),"1.2.5\n")
+        self.assertFalse((self.install/".update-transaction").exists())
+        self.assertEqual((self.install/"config/config.json").read_text(),'{"branch":"dev"}')
+        self.assertEqual((self.install/"config/state.json").read_text(),'{"adopted":true,"identity":"preserve"}')
+        self.assertEqual((self.install/".ssh/cluster_key").read_text(),"private identity fixture")
+        installed_manifest = (self.install / "unifi-bridge.tar.gz.sha256").read_text()
+        self.assertRegex(installed_manifest, r"^[0-9a-f]{64}  unifi-bridge\.tar\.gz\n$")
+
+        # A second activation must accept the first activation as its complete,
+        # checksum-verified rollback generation. Fail its first asset replacement
+        # and require recovery to relaunch that just-installed generation.
+        fail_marker = self.root / "copy-failed-once"
+        self.write(self.bin / "cp",
+                   "#!/usr/bin/env python3\nimport os,sys,subprocess\nfrom pathlib import Path\n"
+                   f"marker=Path({str(fail_marker)!r})\n"
+                   "if any('apply_config.sh.update.' in x for x in sys.argv) and not marker.exists():\n"
+                   " marker.touch(); sys.exit(1)\n"
+                   "sys.exit(subprocess.call(['/bin/cp']+sys.argv[1:]))\n")
+        second = self.run_apply()
+        second_status = json.loads((self.web / "update_status.js").read_text().split("=", 1)[1].strip().rstrip(";"))
+        self.assertNotEqual(second.returncode, 0)
+        self.assertIn("restored and verified", second_status["message"], second.stdout + second.stderr)
         self.assertEqual((self.install / "version.txt").read_text(), "1.2.5\n")
+        self.assertEqual((self.install / "unifi-bridge.tar.gz.sha256").read_text(), installed_manifest)
+        self.assertFalse((self.install / ".update-transaction").exists())
+
+    def test_disabled_candidate_copy_failure_restores_disabled_generation(self):
+        (self.install/"config/config.json").write_text('{"branch":"dev","enabled":false,"unknown":"keep"}')
+        self.write(self.bin/"pidof","#!/bin/sh\nexit 0\n")
+        prior_binary=self.root/"unifi-bridge-armv7"
+        self.write(prior_binary,
+                   '#!/bin/sh\ncase "$*" in *-version*) echo "unifi-bridge 1.2.4 (commit: '+COMMIT+', built: fixture)";; '
+                   '*-is-enabled*) exit 3;; *-once*) cat > "$STATUS_FILE" <<EOF\n'
+                   'window.unifiBridgeStatus = {"running":false,"enabled":false,"version":"1.2.4","commit":"'+COMMIT+'","status_updated_at":' + '$(date +%s)' + '};\nEOF\n;; esac\n')
+        self.make_prior_bundle();shutil.copyfile(prior_binary,self.root/"tmp/unifi-bridge/unifi-bridge")
+        (self.web/"status.js").write_text('window.unifiBridgeStatus = {"running":false,"enabled":false,"version":"1.2.4","commit":"'+COMMIT+'","status_updated_at":'+str(int(time.time()))+'};')
+        self.write(self.bin/"cp","#!/usr/bin/env python3\nimport sys,subprocess\nif any('apply_config.sh.update.' in x for x in sys.argv):sys.exit(1)\nsys.exit(subprocess.call(['/bin/cp']+sys.argv[1:]))\n")
+        result=self.run_apply()
+        self.assertNotEqual(result.returncode,0)
+        status=json.loads((self.web/"update_status.js").read_text().split("=",1)[1].strip().rstrip(";"))
+        self.assertIn("restored and verified",status["message"])
+        self.assertEqual((self.install/"version.txt").read_text(),"1.2.4\n")
+        self.assertFalse((self.install/".update-transaction").exists())
 
     def test_successful_disabled_install_uses_validated_generation(self):
         binary = (
@@ -221,8 +351,33 @@ class ApplyFailureTests(unittest.TestCase):
                 tar.addfile(info, io.BytesIO(data))
         digest = hashlib.sha256(archive.read_bytes()).hexdigest()
         (self.assets / (self.bundle_name + ".sha256")).write_text(f"{digest}  {self.bundle_name}\n")
+        (self.install / "config/config.json").write_text('{"branch":"dev","enabled":false,"unknown":"keep"}')
+        self.write(self.bin / "pidof", "#!/bin/sh\nexit 0\n")
+        prior_binary = self.root / "unifi-bridge-armv7"
+        self.write(prior_binary,
+                   '#!/bin/sh\ncase "$*" in *-version*) echo "unifi-bridge 1.2.4 (commit: ' + COMMIT + ', built: fixture)";; *-is-enabled*) exit 3;; esac\n')
+        with tarfile.open(self.install / "unifi-bridge.tar.gz", "w:gz") as tar:
+            pass
+        self.make_prior_bundle()
+        shutil.copyfile(prior_binary,self.root/"tmp/unifi-bridge/unifi-bridge")
+        # Disabled status is static; an hours-old identity remains valid when
+        # the installed helper confirms disabled and no daemon process exists.
+        (self.web / "status.js").write_text('window.unifiBridgeStatus = {"running":false,"enabled":false,"version":"1.2.4","commit":"' + COMMIT + '","status_updated_at":'+str(int(time.time()) - 4 * 60 * 60)+'};\n')
+        disabled = self.root / "disabled-status.js"
+        start_script = self.root / "disabled-start.sh"
+        self.write(start_script,
+                   '#!/bin/sh\ncat > "' + str(disabled) + '" <<EOF\n'
+                   'window.unifiBridgeStatus = {"running":false,"enabled":false,"version":"1.2.5","commit":"' + COMMIT + '","status_updated_at":$(date +%s)};\nEOF\n'
+                   'cp "' + str(disabled) + '" "' + str(self.web / 'status.js') + '"\n')
+        with tarfile.open(archive, "w:gz", format=tarfile.USTAR_FORMAT) as tar:
+            for name in MEMBERS:
+                data = start_script.read_bytes() if name == "start.sh" else files[name]
+                info = tarfile.TarInfo(name); info.mode = 0o755; info.size = len(data); tar.addfile(info, io.BytesIO(data))
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        (self.assets / (self.bundle_name + ".sha256")).write_text(f"{digest}  {self.bundle_name}\n")
         result = self.run_apply()
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        update_status = json.loads((self.web / "update_status.js").read_text().split("=", 1)[1].strip().rstrip(";"))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr + "\n" + update_status.get("message", ""))
         status = json.loads((self.web / "update_status.js").read_text().split("=", 1)[1].strip().rstrip(";"))
         self.assertEqual(status["status"], "SUCCESS")
         self.assertEqual(status["request_id"], "fixture")

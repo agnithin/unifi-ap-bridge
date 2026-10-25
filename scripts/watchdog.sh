@@ -8,6 +8,11 @@ INSTALL_DIR="/jffs/addons/$ADDON_NAME"
 CONFIG_FILE="$INSTALL_DIR/config/config.json"
 WATCHDOG_LOG="/tmp/unifi-bridge-watchdog.log"
 
+# Startup, watchdog and activation must not race over the RAM executable or
+# daemon lifecycle. Interrupted owners/journals require inspection/recovery.
+[ -d "/tmp/unifi-bridge-start.lock" ] && exit 0
+[ -f "$INSTALL_DIR/.update-transaction/active" ] && exit 0
+
 # Bound the RAM log even if repeated startup failures occur.
 if [ -f "$WATCHDOG_LOG" ] && [ "$(wc -c < "$WATCHDOG_LOG")" -gt 1048576 ]; then
     : > "$WATCHDOG_LOG"
