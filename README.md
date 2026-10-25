@@ -10,7 +10,7 @@ It emulates a genuine UniFi 6 Access Point—featuring native **UniFi 6 In-Wall 
 
 Last verified **2026-10-25, approximately 01:45 PDT**: both XT8 APs run **v1.2.4 on `dev`**, code commit `f77fafbc08688faca4b0fd9a286b73790d5a25da`. Both are adopted, running, and sending successful GCM heartbeats. A runtime sample counted 31 stations on Main and 29 on Node; counts fluctuate normally.
 
-The actual UniFi browser UI now shows Main connected to Cloud Gateway Max **Port 1** and Node to **Port 3**, both at **2.5 GbE**. Port Manager shows those uplinks active and **Bridge-EufyHomeBase3 on Node Port 4 at GbE**. This closes the two reported UI issues. Credential rotation, controlled outage/recovery checks, and broader review remain open. The operator approved promoting all current changes to `main` on 2026-10-25. The APs remain on the verified `dev` deployment.
+The actual UniFi browser UI now shows Main connected to Cloud Gateway Max **Port 1** and Node to **Port 3**, both at **2.5 GbE**. Port Manager shows those uplinks active and **Bridge-EufyHomeBase3 on Node Port 4 at GbE**. This closes the two reported UI issues. The exposed controller API key was rotated and revoked on 2026-10-25; controlled outage/recovery checks and broader review remain open. The operator approved promoting all current changes to `main` on 2026-10-25. The APs remain on the verified `dev` deployment.
 
 See [audit state and action items](docs/AUDIT_STATE.md) and the [architecture reference](docs/ARCHITECTURE.md).
 
@@ -249,7 +249,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="$BUILD_FLAGS"
 
 ### Prioritized backlog and operator decisions
 
-The detailed evidence and acceptance criteria are in [the project audit/backlog](docs/AUDIT_STATE.md#8-approved-backlog-and-fix-batch--2026-10-25). The current batch is source changes under test, not a deployed release. APs remain on the verified v1.2.4 dev build.
+The detailed evidence and acceptance criteria are in [the project audit/backlog](docs/AUDIT_STATE.md#8-approved-backlog-and-fix-batch--2026-10-25). The current batch passed local tests, ARM builds and [hosted validation](https://github.com/agnithin/unifi-ap-bridge/actions/runs/40210104250); it is not deployed. APs remain on the verified v1.2.4 dev build.
 
 | Work | Status / next step |
 |---|---|
@@ -257,7 +257,7 @@ The detailed evidence and acceptance criteria are in [the project audit/backlog]
 | B3: Preserve settings | JSON merge preserves custom WLAN mappings, node lists, topology and unknown fields; validation, private atomic writes and no-op detection implemented locally. |
 | B4: Respect disabled state | Daemon and shared tracked startup enforce enabled=false for boot, cluster and manual entry points; startup distribution included in addon updates. Local regression tests pass. |
 | B5: Accurate tri-band telemetry | Separate physical radio/VAP identities, actual channel widths and per-radio counts implemented locally. Third-radio rendering under U6IW still needs controller acceptance testing. |
-| B6: Exposed controller key | Historical exposure confirmed; the old key still authenticated at investigation time. Operator approved rotation; replacement creation/install/revocation verification is tracked in the audit. No values belong in Git/chat. |
+| B6: Exposed controller key | Resolved: replacement installed privately in CT107 and verified; exposed key revoked (old 401, new 200). Temporary secret copies removed. Historical exposure remains documented without key values. |
 | B7–B10: Health and telemetry correctness | CPU deltas, unknown noise/experience handling, topology/FDB corrections, UI freshness/unverified labels and watchdog log cap implemented locally. Sampling deadlines/caching, stable traffic counters, rollback, structured config verification and remaining form transport work stay open. |
 | F1: WLAN discovery | Resolve/cache exact SSID-to-legacy-ObjectId mapping; handle duplicate names and modern UUID differences. Keep broad API credentials off the AP. |
 | F2: Guest/VLAN classification | Report actual VAP bridge/VLAN/isolation metadata first. Classification does not enforce network policy. |

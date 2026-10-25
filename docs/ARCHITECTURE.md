@@ -180,7 +180,7 @@ For API-key diagnostics, use `/proxy/network/integration/v1` and the controller'
 * **Asuswrt CGI Integration:** Because Asuswrt-Merlin's `apply.cgi` drops non-NVRAM form inputs, the WebUI passes target track identifiers via `action_script` (`start_unifi_bridge_check_update_${branch}_${request_id}`) and NVRAM `amng_custom`. `scripts/apply_config.sh` parses `$2` and `amng_custom` to dispatch the selected operation. Checking a track does not persist a track change; installation persists the selected track.
 * **Topology Preservation:** Configuration updates preserve dynamic `uplink_mac` and `uplink_remote_port` values.
 
-Keep credentials out of repository files, command output, and WebUI status. The earlier exposed key remains active and requires coordinated rotation. Read-only device details/statistics establish online state, recent heartbeats, and port links; the prior `uplink: null` values were traced to the malformed raw AP interface/uplink schema. Verify the normalized parent/speed fields and actual UI after applying v1.2.3.
+Keep credentials out of repository files, command output, and WebUI status. The earlier exposed key was revoked on 2026-10-25; its replacement was installed privately and verified (old HTTP 401, replacement HTTP 200). Read-only device details/statistics establish online state, recent heartbeats, and port links; the prior `uplink: null` values were traced to the malformed raw AP interface/uplink schema. Verify the normalized parent/speed fields and actual UI after applying v1.2.3.
 
 ### Update requests (v1.2.4)
 
