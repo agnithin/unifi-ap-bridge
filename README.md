@@ -1,15 +1,15 @@
 # unifi-ap-bridge
 
-A high-performance, ultra-lightweight standalone daemon and WebUI addon for **Asuswrt-Merlin** and Linux routers that bridges Broadcom Wi-Fi telemetry into the **Ubiquiti UniFi Inform Protocol** (`:8080/inform`).
+A high-performance, ultra-lightweight standalone daemon and WebUI addon for **Asuswrt-Merlin** and Linux routers that bridges Broadcom Wi-Fi and switch telemetry into the **Ubiquiti UniFi Inform Protocol** (`:8080/inform`).
 
-It emulates a genuine UniFi 6 Access Point (e.g., UniFi 6 Mesh `U6M`, UniFi 6 Pro `U6P`, UniFi 6 Lite `U6L`), allowing non-UniFi access points to seamlessly report native wireless client classification, roaming, Wi-Fi 6 (`802.11ax`) connection rates, and live RSSI into the **UniFi Network Controller**.
+It emulates a genuine UniFi 6 Access Point—featuring native **UniFi 6 In-Wall (`U6-IW`)** switch port emulation as well as **UniFi 6 Mesh (`U6M`)**, **UniFi 6 Pro (`U6P`)**, and **UniFi 6 Lite (`U6L`)**—allowing non-UniFi access points to seamlessly report native wireless client classification, roaming, Wi-Fi 6 (`802.11ax`) connection rates, physical switch port link states, and live RSSI into the **UniFi Network Controller**.
 
 ---
 
 ## Key Features
 
 * **Zero Dependencies & Completely Standalone:**
-  * Compiles to a single static binary (~6.9 MB stripped).
+  * Compiles to a single static Go binary (~6.9 MB stripped).
   * Requires **no Python**, **no Entware**, **no USB drive**, and **no third-party addons (no scMerlin needed)**.
   * Runs directly on clean Asuswrt-Merlin firmware.
 * **Native Wireless Classification:**
@@ -20,8 +20,11 @@ It emulates a genuine UniFi 6 Access Point (e.g., UniFi 6 Mesh `U6M`, UniFi 6 Pr
   * Emulates multi-port In-Wall Access Points (**`U6-IW`** / UniFi 6 In-Wall) allowing the AP and its downstream physical ports to appear directly in the **UniFi Port Manager** (`/network/default/ports`).
   * Telemetry reports all physical interfaces from `/sys/class/net/ethX` and `/proc/net/dev`:
     * **Port 1 (Uplink)**: 2.5 Gbps WAN/LAN port with link speed, full duplex, and live byte/packet counters.
-    * **Ports 2–4 (LAN)**: 1 Gbps Gigabit LAN ports with link state, speed, and real-time wire traffic metrics.
+    * **Ports 2–4 (LAN)**: 1 Gbps Gigabit LAN ports with carrier state, speed, duplex, and real-time wire traffic metrics.
   * Accurately links downstream wired devices (e.g. smart home hubs or Ethernet switches) to their physical router LAN ports in the UniFi topology.
+* **LLDP Neighbor Discovery & Gateway Topology Resolution (v1.2.2+):**
+  * Automatically queries LLDP neighbors via `lldpcli -f json show neighbors` to discover the upstream gateway device MAC (Cloud Gateway Max `6c:63:f8:30:9a:05`), port MACs, and physical parent ports (Port 1 for Main AP, Port 3 for Node AP).
+  * Automatically populates `uplink_mac`, `last_uplink`, and `lldp_table`, resolving the UniFi "Connected To" property and gateway `downlink_table` without manual configuration.
 * **Router CPU & Memory Utilization Telemetry (v1.2.0+):**
   * Reports real-time CPU load percentage and active memory utilization (`system-stats` and legacy `sys_stats`) derived from `/proc/loadavg` and `/proc/meminfo`.
   * Renders live CPU and RAM status cards in the Asuswrt WebUI and CLI.
@@ -39,10 +42,10 @@ It emulates a genuine UniFi 6 Access Point (e.g., UniFi 6 Mesh `U6M`, UniFi 6 Pr
   * **RAM:** ~3–5 MB RSS (< 1% of 512 MB router RAM).
   * **CPU:** Virtually 0% (sleeps 99.9% of the time, waking every 10 seconds for a $<1$ ms local query).
   * **Flash Wear Prevention:** Runtime caches, logs, and WebUI status state reside in `/tmp/` (RAM disk); persistent adoption keys are stored safely with `0600` permissions.
-* **Native Asuswrt-Merlin WebUI Integration:**
+* **Native Asuswrt-Merlin WebUI Integration & Form Isolation (v1.2.2+):**
   * Integrated directly into **Advanced Settings > Wireless** tab bar (e.g. `http://<router-ip>/user3.asp`).
   * Uses Asuswrt-Merlin dynamic user slot allocation (`user1`–`user20.asp`), preventing collisions with YazFi, MerVLAN, or scMerlin.
-  * Native Asuswrt styling with auto-detect gateway, custom inform URL, AP model selector, live heartbeat telemetry log, and cluster synchronization table.
+  * Neutralizes Asuswrt's intrusive `window.refreshpage` reloading behavior; background polling updates metrics dynamically without scrolling jumps or overwriting in-flight form edits.
 * **Automated WebUI Updates & Release Tracks (`main` vs `dev`):**
   * Built-in version checker and one-click updater right from the router WebUI.
   * **Release Tracks**: Switch between official stable releases (`main`) and cutting-edge development builds (`dev`).
@@ -53,7 +56,7 @@ It emulates a genuine UniFi 6 Access Point (e.g., UniFi 6 Mesh `U6M`, UniFi 6 Pr
   * Preserves per-node cryptographic adoption identities (`state.json`), preventing adoption collisions.
   * Real-time Cluster Synchronization table in WebUI with live client distribution, per-node version reporting, and manual "Sync Now" trigger.
 * **Built-in CLI Companion (`unifi-bridge`):**
-  * Provides quick command-line diagnostics and operations: `unifi-bridge status`, `sync`, `update check`, `update apply`, `start`, `stop`, `restart`, `check`, `logs`.
+  * Provides quick command-line diagnostics and operations: `unifi-bridge status`, `sync`, `update check`, `update apply`, `reset`, `start`, `stop`, `restart`, `check`, `logs`.
   * Interactive text console menu for easy terminal administration.
 * **Automated Health Watchdog:**
   * Automatic cron watchdog via Asuswrt `cru` checking process health every 5 minutes and respawning on failures.
@@ -195,12 +198,15 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w -X main
 * [x] **UniFi Inform Engine:** Wire protocol implementation supporting AES-128-CBC bootstrap and AES-128-GCM adopted encryption.
 * [x] **Broadcom Wireless Telemetry:** Automatic discovery of physical and virtual VAPs across 2.4 GHz and 5 GHz bands.
 * [x] **Wi-Fi 6 (`802.11ax`) & Wi-Fi 4 (`802.11n`) Classification:** Flawless generation mapping in UniFi Controller.
-* [x] **Native Asuswrt WebUI Integration:** Advanced Settings > Wireless tab with dynamic slot discovery (`user1`–`user20.asp`).
+* [x] **Physical Switch Port Telemetry (`U6-IW` Emulation) (v1.2.0):** 2.5G WAN uplink and 1G LAN ports reporting live carrier state, speed, full duplex, STP state, and traffic counters directly into the UniFi Port Manager.
+* [x] **LLDP Topology & Upstream Gateway Linking (v1.2.2):** Automatic `lldpcli` querying resolving Cloud Gateway Max (`6c:63:f8:30:9a:05`) parent ports (Port 1 for Main, Port 3 for Node), populating "Connected To" and gateway `downlink_table`.
+* [x] **Router CPU/Memory Stats & WiFi Experience Scoring (v1.2.0):** Live `/proc/loadavg` and `/proc/meminfo` metrics; dynamic 0–100% satisfaction scores based on RSSI, SNR, and packet retry penalties.
+* [x] **RF Channel Utilization & Airtime Telemetry (v1.1.0):** Broadcom `chanim_stats` streaming `cu_total`, `cu_self_rx`, and `cu_self_tx` into UniFi RF graphs and router WebUI.
+* [x] **Cumulative Client Traffic Usage Counters (v1.1.0):** Parsing `tx/rx` unicast bytes, packets, retries, rates, and association uptime from `wl sta_info`.
+* [x] **Native Asuswrt WebUI Integration & Form Isolation (v1.2.2):** Advanced Settings > Wireless tab with dynamic slot discovery (`user1`–`user20.asp`), zero-refresh background polling, and form preservation.
 * [x] **Multi-Arch Automated CI/CD:** GitHub Actions release workflow building ARMv7 and ARM64 binary packages.
 * [x] **Automated In-WebUI Updates & Dual Tracks:** Instant release/dev update checks and one-click upgrades.
 * [x] **Cluster Mesh Synchronization:** Centralized AP configuration and binary propagation over SSH.
-* [x] **RF Channel Utilization & Airtime Telemetry (v1.1.0):** Broadcom `chanim_stats` streaming `cu_total`, `cu_self_rx`, and `cu_self_tx` into UniFi RF graphs and router WebUI.
-* [x] **Cumulative Client Traffic Usage Counters (v1.1.0):** Parsing `tx/rx` unicast bytes, packets, retries, rates, and association uptime from `wl sta_info`.
 
 ### Pending Roadmap Items
 1. **Dynamic WLAN Mapping UI / Auto-Discovery:**
