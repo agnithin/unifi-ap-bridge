@@ -16,6 +16,17 @@ It emulates a genuine UniFi 6 Access Point (e.g., UniFi 6 Mesh `U6M`, UniFi 6 Pr
   * Clients switch from generic wired switch port attachments to true wireless clients with live signal bars, SNR, and frequency bands (2.4 GHz vs 5 GHz).
   * IoT devices (ESP32, Sonoff, Wyze, smart appliances) correctly classify as **Wi-Fi 4 (`802.11n`)** rather than Wi-Fi 3.
   * Modern mobile and laptop devices classify as **Wi-Fi 6 (`802.11ax`)** or **Wi-Fi 5 (`802.11ac`)**.
+* **Physical Ethernet Ports & Switch Port Manager Integration (v1.2.0+):**
+  * Emulates multi-port In-Wall Access Points (**`U6-IW`** / UniFi 6 In-Wall) allowing the AP and its downstream physical ports to appear directly in the **UniFi Port Manager** (`/network/default/ports`).
+  * Telemetry reports all physical interfaces from `/sys/class/net/ethX` and `/proc/net/dev`:
+    * **Port 1 (Uplink)**: 2.5 Gbps WAN/LAN port with link speed, full duplex, and live byte/packet counters.
+    * **Ports 2–4 (LAN)**: 1 Gbps Gigabit LAN ports with link state, speed, and real-time wire traffic metrics.
+  * Accurately links downstream wired devices (e.g. smart home hubs or Ethernet switches) to their physical router LAN ports in the UniFi topology.
+* **Router CPU & Memory Utilization Telemetry (v1.2.0+):**
+  * Reports real-time CPU load percentage and active memory utilization (`system-stats` and legacy `sys_stats`) derived from `/proc/loadavg` and `/proc/meminfo`.
+  * Renders live CPU and RAM status cards in the Asuswrt WebUI and CLI.
+* **WiFi Experience Scoring (v1.2.0+):**
+  * Dynamically computes 0–100% `satisfaction` scores for each associated station based on SNR, RSSI signal attenuation, and packet retry penalties, populating the UniFi "WiFi Experience" column.
 * **Live RF Channel Utilization & Airtime Telemetry (v1.1.0+):**
   * Continuously polls Broadcom `wl chanim_stats` on physical 2.4 GHz and 5 GHz radios.
   * Dynamically computes total channel utilization (`cu_total`), AP transmit airtime (`cu_self_tx`), and AP receive airtime (`cu_self_rx`).

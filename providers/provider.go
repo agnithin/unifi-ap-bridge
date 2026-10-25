@@ -18,4 +18,6 @@ type TelemetryProvider interface {
 	GetRadios() ([]telemetry.Radio, error)
 	GetVAPs(wlanMapping map[string]string) ([]telemetry.VAP, error)
 	GetRadioStats() ([]telemetry.RadioStat, error)
+	GetPortTable() ([]telemetry.Port, []telemetry.EthernetPort, *telemetry.Uplink, error)
+	GetSystemStats() (*telemetry.SystemStats, *telemetry.SysStats, error)
 }

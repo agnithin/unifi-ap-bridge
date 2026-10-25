@@ -157,4 +157,18 @@ smoothed rssi: -67`
 	if sta.Uptime != 5595 || sta.IdleTime != 4 {
 		t.Errorf("EnrichStation time mismatch: uptime=%d, idle=%d", sta.Uptime, sta.IdleTime)
 	}
+	if sta.Satisfaction < 70 || sta.Satisfaction > 100 {
+		t.Errorf("expected reasonable satisfaction score (70-100), got %d", sta.Satisfaction)
+	}
+}
+
+func TestCalculateSatisfaction(t *testing.T) {
+	// Excellent client (-55 dBm, 0 retries) -> 100
+	if s := CalculateSatisfaction(-55, 35, 1000, 0); s != 100 {
+		t.Errorf("got %d, want 100", s)
+	}
+	// Weak signal client (-82 dBm, 10% retries)
+	if s := CalculateSatisfaction(-82, 10, 900, 100); s > 70 {
+		t.Errorf("got %d, want <= 70", s)
+	}
 }

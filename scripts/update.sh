@@ -177,7 +177,10 @@ cmd_apply() {
     fi
 
     if curl -fsSL --connect-timeout 10 --max-time 60 "$bin_url" -o "$bin_tarball" 2>/dev/null; then
-        echo "[*] Verified binary package download."
+        echo "[*] Verified binary package download from releases."
+        cp -f "$bin_tarball" "$INSTALL_DIR/unifi-bridge.tar.gz"
+    elif curl -fsSL --connect-timeout 10 --max-time 60 "${REPO_RAW}/${branch}/bin/unifi-bridge-${ARCH_SUFFIX}.tar.gz?_=${cb}" -o "$bin_tarball" 2>/dev/null; then
+        echo "[*] Verified binary package download from branch repository."
         cp -f "$bin_tarball" "$INSTALL_DIR/unifi-bridge.tar.gz"
     else
         echo "[!] Note: Binary package not found at ${bin_url}; keeping existing binary and updating scripts/WebUI."

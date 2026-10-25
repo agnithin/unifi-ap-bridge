@@ -118,3 +118,27 @@ func TestAsusProvider(t *testing.T) {
 		t.Errorf("5G radio stats mismatch: %+v", rStats[1])
 	}
 }
+
+func TestParseNetDev(t *testing.T) {
+	raw := `Inter-|   Receive                                                |  Transmit
+ face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+  eth0: 1000 10 1 2 0 0 0 0 2000 20 3 4 0 0 0 0
+  eth3: 5000 50 0 0 0 0 0 0 6000 60 0 0 0 0 0 0`
+
+	m := parseNetDev(raw)
+	if len(m) != 2 {
+		t.Fatalf("expected 2 interfaces, got %d", len(m))
+	}
+	eth0 := m["eth0"]
+	if eth0.rxBytes != 1000 || eth0.rxPackets != 10 || eth0.rxErrors != 1 || eth0.rxDropped != 2 {
+		t.Errorf("eth0 rx counters mismatch: %+v", eth0)
+	}
+	if eth0.txBytes != 2000 || eth0.txPackets != 20 || eth0.txErrors != 3 || eth0.txDropped != 4 {
+		t.Errorf("eth0 tx counters mismatch: %+v", eth0)
+	}
+
+	eth3 := m["eth3"]
+	if eth3.rxBytes != 5000 || eth3.txBytes != 6000 {
+		t.Errorf("eth3 counters mismatch: %+v", eth3)
+	}
+}

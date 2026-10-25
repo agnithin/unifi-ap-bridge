@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -378,4 +380,256 @@ func (p *AsusProvider) GetRadioStats() ([]telemetry.RadioStat, error) {
 		})
 	}
 	return stats, nil
+}
+
+type netDevCounters struct {
+	rxBytes   int64
+	rxPackets int64
+	rxErrors  int64
+	rxDropped int64
+	txBytes   int64
+	txPackets int64
+	txErrors  int64
+	txDropped int64
+}
+
+func parseNetDev(content string) map[string]netDevCounters {
+	res := make(map[string]netDevCounters)
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		if !strings.Contains(line, ":") {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		iface := strings.TrimSpace(parts[0])
+		fields := strings.Fields(parts[1])
+		if len(fields) >= 16 {
+			rxB, _ := strconv.ParseInt(fields[0], 10, 64)
+			rxP, _ := strconv.ParseInt(fields[1], 10, 64)
+			rxE, _ := strconv.ParseInt(fields[2], 10, 64)
+			rxD, _ := strconv.ParseInt(fields[3], 10, 64)
+			txB, _ := strconv.ParseInt(fields[8], 10, 64)
+			txP, _ := strconv.ParseInt(fields[9], 10, 64)
+			txE, _ := strconv.ParseInt(fields[10], 10, 64)
+			txD, _ := strconv.ParseInt(fields[11], 10, 64)
+			res[iface] = netDevCounters{
+				rxBytes:   rxB,
+				rxPackets: rxP,
+				rxErrors:  rxE,
+				rxDropped: rxD,
+				txBytes:   txB,
+				txPackets: txP,
+				txErrors:  txE,
+				txDropped: txD,
+			}
+		}
+	}
+	return res
+}
+
+func readSysfsInt(path string) int {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	v, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return 0
+	}
+	return v
+}
+
+func readSysfsString(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func (p *AsusProvider) GetPortTable() ([]telemetry.Port, []telemetry.EthernetPort, *telemetry.Uplink, error) {
+	netDevRaw, _ := os.ReadFile("/proc/net/dev")
+	counters := parseNetDev(string(netDevRaw))
+
+	hostMAC := p.nvramGet("lan_hwaddr")
+	if norm, err := inform.NormalizeMAC(hostMAC); err == nil {
+		hostMAC = norm
+	}
+
+	// Physical port mapping for Asuswrt (XT8 / BCM4908 / BCM53134):
+	// eth0 = 2.5G WAN/Uplink
+	// eth1 = 1G LAN 1
+	// eth2 = 1G LAN 2
+	// eth3 = 1G LAN 3
+	ifaces := []struct {
+		idx      int
+		dev      string
+		name     string
+		isUplink bool
+		defMedia string
+	}{
+		{idx: 1, dev: "eth0", name: "Port 1 (Uplink)", isUplink: true, defMedia: "2.5GE"},
+		{idx: 2, dev: "eth1", name: "Port 2 (LAN 1)", isUplink: false, defMedia: "GE"},
+		{idx: 3, dev: "eth2", name: "Port 3 (LAN 2)", isUplink: false, defMedia: "GE"},
+		{idx: 4, dev: "eth3", name: "Port 4 (LAN 3)", isUplink: false, defMedia: "GE"},
+	}
+
+	ports := make([]telemetry.Port, 0, len(ifaces))
+	for _, spec := range ifaces {
+		carrier := readSysfsInt(fmt.Sprintf("/sys/class/net/%s/carrier", spec.dev))
+		speed := readSysfsInt(fmt.Sprintf("/sys/class/net/%s/speed", spec.dev))
+		duplexStr := readSysfsString(fmt.Sprintf("/sys/class/net/%s/duplex", spec.dev))
+
+		up := carrier == 1
+		fullDuplex := duplexStr == "full"
+		media := spec.defMedia
+		if speed >= 2500 {
+			media = "2.5GE"
+		} else if speed >= 1000 {
+			media = "GE"
+		} else if speed >= 100 {
+			media = "FE"
+		} else if !up {
+			speed = 0
+		}
+
+		c := counters[spec.dev]
+
+		ports = append(ports, telemetry.Port{
+			PortIdx:    spec.idx,
+			Name:       spec.name,
+			Media:      media,
+			Up:         up,
+			Speed:      speed,
+			FullDuplex: fullDuplex,
+			Enable:     true,
+			IsUplink:   spec.isUplink,
+			RxBytes:    c.rxBytes,
+			TxBytes:    c.txBytes,
+			RxPackets:  c.rxPackets,
+			TxPackets:  c.txPackets,
+			RxErrors:   c.rxErrors,
+			TxErrors:   c.txErrors,
+			RxDropped:  c.rxDropped,
+			TxDropped:  c.txDropped,
+		})
+	}
+
+	eth0Port := ports[0]
+	ethTable := []telemetry.EthernetPort{
+		{
+			Name:       "eth0",
+			MAC:        hostMAC,
+			Speed:      eth0Port.Speed,
+			FullDuplex: eth0Port.FullDuplex,
+			NumPort:    len(ports),
+		},
+	}
+
+	uplink := &telemetry.Uplink{
+		Name:       "eth0",
+		MAC:        hostMAC,
+		IP:         p.nvramGet("lan_ipaddr"),
+		Type:       "wire",
+		Speed:      eth0Port.Speed,
+		FullDuplex: eth0Port.FullDuplex,
+		Up:         eth0Port.Up,
+		NumPort:    1,
+		RxBytes:    eth0Port.RxBytes,
+		TxBytes:    eth0Port.TxBytes,
+		RxPackets:  eth0Port.RxPackets,
+		TxPackets:  eth0Port.TxPackets,
+		RxErrors:   eth0Port.RxErrors,
+		TxErrors:   eth0Port.TxErrors,
+		RxDropped:  eth0Port.RxDropped,
+	}
+
+	return ports, ethTable, uplink, nil
+}
+
+func (p *AsusProvider) GetSystemStats() (*telemetry.SystemStats, *telemetry.SysStats, error) {
+	var uptime int64
+	if data, err := os.ReadFile("/proc/uptime"); err == nil {
+		fields := strings.Fields(string(data))
+		if len(fields) > 0 {
+			if sec, err := strconv.ParseFloat(fields[0], 64); err == nil {
+				uptime = int64(sec)
+			}
+		}
+	}
+
+	// Memory from /proc/meminfo
+	var memTotal, memFree, buffers, cached, used int64
+	if data, err := os.ReadFile("/proc/meminfo"); err == nil {
+		lines := strings.Split(string(data), "\n")
+		for _, line := range lines {
+			parts := strings.Split(line, ":")
+			if len(parts) < 2 {
+				continue
+			}
+			key := strings.TrimSpace(parts[0])
+			valStr := strings.TrimSpace(strings.TrimSuffix(parts[1], "kB"))
+			fields := strings.Fields(valStr)
+			if len(fields) > 0 {
+				val, _ := strconv.ParseInt(fields[0], 10, 64)
+				switch key {
+				case "MemTotal":
+					memTotal = val
+				case "MemFree":
+					memFree = val
+				case "Buffers":
+					buffers = val
+				case "Cached":
+					cached = val
+				}
+			}
+		}
+	}
+
+	memPct := 0.0
+	if memTotal > 0 {
+		used = memTotal - (memFree + buffers + cached)
+		if used < 0 {
+			used = 0
+		}
+		memPct = math.Round((float64(used)/float64(memTotal)*100.0)*10) / 10
+	}
+
+	// CPU & load averages from /proc/loadavg
+	cpuPct := 0.0
+	var load1Str, load5Str, load15Str string
+	if data, err := os.ReadFile("/proc/loadavg"); err == nil {
+		fields := strings.Fields(string(data))
+		if len(fields) >= 3 {
+			load1Str = fields[0]
+			load5Str = fields[1]
+			load15Str = fields[2]
+			if load1, err := strconv.ParseFloat(load1Str, 64); err == nil {
+				numCores := runtime.NumCPU()
+				if numCores <= 0 {
+					numCores = 4
+				}
+				pct := (load1 / float64(numCores)) * 100.0
+				if pct > 100.0 {
+					pct = 100.0
+				}
+				cpuPct = math.Round(pct*10) / 10
+			}
+		}
+	}
+
+	sysStats := &telemetry.SysStats{
+		LoadAvg1:  load1Str,
+		LoadAvg5:  load5Str,
+		LoadAvg15: load15Str,
+		MemUsed:   used * 1024,
+		MemTotal:  memTotal * 1024,
+		MemBuffer: buffers * 1024,
+	}
+
+	return &telemetry.SystemStats{
+		CPU:    cpuPct,
+		Mem:    memPct,
+		Uptime: uptime,
+	}, sysStats, nil
 }

@@ -24,8 +24,9 @@ type Station struct {
 	TxRetries int64 `json:"tx_retries,omitempty"`
 	TxRate    int   `json:"tx_rate,omitempty"` // in kbps (e.g. 58500)
 	RxRate    int   `json:"rx_rate,omitempty"` // in kbps (e.g. 54000)
-	Uptime    int64 `json:"uptime,omitempty"`  // seconds connected
-	IdleTime  int64 `json:"idletime,omitempty"`// seconds idle
+	Uptime       int64 `json:"uptime,omitempty"`       // seconds connected
+	IdleTime     int64 `json:"idletime,omitempty"`     // seconds idle
+	Satisfaction int   `json:"satisfaction,omitempty"` // WiFi Experience score (0-100)
 }
 
 type VAP struct {
@@ -75,21 +76,87 @@ type RadioStat struct {
 	CuSelfTx int    `json:"cu_self_tx"` // AP transmit airtime % (0-100)
 }
 
+type Port struct {
+	PortIdx    int    `json:"port_idx"`
+	Name       string `json:"name"`
+	Media      string `json:"media"`
+	Up         bool   `json:"up"`
+	Speed      int    `json:"speed"` // 10, 100, 1000, 2500
+	FullDuplex bool   `json:"full_duplex"`
+	Enable     bool   `json:"enable"`
+	IsUplink   bool   `json:"is_uplink"`
+	RxBytes    int64  `json:"rx_bytes"`
+	TxBytes    int64  `json:"tx_bytes"`
+	RxPackets  int64  `json:"rx_packets"`
+	TxPackets  int64  `json:"tx_packets"`
+	RxErrors   int64  `json:"rx_errors"`
+	TxErrors   int64  `json:"tx_errors"`
+	RxDropped  int64  `json:"rx_dropped"`
+	TxDropped  int64  `json:"tx_dropped"`
+}
+
+type EthernetPort struct {
+	Name       string `json:"name"`
+	MAC        string `json:"mac"`
+	Speed      int    `json:"speed"`
+	FullDuplex bool   `json:"full_duplex"`
+	NumPort    int    `json:"num_port"`
+}
+
+type Uplink struct {
+	Name       string `json:"name"`
+	MAC        string `json:"mac"`
+	IP         string `json:"ip,omitempty"`
+	Netmask    string `json:"netmask,omitempty"`
+	Type       string `json:"type"` // "wire"
+	Speed      int    `json:"speed"`
+	FullDuplex bool   `json:"full_duplex"`
+	Up         bool   `json:"up"`
+	NumPort    int    `json:"num_port"`
+	RxBytes    int64  `json:"rx_bytes"`
+	TxBytes    int64  `json:"tx_bytes"`
+	RxPackets  int64  `json:"rx_packets"`
+	TxPackets  int64  `json:"tx_packets"`
+	RxErrors   int64  `json:"rx_errors"`
+	TxErrors   int64  `json:"tx_errors"`
+	RxDropped  int64  `json:"rx_dropped"`
+}
+
+type SysStats struct {
+	LoadAvg1  string `json:"loadavg_1,omitempty"`
+	LoadAvg5  string `json:"loadavg_5,omitempty"`
+	LoadAvg15 string `json:"loadavg_15,omitempty"`
+	MemUsed   int64  `json:"mem_used,omitempty"`
+	MemTotal  int64  `json:"mem_total,omitempty"`
+	MemBuffer int64  `json:"mem_buffer,omitempty"`
+}
+
+type SystemStats struct {
+	CPU    float64 `json:"cpu"`    // CPU utilization percentage (0.0 - 100.0)
+	Mem    float64 `json:"mem"`    // Memory utilization percentage (0.0 - 100.0)
+	Uptime int64   `json:"uptime"` // System uptime in seconds
+}
+
 type InformPayload struct {
-	MAC             string      `json:"mac"`
-	IP              string      `json:"ip"`
-	Hostname        string      `json:"hostname"`
-	Model           string      `json:"model"`
-	Version         string      `json:"version"`
-	Default         bool        `json:"default"`
-	State           int         `json:"state"` // 1 = disconnected/pending, 4 = adopted/connected
-	Uptime          int64       `json:"uptime"`
-	Time            int64       `json:"time"`
-	InformURL       string      `json:"inform_url"`
-	XAuthKey        string      `json:"x_authkey"`
-	DefaultKey      bool        `json:"_default_key"`
-	CfgVersion      string      `json:"cfgversion,omitempty"`
-	RadioTable      []Radio     `json:"radio_table"`
-	RadioTableStats []RadioStat `json:"radio_table_stats"`
-	VAPTable        []VAP       `json:"vap_table"`
+	MAC             string         `json:"mac"`
+	IP              string         `json:"ip"`
+	Hostname        string         `json:"hostname"`
+	Model           string         `json:"model"`
+	Version         string         `json:"version"`
+	Default         bool           `json:"default"`
+	State           int            `json:"state"` // 1 = disconnected/pending, 4 = adopted/connected
+	Uptime          int64          `json:"uptime"`
+	Time            int64          `json:"time"`
+	InformURL       string         `json:"inform_url"`
+	XAuthKey        string         `json:"x_authkey"`
+	DefaultKey      bool           `json:"_default_key"`
+	CfgVersion      string         `json:"cfgversion,omitempty"`
+	RadioTable      []Radio        `json:"radio_table"`
+	RadioTableStats []RadioStat    `json:"radio_table_stats"`
+	VAPTable        []VAP          `json:"vap_table"`
+	EthernetTable   []EthernetPort `json:"ethernet_table,omitempty"`
+	PortTable       []Port         `json:"port_table,omitempty"`
+	Uplink          *Uplink        `json:"uplink,omitempty"`
+	SysStats        *SysStats      `json:"sys_stats,omitempty"`
+	SystemStats     *SystemStats   `json:"system-stats,omitempty"`
 }

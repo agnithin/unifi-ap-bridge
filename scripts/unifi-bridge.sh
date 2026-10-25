@@ -112,6 +112,23 @@ cmd_status() {
     fi
     printf "  ${C_BOLD}Total Wireless Stations    : %s clients${C_RESET}\n" "${total_sta:-0}"
 
+    # CPU & Memory Resources
+    if [ -f "/proc/loadavg" ]; then
+        load_1m=$(awk '{print $1}' /proc/loadavg)
+        printf "System CPU Load  : %s (1m avg)\n" "$load_1m"
+    fi
+    if [ -f "/proc/meminfo" ]; then
+        mem_tot=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+        mem_free=$(grep MemFree /proc/meminfo | awk '{print $2}')
+        mem_buf=$(grep Buffers /proc/meminfo | awk '{print $2}')
+        mem_cached=$(grep '^Cached:' /proc/meminfo | awk '{print $2}')
+        if [ -n "$mem_tot" ] && [ "$mem_tot" -gt 0 ]; then
+            mem_used=$((mem_tot - mem_free - mem_buf - mem_cached))
+            mem_pct=$(( (mem_used * 100) / mem_tot ))
+            printf "System Memory    : %s%% used (%s MB / %s MB)\n" "$mem_pct" "$((mem_used / 1024))" "$((mem_tot / 1024))"
+        fi
+    fi
+
     # CPU Temperature if available
     if [ -f "/sys/class/thermal/thermal_zone0/temp" ]; then
         raw_temp=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null)
@@ -120,6 +137,30 @@ cmd_status() {
             printf "Hardware CPU Temp: %s °C\n" "$temp_c"
         fi
     fi
+
+    # Physical Ethernet Switch Ports
+    echo "-----------------------------------------------------"
+    printf "Physical Ethernet Switch Ports:\n"
+    for p in 0 1 2 3; do
+        iface="eth$p"
+        pname="Port $((p + 1))"
+        case "$p" in
+            0) pname="Port 1 (2.5G Uplink)" ;;
+            1) pname="Port 2 (LAN 1)" ;;
+            2) pname="Port 3 (LAN 2)" ;;
+            3) pname="Port 4 (LAN 3)" ;;
+        esac
+        if [ -d "/sys/class/net/$iface" ]; then
+            c=$(cat "/sys/class/net/$iface/carrier" 2>/dev/null || echo 0)
+            if [ "$c" = "1" ]; then
+                sp=$(cat "/sys/class/net/$iface/speed" 2>/dev/null || echo "Unknown")
+                dup=$(cat "/sys/class/net/$iface/duplex" 2>/dev/null || echo "")
+                printf "  - %-22s : ${C_GREEN}UP${C_RESET} at %s Mbps %s\n" "$pname" "$sp" "$dup"
+            else
+                printf "  - %-22s : ${C_RED}DOWN${C_RESET}\n" "$pname"
+            fi
+        fi
+    done
 
     # Cluster Nodes Status if available
     CLUSTER_JS="/tmp/var/wwwext/$ADDON_NAME/cluster.js"

@@ -22,7 +22,7 @@ import (
 )
 
 var (
-	version   = "1.0.0"
+	version   = "1.2.0"
 	commit    = "none"
 	buildDate = "unknown"
 )
@@ -85,7 +85,7 @@ func logEvent(format string, v ...any) string {
 	return msg
 }
 
-func updateWebUIStatus(host *providers.HostInfo, modelProfile models.ModelProfile, cfg *Config, stateMgr *inform.StateManager, totalStations int, radioStats []telemetry.RadioStat, exchangeErr error) {
+func updateWebUIStatus(host *providers.HostInfo, modelProfile models.ModelProfile, cfg *Config, stateMgr *inform.StateManager, totalStations int, radioStats []telemetry.RadioStat, ports []telemetry.Port, sysStats *telemetry.SystemStats, exchangeErr error) {
 	statusDir := "/tmp/var/wwwext/unifi-bridge"
 	if err := os.MkdirAll(statusDir, 0755); err != nil {
 		return
@@ -139,6 +139,8 @@ func updateWebUIStatus(host *providers.HostInfo, modelProfile models.ModelProfil
 		"cu_total_2g":    cuTotal2G,
 		"cu_total_5g":    cuTotal5G,
 		"radio_stats":    radioStats,
+		"ports":          ports,
+		"system_stats":   sysStats,
 		"recent_logs":    logsCopy,
 	}
 
@@ -236,9 +238,11 @@ func main() {
 	runExchange := func() (exchangeErr error) {
 		var totalStations int
 		var radioStats []telemetry.RadioStat
+		var ports []telemetry.Port
+		var sysStats *telemetry.SystemStats
 
 		defer func() {
-			updateWebUIStatus(host, modelProfile, cfg, stateMgr, totalStations, radioStats, exchangeErr)
+			updateWebUIStatus(host, modelProfile, cfg, stateMgr, totalStations, radioStats, ports, sysStats, exchangeErr)
 		}()
 
 		radios, err := provider.GetRadios()
@@ -262,6 +266,12 @@ func main() {
 				})
 			}
 		}
+
+		// Retrieve Ethernet ports, uplink and system load telemetry
+		pTable, ethTable, uplink, _ := provider.GetPortTable()
+		ports = pTable
+		systemStats, sysStatsLegacy, _ := provider.GetSystemStats()
+		sysStats = systemStats
 
 		// Calculate station count per radio
 		for i := range radioStats {
@@ -300,6 +310,11 @@ func main() {
 			RadioTable:      radios,
 			RadioTableStats: radioStats,
 			VAPTable:        vaps,
+			EthernetTable:   ethTable,
+			PortTable:       ports,
+			Uplink:          uplink,
+			SysStats:        sysStatsLegacy,
+			SystemStats:     systemStats,
 		}
 
 		if *dumpFlag {

@@ -158,3 +158,34 @@ func (p *ProfileProvider) GetRadioStats() ([]telemetry.RadioStat, error) {
 		{Name: "wifi-na", Channel: 161, NumSta: 1, CuTotal: 18, CuSelfRx: 4, CuSelfTx: 10},
 	}, nil
 }
+
+func (p *ProfileProvider) GetPortTable() ([]telemetry.Port, []telemetry.EthernetPort, *telemetry.Uplink, error) {
+	ports := []telemetry.Port{
+		{PortIdx: 1, Name: "Port 1 (Uplink)", Media: "2.5GE", Up: true, Speed: 2500, FullDuplex: true, Enable: true, IsUplink: true, RxBytes: 1048576, TxBytes: 2097152},
+		{PortIdx: 2, Name: "Port 2 (LAN 1)", Media: "GE", Up: false, Speed: 0, FullDuplex: false, Enable: true, IsUplink: false},
+		{PortIdx: 3, Name: "Port 3 (LAN 2)", Media: "GE", Up: false, Speed: 0, FullDuplex: false, Enable: true, IsUplink: false},
+		{PortIdx: 4, Name: "Port 4 (LAN 3)", Media: "GE", Up: true, Speed: 1000, FullDuplex: true, Enable: true, IsUplink: false, RxBytes: 524288, TxBytes: 524288},
+	}
+	ethTable := []telemetry.EthernetPort{
+		{Name: "eth0", MAC: p.data.MAC, Speed: 2500, FullDuplex: true, NumPort: 4},
+	}
+	uplink := &telemetry.Uplink{
+		Name: "eth0", MAC: p.data.MAC, IP: p.data.IP, Type: "wire", Speed: 2500, FullDuplex: true, Up: true, NumPort: 1, RxBytes: 1048576, TxBytes: 2097152,
+	}
+	return ports, ethTable, uplink, nil
+}
+
+func (p *ProfileProvider) GetSystemStats() (*telemetry.SystemStats, *telemetry.SysStats, error) {
+	return &telemetry.SystemStats{
+		CPU:    15.5,
+		Mem:    48.2,
+		Uptime: 3600,
+	}, &telemetry.SysStats{
+		LoadAvg1:  "0.15",
+		LoadAvg5:  "0.12",
+		LoadAvg15: "0.10",
+		MemUsed:   250000000,
+		MemTotal:  512000000,
+		MemBuffer: 30000000,
+	}, nil
+}

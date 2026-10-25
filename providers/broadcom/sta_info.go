@@ -204,4 +204,37 @@ func EnrichStation(sta *telemetry.Station, info ParsedStaInfo) {
 	sta.RxRate = info.RxRate
 	sta.Uptime = info.Uptime
 	sta.IdleTime = info.IdleTime
+	sta.Satisfaction = CalculateSatisfaction(sta.Signal, sta.RSSI, sta.TxPackets, sta.TxRetries)
+}
+
+// CalculateSatisfaction computes a 0-100 UniFi WiFi Experience health score
+// based on RSSI/signal strength and transmit packet retry rates.
+func CalculateSatisfaction(signal, rssi int, txPackets, txRetries int64) int {
+	score := 100
+
+	if signal != 0 {
+		if signal < -80 {
+			score -= 25
+		} else if signal < -75 {
+			score -= 15
+		} else if signal < -67 {
+			score -= 5
+		}
+	}
+
+	if txPackets > 0 && txRetries > 0 {
+		ratio := float64(txRetries) / float64(txPackets+txRetries)
+		penalty := int(ratio * 100 * 2) // e.g. 5% retries = 10% penalty
+		if penalty > 35 {
+			penalty = 35
+		}
+		score -= penalty
+	}
+
+	if score < 20 {
+		score = 20
+	} else if score > 100 {
+		score = 100
+	}
+	return score
 }

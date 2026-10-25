@@ -178,12 +178,45 @@ function updateUI(st) {
   }
 
   document.getElementById("model_val").textContent = (st.model || "UniFi 6 Mesh") + " (Firmware " + (st.firmware || "6.8.2") + ")";
+  if (st.model_code) {
+    var selM = document.getElementById("select_model");
+    if (selM && !selM.dataset.userModified) {
+      selM.value = st.model_code;
+    }
+  }
   document.getElementById("controller_val").textContent = st.controller_url || ("http://" + detectedGatewayIP + ":8080/inform");
   document.getElementById("heartbeat_val").textContent = (st.last_heartbeat || "-") + " [" + (st.mode || "GCM") + "]";
 
   document.getElementById("stat_total").textContent = st.total_stations !== undefined ? st.total_stations : "-";
   document.getElementById("stat_2g").textContent = st.stations_2g !== undefined ? st.stations_2g : "-";
   document.getElementById("stat_5g").textContent = st.stations_5g !== undefined ? st.stations_5g : "-";
+
+  if (st.system_stats) {
+    var sysLoadEl = document.getElementById("stat_sys_load");
+    var sysSubEl = document.getElementById("stat_sys_sub");
+    if (sysLoadEl && st.system_stats.cpu !== undefined) {
+      sysLoadEl.textContent = st.system_stats.cpu + "% CPU";
+    }
+    if (sysSubEl && st.system_stats.cpu !== undefined && st.system_stats.mem !== undefined) {
+      sysSubEl.textContent = "CPU: " + st.system_stats.cpu + "% | RAM: " + st.system_stats.mem + "%";
+    }
+  }
+
+  if (st.ports && st.ports.length > 0) {
+    var portsEl = document.getElementById("ports_val");
+    if (portsEl) {
+      var pHtml = '<div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:2px;">';
+      for (var p = 0; p < st.ports.length; p++) {
+        var pt = st.ports[p];
+        var isUp = pt.up;
+        var bg = isUp ? "#27ae60" : "#576574";
+        var label = pt.name + ": " + (isUp ? (pt.speed + "M " + (pt.is_uplink ? "UPLINK" : "FDX")) : "DOWN");
+        pHtml += '<span style="background:' + bg + '; color:#fff; font-size:10px; font-weight:bold; padding:2px 7px; border-radius:3px;">' + label + '</span>';
+      }
+      pHtml += '</div>';
+      portsEl.innerHTML = pHtml;
+    }
+  }
 
   var elLoad2G = document.getElementById("load_2g");
   if (elLoad2G) {
@@ -597,6 +630,11 @@ function initial(){
                         <div class="stat_num" style="color:#3498db;" id="stat_5g">-</div>
                         <div class="stat_sub" id="load_5g" style="font-size:11px; color:#bdc3c7; margin-top:4px;">Channel Load: -</div>
                       </div>
+                      <div class="stat_card">
+                        <div class="stat_label">Router Resources</div>
+                        <div class="stat_num" style="color:#9b59b6;" id="stat_sys_load">-</div>
+                        <div class="stat_sub" id="stat_sys_sub" style="font-size:11px; color:#bdc3c7; margin-top:4px;">CPU: - | RAM: -</div>
+                      </div>
                     </div>
 
                     <!-- Cluster Nodes & Synchronization Table -->
@@ -710,6 +748,10 @@ function initial(){
                         <td class="settingname">Last Heartbeat Exchange</td>
                         <td class="settingvalue" id="heartbeat_val">-</td>
                       </tr>
+                      <tr>
+                        <td class="settingname">Physical Switch Ports</td>
+                        <td class="settingvalue" id="ports_val">-</td>
+                      </tr>
                     </table>
 
                     <div style="line-height:10px;">&nbsp;</div>
@@ -757,8 +799,9 @@ function initial(){
                           <span style="font-size:10px;color:#bdc3c7;">UniFi hardware model reported to controller</span>
                         </td>
                         <td class="settingvalue">
-                          <select class="input_option" id="select_model">
-                            <option value="U6M" selected>UniFi 6 Mesh (U6M) - Dual/Tri-Band Wi-Fi 6 (Recommended)</option>
+                          <select class="input_option" id="select_model" onchange="this.dataset.userModified='1';">
+                            <option value="U6M">UniFi 6 Mesh (U6M) - Dual/Tri-Band Wi-Fi 6</option>
+                            <option value="U6IW" selected>UniFi 6 In-Wall (U6-IW) - 4-Port Switch & Port Manager (Recommended)</option>
                             <option value="U6P">UniFi 6 Pro (U6P) - Wi-Fi 6 4x4 MU-MIMO</option>
                             <option value="U6L">UniFi 6 Lite (U6L) - Wi-Fi 6 2x2</option>
                           </select>
