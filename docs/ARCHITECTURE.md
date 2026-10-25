@@ -2,6 +2,8 @@
 
 `unifi-ap-bridge` is a standalone, dependency-free daemon and WebUI extension engineered for Asuswrt-Merlin and Broadcom-based routers. It translates raw Linux and Broadcom wireless and switch telemetry into the Ubiquiti UniFi Inform protocol (`:8080/inform`).
 
+**Deployed baseline:** v1.2.2 on `dev`, code commit `1b6ce07`, verified on both APs on 2026-10-24. See [current audit and release status](AUDIT_STATE.md) for dated observations and remaining work.
+
 ---
 
 ## 1. High-Level System Architecture
@@ -75,7 +77,7 @@ graph TD
     * `chassis.id.value` &rarr; Upstream gateway device MAC (`6c:63:f8:30:9a:05`).
     * `port.id.value` &rarr; Upstream physical port MAC (`6c:63:f8:30:9a:05` for Port 1, `6c:63:f8:30:9a:07` for Port 3).
     * `port.descr` &rarr; Remote port mapping (`eth0` &rarr; Port 1, `eth2` &rarr; Port 3).
-  * Injects `uplink_mac`, `last_uplink`, and `lldp_table` entries into the inform payload, enabling the UniFi controller to automatically compute topology downlinks.
+  * Emits `uplink_mac`, `last_uplink`, and `lldp_table` entries for controller topology processing. Latest official device responses have `uplink: null` for both APs; gateway parent-port resolution remains unconfirmed. The port speed/link telemetry is independently verified.
 
 ---
 
@@ -104,7 +106,10 @@ All communication with `:8080/inform` utilizes the UniFi binary wire packet form
 3. **Adopted Mode (Steady State):**
    * Bridge acknowledges adoption, transitioning to **AES-128-GCM** encryption (authenticated with 16-byte GCM tag).
    * Device reports `default: false` and `state: 4`.
-   * Telemetry streams continuously at 10-second intervals.
+   * Telemetry is sampled at a default 10-second interval. Non-positive configured intervals normalize to 10 seconds; uptime is refreshed from the per-exchange system sample.
+   * Controller and persisted keys must decode to 16 bytes of hexadecimal data. Malformed responses cannot replace an existing valid identity.
+   * Three consecutive HTTP 401/404 rejections permit adoption recovery. Success, transport failures, HTTP 400, and other HTTP statuses break that sequence; HTTP 400 does not reset adoption. This threshold is a recovery policy, not proof the controller forgot the device.
+   * `state.json` is saved via temporary-file rename when controller responses change adoption or configuration state, and on recovery reset. Writes are not restricted to first adoption or manual settings changes.
 
 ---
 
@@ -130,5 +135,36 @@ Standard Asuswrt forms submit to `/start_apply.htm` in a hidden iframe, which tr
 In AiMesh or multi-AP environments, one router operates as the Main AP and satellites operate as Node APs.
 * **Discovery:** Main AP inspects native NVRAM `cfg_device_list`, `asus_device_list`, and MerVLAN configurations to discover satellite IPs.
 * **Identity Isolation:** During synchronization, `/jffs/addons/unifi-bridge/state.json` is explicitly excluded from distribution. Each AP maintains its own independent adoption key, preventing identity collisions in the controller.
-* **Remote Dispatch:** Pushes configuration updates, scripts, and binaries over SSH using dropbear host keys.
+* **Remote Dispatch:** Pushes configuration, scripts, and binaries using the first available configured cluster/fallback identity. Dedicated cluster keys are preferred; legacy fallback keys remain supported.
+* **SSH Trust & Bounds:** One Dropbear `-y` accepts unknown host keys; it does not disable all checking. `BatchMode`, keepalive/idle options, and a watchdog bound complete operations to 30 seconds for status and 120 seconds for transfers. The installed client has no `ConnectTimeout`, and the firmware has no `timeout` applet. File descriptor 3 preserves transfer stdin before launching background SSH, including on dash.
+* **Permissions:** Installer/updater/cluster paths enforce addon `0755` and bridge `.ssh` `0700`; observed private keys and state are `0600`. Periodic status skips redundant chmod calls, using `ls`/`awk` because firmware lacks `stat`.
 * **Cluster Reporting:** Aggregates remote node statuses into `/tmp/var/wwwext/unifi-bridge/cluster.js` to render the multi-node status matrix in the WebUI.
+
+
+### 5.1 Status freshness and meaning
+
+A remote node is healthy only when a live PID exists, its cached status says running, and `status_updated_at` is fresh. Freshness is evaluated against the node's own epoch clock with a maximum age of `3 * interval_sec + 30` seconds. Missing legacy timestamps, future timestamps, stopped processes, and stale samples fail the check. Local status is checked for a live PID and fresh timestamp too.
+
+A version match is labeled `Version Match (Config Unverified)`. It does not prove configuration equality. The first cluster sample during a restart can still reflect old data; refresh status after new heartbeats before judging the deployment. Cluster health describes the sampling daemon; controller connection success is a separate signal.
+
+## 6. Runtime Status, Logging, and Build Provenance
+
+| Runtime field | Meaning |
+|---|---|
+| `last_attempt` | Start time of the latest telemetry exchange attempt |
+| `last_successful_inform` | Last successfully decoded and applied controller response; empty before first success |
+| `last_heartbeat` | Compatibility alias of the successful-inform timestamp |
+| `status_updated_at` | Epoch seconds when status was published, including failed attempts |
+| `last_status` | Active cipher mode or most recent exchange error |
+| `uptime` | Latest sampled system uptime |
+| `version`, `commit`, `build_date` | Embedded daemon build metadata |
+
+Status is written atomically under `/tmp/var/wwwext/unifi-bridge`. The WebUI prefers the successful-inform timestamp and displays inform errors without treating attempts as successes. Regular-file daemon log output is bounded to 1 MiB by truncating when the next write would exceed the limit; there is no persistent rotated archive. Terminal/pipe output is unchanged. Watchdog log bounds and broader write-path review remain open.
+
+CI tests the Go packages, cluster SSH/freshness behavior, and shell syntax before compiling the full `./cmd/unifi-bridge` package for ARMv7 and ARM64. Linker flags embed version, source commit, and UTC build date. Release assets include a SHA-256 manifest; successful download alone is not checksum verification. The existing updater does not automatically enforce that manifest.
+
+## 7. Controller Verification Interface
+
+For API-key diagnostics, use `/proxy/network/integration/v1` and the controller's version-specific API documentation. The earlier `X-API-KEY` request to legacy `/proxy/network/api/s/default/stat/device` returned 401, while the same key authenticated successfully to the official Integration API. A locally exported environment variable is not automatically forwarded through SSH and `pct exec`.
+
+Keep credentials out of repository files, command output, and WebUI status. The earlier exposed key remains active and requires coordinated rotation. Read-only device details/statistics establish online state, recent heartbeats, and port links; the observed `uplink: null` values do not establish parent-port topology.

@@ -6,6 +6,14 @@ It emulates a genuine UniFi 6 Access Point—featuring native **UniFi 6 In-Wall 
 
 ---
 
+## Current deployment
+
+Last verified **2026-10-24, approximately 22:23 PDT**: both XT8 APs run **v1.2.2 on `dev`**, build commit `1b6ce07affb18f30ef86a822e5939b9217b3648f`. Both are adopted, online, and sending GCM heartbeats, with 60 associated stations in the sampled state (28 Main / 32 Node). This is a dated observation, not a continuous availability guarantee.
+
+The latest fixes improve heartbeat accuracy, adoption recovery, cluster timeouts and stale-status detection, key permissions, build metadata, and log bounds. Gateway parent-port topology remains unconfirmed because the official API returns `uplink: null` for both APs. Credential rotation and controlled outage/recovery checks remain open. Work stays on `dev`; no merge to `main` is approved.
+
+See [audit state and action items](docs/AUDIT_STATE.md) and the [architecture reference](docs/ARCHITECTURE.md).
+
 ## Key Features
 
 * **Zero Dependencies & Completely Standalone:**
@@ -21,10 +29,10 @@ It emulates a genuine UniFi 6 Access Point—featuring native **UniFi 6 In-Wall 
   * Telemetry reports all physical interfaces from `/sys/class/net/ethX` and `/proc/net/dev`:
     * **Port 1 (Uplink)**: 2.5 Gbps WAN/LAN port with link speed, full duplex, and live byte/packet counters.
     * **Ports 2–4 (LAN)**: 1 Gbps Gigabit LAN ports with carrier state, speed, duplex, and real-time wire traffic metrics.
-  * Accurately links downstream wired devices (e.g. smart home hubs or Ethernet switches) to their physical router LAN ports in the UniFi topology.
-* **LLDP Neighbor Discovery & Gateway Topology Resolution (v1.2.2+):**
+  * Reports physical port state and traffic. Identifying a downstream client and its topology attachment requires separate controller verification.
+* **LLDP Neighbor Discovery & Topology Telemetry (v1.2.2+):**
   * Automatically queries LLDP neighbors via `lldpcli -f json show neighbors` to discover the upstream gateway device MAC (Cloud Gateway Max `6c:63:f8:30:9a:05`), port MACs, and physical parent ports (Port 1 for Main AP, Port 3 for Node AP).
-  * Automatically populates `uplink_mac`, `last_uplink`, and `lldp_table`, resolving the UniFi "Connected To" property and gateway `downlink_table` without manual configuration.
+  * Populates `uplink_mac`, `last_uplink`, and `lldp_table` from available neighbor data. Controller parent-port rendering remains under investigation; emitting these fields does not prove the topology is resolved.
 * **Router CPU & Memory Utilization Telemetry (v1.2.0+):**
   * Reports real-time CPU load percentage and active memory utilization (`system-stats` and legacy `sys_stats`) derived from `/proc/loadavg` and `/proc/meminfo`.
   * Renders live CPU and RAM status cards in the Asuswrt WebUI and CLI.
@@ -40,8 +48,8 @@ It emulates a genuine UniFi 6 Access Point—featuring native **UniFi 6 In-Wall 
   * Aggregates counters per-client in `sta_table` and per-SSID in `vap_table`, populating UniFi real-time client throughput and bandwidth utilization graphs.
 * **Ultra-Low Resource Footprint:**
   * **RAM:** ~3–5 MB RSS (< 1% of 512 MB router RAM).
-  * **CPU:** Virtually 0% (sleeps 99.9% of the time, waking every 10 seconds for a $<1$ ms local query).
-  * **Flash Wear Prevention:** Runtime caches, logs, and WebUI status state reside in `/tmp/` (RAM disk); persistent adoption keys are stored safely with `0600` permissions.
+  * **CPU:** Samples telemetry at a default 10-second interval. Sampling cost varies with station count and external `wl`/NVRAM/LLDP commands; no sub-millisecond or fixed CPU-use guarantee is established.
+  * **Runtime writes:** Caches, logs, and WebUI status live under `/tmp/`. Regular-file daemon logs are capped at 1 MiB. Persistent adoption state is `0600` and saved atomically when controller state changes; flash writes are reduced, not eliminated.
 * **Native Asuswrt-Merlin WebUI Integration & Form Isolation (v1.2.2+):**
   * Integrated directly into **Advanced Settings > Wireless** tab bar (e.g. `http://<router-ip>/user3.asp`).
   * Uses Asuswrt-Merlin dynamic user slot allocation (`user1`–`user20.asp`), preventing collisions with YazFi, MerVLAN, or scMerlin.
@@ -49,19 +57,25 @@ It emulates a genuine UniFi 6 Access Point—featuring native **UniFi 6 In-Wall 
 * **Automated WebUI Updates & Release Tracks (`main` vs `dev`):**
   * Built-in version checker and one-click updater right from the router WebUI.
   * **Release Tracks**: Switch between official stable releases (`main`) and cutting-edge development builds (`dev`).
-  * Instant, zero-delay update detection querying GitHub release tags and raw CDN with cache-busting.
+  * Checks GitHub release tags and raw version metadata. Development builds can share a version number; verify the runtime commit as well as the version after an update.
 * **Cluster Mesh Synchronization & Propagation:**
   * Auto-discovers Satellite Nodes directly from Asuswrt NVRAM (`cfg_device_list`) or MerVLAN.
   * Centralized management: configuring settings or clicking "Update Now" on the Main AP WebUI automatically propagates binaries and configurations to all Satellite Nodes over SSH.
   * Preserves per-node cryptographic adoption identities (`state.json`), preventing adoption collisions.
-  * Real-time Cluster Synchronization table in WebUI with live client distribution, per-node version reporting, and manual "Sync Now" trigger.
+  * Cluster table reports sampled client distribution and runtime version. Healthy status requires a live remote PID and fresh telemetry; a version match is labeled `Version Match (Config Unverified)`.
+  * SSH operations are bounded to 30 seconds for status and 120 seconds for transfers. Dropbear-compatible keepalive/idle options and a shell watchdog avoid unsupported `ConnectTimeout` assumptions.
+* **Daemon Resilience & Accurate Status:**
+  * Separates `last_attempt` from `last_successful_inform`; failed attempts no longer appear as successful heartbeats.
+  * Refreshes uptime from each system sample and exposes commit/build date in runtime status.
+  * Defaults non-positive configured intervals to 10 seconds; three consecutive HTTP 401/404 rejections are required before adoption recovery. HTTP 400 does not clear identity.
+  * Rejects malformed adoption keys and enforces addon directory `0755` / SSH directory `0700`.
 * **Built-in CLI Companion (`unifi-bridge`):**
   * Provides quick command-line diagnostics and operations: `unifi-bridge status`, `sync`, `update check`, `update apply`, `reset`, `start`, `stop`, `restart`, `check`, `logs`.
   * Interactive text console menu for easy terminal administration.
 * **Automated Health Watchdog:**
   * Automatic cron watchdog via Asuswrt `cru` checking process health every 5 minutes and respawning on failures.
 * **Multi-Arch Automated CI/CD:**
-  * GitHub Actions automated builds producing static ARMv7 (`armv7l`) and ARM64 (`aarch64`) tarballs with checksum verification on every release tag and `dev` branch push.
+  * GitHub Actions automated builds producing static ARMv7 (`armv7l`) and ARM64 (`aarch64`) tarballs and SHA-256 manifests after Go, cluster regression, and shell syntax checks. Normal release-tag and `dev` pushes trigger builds; documentation-only commits can skip CI. The current updater does not enforce the manifest automatically; the deployed package was manually verified.
 
 ---
 
@@ -76,7 +90,7 @@ unifi-ap-bridge/
 │   └── unifi-bridge/        # Standalone persistent daemon binary entrypoint (main.go)
 ├── pkg/
 │   ├── inform/              # UniFi Inform wire protocol (binary header, AES-CBC, AES-GCM, Zlib)
-│   ├── models/              # Device capabilities catalog (U6M, U6P, U6L)
+│   ├── models/              # Device capabilities catalog (U6IW, U6M, U6P, U6L)
 │   └── telemetry/           # Schema definitions (VAPs, Stations, Radios, Stats)
 ├── providers/               # Pluggable radio telemetry providers
 │   ├── provider.go          # Interface: GetRadios(), GetVAPs(), GetRadioStats()
@@ -176,17 +190,25 @@ unifi-bridge start             # Start the daemon
 ## Development & Testing
 
 ```bash
-# Run all unit tests (wire vectors, Broadcom chanspec, mock provider)
-go test -v ./...
+# Run Go tests and cluster regression checks
+go test -race ./...
+go vet ./...
+python3 scripts/test_sync_nodes.py
+for script in scripts/*.sh; do sh -n "$script"; done
 
-# Build local binary
-go build -o bin/unifi-bridge ./cmd/unifi-bridge
+# Build the command package, including health/log helpers.
+# Supply metadata so runtime provenance is available for local builds as in CI.
+BUILD_VERSION=$(tr -d '[:space:]' < version.txt)
+BUILD_COMMIT=$(git rev-parse HEAD)
+BUILD_DATE=$(date -u +%Y-%m-%d)
+BUILD_FLAGS="-s -w -X main.version=$BUILD_VERSION -X main.commit=$BUILD_COMMIT -X main.buildDate=$BUILD_DATE"
+go build -ldflags="$BUILD_FLAGS" -o bin/unifi-bridge ./cmd/unifi-bridge
 
 # Cross-compile static ARMv7 binary for Asuswrt-Merlin (RT-AX86U, XT8, etc.)
-CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags="-s -w -X main.version=1.0.1" -o bin/unifi-bridge-armv7 ./cmd/unifi-bridge
+CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags="$BUILD_FLAGS" -o bin/unifi-bridge-armv7 ./cmd/unifi-bridge
 
 # Cross-compile static ARM64 binary (GT-AXE16000, RT-AX89X, etc.)
-CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w -X main.version=1.0.1" -o bin/unifi-bridge-arm64 ./cmd/unifi-bridge
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="$BUILD_FLAGS" -o bin/unifi-bridge-arm64 ./cmd/unifi-bridge
 ```
 
 ---
@@ -199,7 +221,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w -X main
 * [x] **Broadcom Wireless Telemetry:** Automatic discovery of physical and virtual VAPs across 2.4 GHz and 5 GHz bands.
 * [x] **Wi-Fi 6 (`802.11ax`) & Wi-Fi 4 (`802.11n`) Classification:** Flawless generation mapping in UniFi Controller.
 * [x] **Physical Switch Port Telemetry (`U6-IW` Emulation) (v1.2.0):** 2.5G WAN uplink and 1G LAN ports reporting live carrier state, speed, full duplex, STP state, and traffic counters directly into the UniFi Port Manager.
-* [x] **LLDP Topology & Upstream Gateway Linking (v1.2.2):** Automatic `lldpcli` querying resolving Cloud Gateway Max (`6c:63:f8:30:9a:05`) parent ports (Port 1 for Main, Port 3 for Node), populating "Connected To" and gateway `downlink_table`.
+* [x] **LLDP Telemetry (v1.2.2):** Discover neighbors and emit uplink fields. End-to-end gateway parent-port topology verification remains open.
 * [x] **Router CPU/Memory Stats & WiFi Experience Scoring (v1.2.0):** Live `/proc/loadavg` and `/proc/meminfo` metrics; dynamic 0–100% satisfaction scores based on RSSI, SNR, and packet retry penalties.
 * [x] **RF Channel Utilization & Airtime Telemetry (v1.1.0):** Broadcom `chanim_stats` streaming `cu_total`, `cu_self_rx`, and `cu_self_tx` into UniFi RF graphs and router WebUI.
 * [x] **Cumulative Client Traffic Usage Counters (v1.1.0):** Parsing `tx/rx` unicast bytes, packets, retries, rates, and association uptime from `wl sta_info`.
@@ -207,6 +229,10 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w -X main
 * [x] **Multi-Arch Automated CI/CD:** GitHub Actions release workflow building ARMv7 and ARM64 binary packages.
 * [x] **Automated In-WebUI Updates & Dual Tracks:** Instant release/dev update checks and one-click upgrades.
 * [x] **Cluster Mesh Synchronization:** Centralized AP configuration and binary propagation over SSH.
+
+### Current follow-up
+
+Credential rotation, gateway parent-port topology, controlled failure/recovery checks, and watchdog logging/write-path review are tracked in [AUDIT_STATE.md](docs/AUDIT_STATE.md). These are separate from the feature backlog below.
 
 ### Pending Roadmap Items
 1. **Dynamic WLAN Mapping UI / Auto-Discovery:**
