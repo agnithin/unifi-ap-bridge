@@ -111,8 +111,8 @@ class UpdateBackendTests(unittest.TestCase):
         (self.install / "sync_nodes.sh").write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$SYNC_ARGS"\n')
         (self.install / "sync_nodes.sh").chmod(0o755)
         source = (ROOT / "scripts/apply_config.sh").read_text()
-        source = source.replace('/jffs/addons/unifi-bridge', str(self.install))
         source = source.replace('/tmp/', str(self.root / 'tmp') + '/')
+        source = source.replace('/jffs/addons/unifi-bridge', str(self.install))
         handler = self.root / "settings-handler.sh"
         handler.write_text(source)
         return handler, status_dir

@@ -115,8 +115,10 @@ class ClusterTests(unittest.TestCase):
         self.env.update({"REMOTE_QUERY": str(fixture), "DISPATCH_INPUT": str(dispatch),
                          "REMOTE_QUERY_COMMAND": str(query_command), "DISPATCH_RC": str(dispatch_rc),
                          "LOCAL_MUTATION_LOCK": str(local_lock)})
-        source = SOURCE.replace('INSTALL_DIR="/jffs/addons/$ADDON_NAME"', 'INSTALL_DIR="' + str(install) + '"')
-        source = source.replace('/tmp/', str(self.root / "tmp") + '/')
+        # Rewrite the source's fixed /tmp paths before injecting the fixture's
+        # absolute install path; Linux temporary roots also begin with /tmp.
+        source = SOURCE.replace('/tmp/', str(self.root / "tmp") + '/')
+        source = source.replace('INSTALL_DIR="/jffs/addons/$ADDON_NAME"', 'INSTALL_DIR="' + str(install) + '"')
         script = self.root / "sync-settings.sh"
         script.write_text(source)
         return script, dispatch, commit

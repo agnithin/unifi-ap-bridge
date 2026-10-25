@@ -170,10 +170,12 @@ class ApplyFailureTests(unittest.TestCase):
 
     def start_source(self):
         source = (ROOT / "scripts/start.sh").read_text()
-        return (source.replace('/jffs/addons/unifi-bridge', str(self.install))
-                .replace('/tmp/unifi-bridge-start.lock', str(self.root / 'start.lock'))
-                .replace('/tmp/unifi-bridge-mutation.lock', str(self.root / 'mutation.lock'))
-                .replace('/tmp/', str(self.root / 'tmp') + '/'))
+        source = source.replace('/tmp/', '__TMPROOT__/')
+        source = source.replace('/jffs/addons/unifi-bridge', str(self.install))
+        source = source.replace('__TMPROOT__/unifi-bridge-start.lock', str(self.root / 'start.lock'))
+        source = source.replace('__TMPROOT__/unifi-bridge-mutation.lock', str(self.root / 'mutation.lock'))
+        source = source.replace('__TMPROOT__/', str(self.root / 'tmp') + '/')
+        return source
 
     def run_apply(self, env=None, args=None):
         return subprocess.run(

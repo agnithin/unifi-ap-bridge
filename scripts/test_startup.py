@@ -116,7 +116,7 @@ class StartupTests(unittest.TestCase):
         (self.install/"config/config.json").write_text('{"enabled":true}')
         marker=self.root/"watchdog-started"
         start=self.install/"start.sh";start.write_text("#!/bin/sh\ntouch '"+str(marker)+"'\n");start.chmod(0o755)
-        source=(ROOT/"scripts/watchdog.sh").read_text().replace('/jffs/addons/unifi-bridge',str(self.install)).replace('/tmp/',str(self.root/"tmp")+'/')
+        source=(ROOT/"scripts/watchdog.sh").read_text().replace('/tmp/','__TMPROOT__/').replace('/jffs/addons/unifi-bridge',str(self.install)).replace('__TMPROOT__/',str(self.root/"tmp")+'/')
         script=self.root/"watchdog.sh";script.write_text(source)
         lock=self.root/"tmp/unifi-bridge-start.lock";lock.mkdir()
         subprocess.run(["sh",str(script)],env=self.env,check=True,timeout=3)
