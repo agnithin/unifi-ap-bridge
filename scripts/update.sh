@@ -88,6 +88,12 @@ version_cmp() {
     return 0
 }
 
+get_installed_branch() {
+    installed=$(grep '"branch"' "$STATUS_JS" 2>/dev/null | head -n 1 | awk -F'"' '{print $4}')
+    [ -n "$installed" ] || installed=$(get_branch)
+    echo "$installed"
+}
+
 # Write update_status.js for WebUI consumption
 write_update_status() {
     status="$1"
@@ -101,6 +107,10 @@ write_update_status() {
 window.unifiBridgeUpdate = {
   "status": "${status}",
   "branch": "${branch}",
+  "installed_branch": "$(get_installed_branch)",
+  "operation": "${operation:-check}",
+  "request_id": "${request_id:-}",
+  "installed_newer": ${installed_newer:-false},
   "current_version": "${cur_ver}",
   "remote_version": "${rem_ver}",
   "message": "${msg}",
@@ -112,6 +122,9 @@ EOF
 }
 
 cmd_check() {
+    operation="check"
+    request_id="${2:-}"
+    installed_newer=false
     branch=$(get_branch "${1:-}")
     local_ver=$(get_local_version)
     echo "Checking for updates on branch '${branch}' (current version: ${local_ver})..."
@@ -141,23 +154,30 @@ cmd_check() {
     clean_local=$(echo "$local_ver" | sed 's/^v//')
     clean_remote=$(echo "$raw_ver" | sed 's/^v//')
 
+    local_ver="$clean_local"
+    raw_ver="$clean_remote"
+    installed_track=$(get_installed_branch)
     version_cmp "$clean_local" "$clean_remote"
     cmp_res=$?
 
     if [ "$cmp_res" -eq 0 ]; then
         echo "UniFi AP Bridge is up to date (version: ${raw_ver}, branch: ${branch})"
-        write_update_status "UP_TO_DATE" "$branch" "$local_ver" "$raw_ver" "UniFi AP Bridge is up to date (${raw_ver})"
+        write_update_status "UP_TO_DATE" "$branch" "$local_ver" "$raw_ver" "Installed v${local_ver} (${installed_track}) matches latest v${raw_ver} (${branch})"
     elif [ "$cmp_res" -eq 1 ]; then
         echo "Installed version (${local_ver}) is newer than remote (${raw_ver}) on branch '${branch}'"
-        write_update_status "UP_TO_DATE" "$branch" "$local_ver" "$raw_ver" "Installed version (${local_ver}) is up to date (newer than ${raw_ver})"
+        installed_newer=true
+        write_update_status "UP_TO_DATE" "$branch" "$local_ver" "$raw_ver" "Installed v${local_ver} (${installed_track}) is newer than latest v${raw_ver} (${branch})"
     else
         echo "New version available: ${raw_ver} (installed: ${local_ver})"
-        write_update_status "UPDATE_AVAILABLE" "$branch" "$local_ver" "$raw_ver" "Update available: ${raw_ver}"
+        write_update_status "UPDATE_AVAILABLE" "$branch" "$local_ver" "$raw_ver" "Latest v${raw_ver} (${branch}) is newer than installed v${local_ver} (${installed_track})"
     fi
     return 0
 }
 
 cmd_apply() {
+    operation="apply"
+    request_id="${2:-}"
+    installed_newer=false
     branch=$(get_branch "${1:-}")
     local_ver=$(get_local_version)
     tmp_dir="/tmp/unifi-update-$$"
@@ -291,10 +311,10 @@ cmd_status() {
 
 case "${1:-}" in
     check)
-        cmd_check "${2:-}"
+        cmd_check "${2:-}" "${3:-}"
         ;;
     apply|update)
-        cmd_apply "${2:-}"
+        cmd_apply "${2:-}" "${3:-}"
         ;;
     status)
         cmd_status

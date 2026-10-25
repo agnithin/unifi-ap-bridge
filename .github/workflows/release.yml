@@ -28,6 +28,8 @@ jobs:
         run: |
           go test ./...
           python3 scripts/test_sync_nodes.py
+          python3 scripts/test_update_backend.py
+          node scripts/test_update_ui.js
           for script in scripts/*.sh; do sh -n "$script"; done
 
       - name: Build Binaries

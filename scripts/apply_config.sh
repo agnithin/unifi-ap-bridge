@@ -10,10 +10,22 @@ SETTINGS_FILE="/jffs/addons/custom_settings.txt"
 
 mkdir -p "$CONF_DIR"
 
+# POSIX parsing works with both BSD and BusyBox tools and legacy action names.
+parse_update_action() {
+    action_name="$1"
+    action_suffix=${2##*"$action_name"_}
+    BRANCH=${action_suffix%%_*}
+    REQUEST_ID=${action_suffix#*_}
+    [ "$REQUEST_ID" = "$action_suffix" ] && REQUEST_ID=""
+    case "$BRANCH" in main|dev) ;; *) BRANCH="" ;; esac
+    case "$REQUEST_ID" in ''|*[!0-9]*) REQUEST_ID="" ;; esac
+}
+
 # Actions triggered via service-event
 case "${2:-}" in
     *check_update*)
-        BRANCH=$(echo "${2:-}" | sed -n 's/.*check_update_\([a-zA-Z0-9_-]*\)/\1/p')
+        parse_update_action check_update "${2:-}"
+
         if [ -z "$BRANCH" ]; then
             AMNG=$(nvram get amng_custom 2>/dev/null)
             [ -n "$AMNG" ] && BRANCH=$(echo "$AMNG" | sed -n 's/.*"branch"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
@@ -27,19 +39,16 @@ case "${2:-}" in
         fi
         [ -z "$BRANCH" ] && BRANCH="main"
 
-        if [ -f "$SETTINGS_FILE" ]; then
-            grep -v "^unifibridge_branch" "$SETTINGS_FILE" > "$SETTINGS_FILE.tmp" 2>/dev/null || true
-            echo "unifibridge_branch $BRANCH" >> "$SETTINGS_FILE.tmp"
-            mv -f "$SETTINGS_FILE.tmp" "$SETTINGS_FILE"
-        fi
+        # Checking another track must not persist a release-track change.
 
         if [ -f "$INSTALL_DIR/update.sh" ]; then
-            "$INSTALL_DIR/update.sh" check "$BRANCH" >/tmp/unifi-bridge-update.log 2>&1 &
+            "$INSTALL_DIR/update.sh" check "$BRANCH" "$REQUEST_ID" >/tmp/unifi-bridge-update.log 2>&1 &
         fi
         exit 0
         ;;
     *do_update*)
-        BRANCH=$(echo "${2:-}" | sed -n 's/.*do_update_\([a-zA-Z0-9_-]*\)/\1/p')
+        parse_update_action do_update "${2:-}"
+
         if [ -z "$BRANCH" ]; then
             AMNG=$(nvram get amng_custom 2>/dev/null)
             [ -n "$AMNG" ] && BRANCH=$(echo "$AMNG" | sed -n 's/.*"branch"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
@@ -60,7 +69,7 @@ case "${2:-}" in
         fi
 
         if [ -f "$INSTALL_DIR/update.sh" ]; then
-            "$INSTALL_DIR/update.sh" apply "$BRANCH" >/tmp/unifi-bridge-update.log 2>&1 &
+            "$INSTALL_DIR/update.sh" apply "$BRANCH" "$REQUEST_ID" >/tmp/unifi-bridge-update.log 2>&1 &
         fi
         exit 0
         ;;

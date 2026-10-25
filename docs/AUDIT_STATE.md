@@ -202,8 +202,14 @@ Remaining work: rotate the previously exposed controller credential, complete co
 2. **Track Parameter Persistence Across Asuswrt `apply.cgi`:**
    - Asuswrt-Merlin's `apply.cgi` only accepts known NVRAM variables, dropping arbitrary form parameters like `unifibridge_branch`.
    - `webui/unifi-bridge.asp` now passes the target branch directly within `action_script` (`start_unifi_bridge_check_update_${branch}` and `start_unifi_bridge_do_update_${branch}`) and sets the standard Merlin NVRAM variable `amng_custom`.
-   - `scripts/apply_config.sh` parses `$2` and `amng_custom`, synchronizing both `config.json` and `/jffs/addons/custom_settings.txt`.
+   - `scripts/apply_config.sh` parses `$2` and `amng_custom`, dispatching the selected operation. In v1.2.4, checking a track does not persist a track change.
 3. **Topology Setting Preservation in `apply_config.sh`:**
    - When saving settings from the WebUI, `scripts/apply_config.sh` now reads and preserves existing `uplink_mac` and `uplink_remote_port` values.
 4. **Automated Testing:**
    - Added `test_version_cmp` in `scripts/test_sync_nodes.py` covering matching, newer, older, and pre-release semver combinations. All 4 unit tests pass cleanly.
+
+### v1.2.4 update-check overlay and version labels
+
+The native hidden-iframe submit executed firmware loading callbacks during a background update check, leaving the global Complete overlay visible. Update operations now use background XHR, correlate status by request ID/operation/track, and stop polling on completion, error, or timeout. A stale installation SUCCESS cannot reload a check. Version labels consistently show `v` and the installed track; checking main keeps an installed dev build labeled dev and explicitly reports when stable is older.
+
+Candidate verification on Main in the signed-in Asus browser: dev check completed with UP TO DATE and an enabled check button; main comparison completed with INSTALLED IS NEWER, installed `v1.2.3 (dev)`, latest `v1.2.1 (main)`, and the firmware overlay hidden. JavaScript regressions and four Python backend tests passed. Published rollout verification follows below.

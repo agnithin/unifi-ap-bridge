@@ -139,6 +139,80 @@ var detectedGatewayIP = "<% nvram_get("lan_gateway"); %>" || "10.100.1.1";
 
 var updatePollingTimer = null;
 var currentBranch = "main";
+var installedVersion = "";
+var activeUpdateRequest = null;
+
+function displayVersion(value) {
+  if (!value || value === "-") return "Unknown";
+  return "v" + String(value).replace(/^v/i, "");
+}
+
+function renderInstalledVersion() {
+  document.getElementById("cur_ver_val").textContent = displayVersion(installedVersion) + " (" + currentBranch + ")";
+}
+
+function finishUpdateRequest() {
+  if (updatePollingTimer !== null) clearInterval(updatePollingTimer);
+  updatePollingTimer = null;
+  activeUpdateRequest = null;
+  document.getElementById("btn_check_update").disabled = false;
+}
+
+// POST through the normal Asuswrt dispatcher without executing its iframe HTML.
+// This keeps firmware showLoading/Complete callbacks out of background actions.
+function submitUpdateAction(onError) {
+  var form = document.form;
+  var parts = [];
+  for (var i = 0; i < form.elements.length; i++) {
+    var field = form.elements[i];
+    if (!field.name || field.disabled || /^(button|submit|reset|file)$/i.test(field.type)) continue;
+    if (/^(checkbox|radio)$/i.test(field.type) && !field.checked) continue;
+    parts.push(encodeURIComponent(field.name) + "=" + encodeURIComponent(field.value));
+  }
+  var request = new XMLHttpRequest();
+  request.open("POST", form.action, true);
+  request.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+  request.timeout = 15000;
+  request.onload = function() {
+    if (request.status < 200 || request.status >= 300) onError();
+  };
+  request.onerror = onError;
+  request.ontimeout = onError;
+  request.send(parts.join("&"));
+}
+
+function startUpdateRequest(operation, branch) {
+  finishUpdateRequest();
+  var request = { id: String(Date.now()), operation: operation, branch: branch, started: Date.now() };
+  activeUpdateRequest = request;
+  document.getElementById("btn_check_update").disabled = true;
+  document.getElementById("btn_do_update").style.display = "none";
+  document.form.action_script.value = "start_unifi_bridge_" + (operation === "check" ? "check_update_" : "do_update_") + branch + "_" + request.id;
+  document.form.action_mode.value = "apply";
+  document.form.action_wait.value = "0";
+  document.form.current_page.value = "";
+  document.form.next_page.value = "";
+  document.form.unifibridge_branch.value = branch;
+  document.getElementById("amng_custom").value = JSON.stringify({ action: operation === "check" ? "check_update" : "do_update", branch: branch, request_id: request.id });
+  function fail(message) {
+    if (activeUpdateRequest !== request) return;
+    finishUpdateRequest();
+    document.getElementById("update_badge").textContent = "REQUEST FAILED";
+    document.getElementById("update_desc").textContent = message;
+    document.getElementById("update_progress_box").style.display = "none";
+  }
+  submitUpdateAction(function() { fail("Could not contact the router. Retry the " + operation + " request."); });
+  if (activeUpdateRequest !== request) return;
+  updatePollingTimer = setInterval(function() {
+    if (Date.now() - request.started > (operation === "check" ? 45000 : 300000)) {
+      fail(operation === "check" ? "Update check timed out. Please retry." : "Update status timed out. Check bridge status before retrying installation.");
+      return;
+    }
+    loadUpdateStatus();
+    if (operation === "apply") loadStatus();
+  }, 1500);
+}
+
 
 function SetCurrentPage() {
   document.form.next_page.value = "";
@@ -209,11 +283,13 @@ function updateUI(st) {
   }
 
   if (st.version) {
-    var vText = "v" + st.version;
+    var vText = displayVersion(st.version);
     var hdrV = document.getElementById("hdr_version");
     if (hdrV) hdrV.textContent = vText;
     var curV = document.getElementById("cur_ver_val");
-    if (curV) curV.textContent = st.version;
+    installedVersion = st.version;
+    if (st.branch) currentBranch = st.branch;
+    if (curV) renderInstalledVersion();
   }
 
   document.getElementById("model_val").textContent = (st.model || "UniFi 6 Mesh") + " (Firmware " + (st.firmware || "6.8.2") + ")";
@@ -356,6 +432,8 @@ function updateClusterUI(cl) {
 
 function updateUpdateUI(u) {
   if (!u) return;
+  var pending = activeUpdateRequest;
+  if (pending && (String(u.request_id || "") !== pending.id || u.branch !== pending.branch || u.operation !== pending.operation)) return;
   var badge = document.getElementById("update_badge");
   var btnDo = document.getElementById("btn_do_update");
   var desc = document.getElementById("update_desc");
@@ -363,10 +441,14 @@ function updateUpdateUI(u) {
   var curVal = document.getElementById("cur_ver_val");
   var pBox = document.getElementById("update_progress_box");
 
-  if (u.current_version && u.current_version !== "-") curVal.textContent = u.current_version;
+  if (!installedVersion && u.current_version && u.current_version !== "-") {
+    installedVersion = u.current_version;
+    if (u.installed_branch) currentBranch = u.installed_branch;
+  }
+  renderInstalledVersion();
   if (u.remote_version && u.remote_version !== "-") {
     var trackLabel = u.branch ? (" (" + u.branch + ")") : "";
-    remVal.textContent = "Latest" + trackLabel + ": " + u.remote_version;
+    remVal.textContent = "Latest" + trackLabel + ": " + displayVersion(u.remote_version);
   }
   if (u.message) desc.textContent = u.message + (u.last_check ? " (Checked: " + u.last_check + ")" : "");
 
@@ -375,12 +457,12 @@ function updateUpdateUI(u) {
     badge.style.backgroundColor = "#e67e22";
     badge.textContent = "UPDATE AVAILABLE";
     btnDo.style.display = "inline-block";
-    btnDo.value = "Update to " + (u.remote_version || "Latest");
+    btnDo.value = "Install " + displayVersion(u.remote_version) + " (" + u.branch + ")";
     pBox.style.display = "none";
   } else if (u.status === "UP_TO_DATE") {
     badge.className = "badge_online";
     badge.style.backgroundColor = "#27ae60";
-    badge.textContent = "UP TO DATE";
+    badge.textContent = u.installed_newer ? "INSTALLED IS NEWER" : "UP TO DATE";
     btnDo.style.display = "none";
     pBox.style.display = "none";
   } else if (u.status === "CHECKING") {
@@ -401,9 +483,8 @@ function updateUpdateUI(u) {
     badge.textContent = "UP TO DATE";
     btnDo.style.display = "none";
     pBox.style.display = "none";
-    if (updatePollingTimer) {
-      clearInterval(updatePollingTimer);
-      updatePollingTimer = null;
+    if (pending && pending.operation === "apply") {
+      finishUpdateRequest();
       desc.textContent = "Update applied successfully! Refreshing page in 3 seconds...";
       setTimeout(function() { window.location.reload(); }, 3000);
     } else {
@@ -416,6 +497,7 @@ function updateUpdateUI(u) {
     btnDo.style.display = "none";
     pBox.style.display = "none";
   }
+  if (pending && /^(UPDATE_AVAILABLE|UP_TO_DATE|SUCCESS|ERROR)$/.test(u.status)) finishUpdateRequest();
 }
 
 function loadUpdateStatus() {
@@ -432,82 +514,29 @@ function loadUpdateStatus() {
 
 function checkUpdateNow() {
   var selectedBranch = document.getElementById("select_branch").value;
-  document.form.current_page.value = "";
-  document.form.next_page.value = "";
-  window.refreshpage = function() {};
-  try { window.parent.refreshpage = function() {}; } catch (e) {}
-
-  document.form.unifibridge_branch.value = selectedBranch;
-  document.form.action_script.value = "start_unifi_bridge_check_update_" + selectedBranch;
-  document.form.action_mode.value = "apply";
-  document.form.action_wait.value = "3";
-
-  var amng = document.getElementById("amng_custom");
-  if (amng) {
-    amng.value = JSON.stringify({ action: "check_update", branch: selectedBranch });
-  }
-
   var badge = document.getElementById("update_badge");
   badge.className = "badge_online";
   badge.style.backgroundColor = "#3498db";
   badge.textContent = "CHECKING...";
-  document.getElementById("update_desc").textContent = "Contacting GitHub repository on track '" + selectedBranch + "'...";
-
-  document.form.submit();
-
-  var checkCount = 0;
-  if (updatePollingTimer) clearInterval(updatePollingTimer);
-  updatePollingTimer = setInterval(function() {
-    loadUpdateStatus();
-    checkCount++;
-    if (checkCount > 8) {
-      clearInterval(updatePollingTimer);
-      updatePollingTimer = null;
-    }
-  }, 1500);
+  document.getElementById("update_progress_box").style.display = "none";
+  document.getElementById("rem_ver_val").textContent = "Latest (" + selectedBranch + "): checking...";
+  document.getElementById("update_desc").textContent = "Checking the " + selectedBranch + " track. This does not install software or change the installed track.";
+  startUpdateRequest("check", selectedBranch);
 }
 
 function doUpdateNow() {
   var selectedBranch = document.getElementById("select_branch").value;
-  var remVer = document.getElementById("rem_ver_val").textContent;
-  if (!confirm("Are you sure you want to update UniFi AP Bridge (" + selectedBranch + " track) across the entire cluster?\n\nThis will update binaries, scripts, and WebUI and restart the bridge daemon.")) {
-    return;
-  }
-
-  document.form.unifibridge_branch.value = selectedBranch;
-  document.form.action_script.value = "start_unifi_bridge_do_update_" + selectedBranch;
-  document.form.action_mode.value = "apply";
-  document.form.action_wait.value = "5";
-
-  var amng = document.getElementById("amng_custom");
-  if (amng) {
-    amng.value = JSON.stringify({ action: "do_update", branch: selectedBranch });
-  }
-
-  document.getElementById("btn_do_update").style.display = "none";
+  if (!confirm("Install the latest UniFi AP Bridge build from the " + selectedBranch + " track across the cluster?\n\nThis restarts the bridge daemon.")) return;
   document.getElementById("update_progress_box").style.display = "block";
   var badge = document.getElementById("update_badge");
   badge.className = "badge_online";
   badge.style.backgroundColor = "#f39c12";
   badge.textContent = "UPDATING...";
-
-  document.form.submit();
-
-  if (updatePollingTimer) clearInterval(updatePollingTimer);
-  updatePollingTimer = setInterval(function() {
-    loadUpdateStatus();
-    loadStatus();
-  }, 1500);
+  startUpdateRequest("apply", selectedBranch);
 }
 
 function onTrackChanged() {
-  var b = document.getElementById("select_branch").value;
-  document.form.unifibridge_branch.value = b;
-  var hdrT = document.getElementById("hdr_track");
-  if (hdrT) {
-    hdrT.textContent = b === "dev" ? "Dev Track" : "Release Track";
-    hdrT.style.backgroundColor = b === "dev" ? "#d35400" : "#2980b9";
-  }
+  // The selector chooses what to check/install; the header reflects the running build.
   checkUpdateNow();
 }
 
@@ -791,7 +820,7 @@ function initial(){
                         </td>
                         <td class="settingvalue">
                           <div style="display:flex; align-items:center; gap:12px;">
-                            <div>Installed: <span id="cur_ver_val" style="font-weight:bold; color:#2ecc71;">1.0.0</span></div>
+                            <div>Installed: <span id="cur_ver_val" style="font-weight:bold; color:#2ecc71;">Unknown</span></div>
                             <div id="rem_ver_val" style="color:#bdc3c7;">-</div>
                           </div>
                           <div id="update_desc" style="font-size:11px; color:#bdc3c7; margin-top:5px;">Click "Check for Updates" to query the repository.</div>
