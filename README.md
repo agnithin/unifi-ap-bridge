@@ -10,7 +10,7 @@ It emulates a genuine UniFi 6 Access Point—featuring native **UniFi 6 In-Wall 
 
 Last verified **2026-10-25, approximately 01:45 PDT**: both XT8 APs run **v1.2.4 on `dev`**, code commit `f77fafbc08688faca4b0fd9a286b73790d5a25da`. Both are adopted, running, and sending successful GCM heartbeats. A runtime sample counted 31 stations on Main and 29 on Node; counts fluctuate normally.
 
-The actual UniFi browser UI now shows Main connected to Cloud Gateway Max **Port 1** and Node to **Port 3**, both at **2.5 GbE**. Port Manager shows those uplinks active and **Bridge-EufyHomeBase3 on Node Port 4 at GbE**. This closes the two reported UI issues. Credential rotation, controlled outage/recovery checks, and broader review remain open. Work stays on `dev`; no merge to `main` is approved.
+The actual UniFi browser UI now shows Main connected to Cloud Gateway Max **Port 1** and Node to **Port 3**, both at **2.5 GbE**. Port Manager shows those uplinks active and **Bridge-EufyHomeBase3 on Node Port 4 at GbE**. This closes the two reported UI issues. Credential rotation, controlled outage/recovery checks, and broader review remain open. The operator approved promoting all current changes to `main` on 2026-10-25. The APs remain on the verified `dev` deployment.
 
 See [audit state and action items](docs/AUDIT_STATE.md) and the [architecture reference](docs/ARCHITECTURE.md).
 

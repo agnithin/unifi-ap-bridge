@@ -4,7 +4,7 @@
 
 **Status:** Both reported UI issues are resolved in the actual browser on the published build: correct AP gateway parents/uplink speeds and active Port Manager connections, including HomeBase on Node Port 4. Credential rotation and wider failure-path review remain open.
 
-**Release track:** `dev`, daemon `1.2.4`, deployed code commit `f77fafbc08688faca4b0fd9a286b73790d5a25da` on both APs. No merge to `main` is approved. Section 5 supersedes earlier v1.2.2 UI-closure/provenance claims.
+**Release track:** `dev`, daemon `1.2.4`, deployed code commit `f77fafbc08688faca4b0fd9a286b73790d5a25da` on both APs. Promotion of all current changes to `main` was approved by the operator on 2026-10-25. Section 5 supersedes earlier v1.2.2 UI-closure/provenance claims.
 
 **Repository:** `/Users/nithinag/workspace/unifi-ap-bridge`.
 
@@ -187,7 +187,7 @@ The U6IW profile supplies UniFi's model labels such as `PoE Out + Data` and `Dat
 
 Local verification: Go race tests, Go vet, cluster regression tests, and wire serialization/shared-MAC/capability regressions passed. The final working-tree source matches the published code commit; documentation commits after it do not require another binary deployment.
 
-Remaining work: rotate the previously exposed controller credential, complete controlled failure/recovery and broader code/security reviews, and review watchdog logging/write paths. Merge to `main` still requires explicit approval.
+Remaining work: rotate the previously exposed controller credential, complete controlled failure/recovery and broader code/security reviews, and review watchdog logging/write paths. The operator approved promotion to `main` on 2026-10-25; these remaining audit tasks stay open.
 
 ---
 
@@ -221,3 +221,7 @@ Candidate verification on Main in the signed-in Asus browser: dev check complete
 - Published Main Asus UI check: installed `v1.2.4 (dev)`, latest `v1.2.1 (main)`, badge INSTALLED IS NEWER, check button enabled, firmware overlay hidden. Dev check then completed with UP TO DATE and latest `v1.2.4 (dev)`. Selector restored to dev. Browser validation was on Main; Node runtime deployment was verified by SSH.
 - Private RAM-backed rollback archives on each AP: `/tmp/unifi-update-before-v124/addon.tar.gz`. Main archive contains the already-tested candidate UI/scripts and previous v1.2.3 daemon; its original UI/script backup also remains at `/tmp/unifi-update-ui-before-fix/assets.tar.gz`.
 - Existing open audit work remains open. No merge to main was performed.
+
+### Main promotion authorization — 2026-10-25
+
+The operator requested pushing all current changes to main. Promote the complete tested dev history by fast-forward, preserving prior commits. This supersedes earlier restrictions on merging to main. This repository promotion does not change the APs from their verified v1.2.4 dev deployment or create a stable release tag.
