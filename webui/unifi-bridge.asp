@@ -141,8 +141,10 @@ var updatePollingTimer = null;
 var currentBranch = "main";
 
 function SetCurrentPage() {
-  document.form.next_page.value = window.location.pathname.substring(1);
-  document.form.current_page.value = window.location.pathname.substring(1);
+  document.form.next_page.value = "";
+  document.form.current_page.value = "";
+  window.refreshpage = function() {};
+  try { window.parent.refreshpage = function() {}; } catch (e) {}
 }
 
 function initFormOnce(st) {
@@ -393,15 +395,17 @@ function updateUpdateUI(u) {
   } else if (u.status === "SUCCESS") {
     badge.className = "badge_online";
     badge.style.backgroundColor = "#27ae60";
-    badge.textContent = "UPDATED SUCCESSFULLY";
+    badge.textContent = "UP TO DATE";
     btnDo.style.display = "none";
     pBox.style.display = "none";
-    desc.textContent = "Update applied successfully! Refreshing page in 3 seconds...";
     if (updatePollingTimer) {
       clearInterval(updatePollingTimer);
       updatePollingTimer = null;
+      desc.textContent = "Update applied successfully! Refreshing page in 3 seconds...";
+      setTimeout(function() { window.location.reload(); }, 3000);
+    } else {
+      desc.textContent = u.message || "UniFi AP Bridge is up to date.";
     }
-    setTimeout(function() { window.location.reload(); }, 3000);
   } else if (u.status === "ERROR") {
     badge.className = "badge_offline";
     badge.style.backgroundColor = "#c0392b";
@@ -425,6 +429,11 @@ function loadUpdateStatus() {
 
 function checkUpdateNow() {
   var selectedBranch = document.getElementById("select_branch").value;
+  document.form.current_page.value = "";
+  document.form.next_page.value = "";
+  window.refreshpage = function() {};
+  try { window.parent.refreshpage = function() {}; } catch (e) {}
+
   document.form.unifibridge_branch.value = selectedBranch;
   document.form.action_script.value = "start_unifi_bridge_check_update";
   document.form.action_mode.value = "apply";
@@ -544,6 +553,11 @@ function toggleControllerInput() {
 }
 
 function syncClusterNow() {
+  document.form.current_page.value = "";
+  document.form.next_page.value = "";
+  window.refreshpage = function() {};
+  try { window.parent.refreshpage = function() {}; } catch (e) {}
+
   document.form.action_script.value = "start_unifi_bridge_sync";
   document.form.action_mode.value = "apply";
   document.form.action_wait.value = "4";
@@ -570,6 +584,11 @@ function applySettings() {
   if (isAutoGw === "1") {
     ctrlUrl = "http://" + detectedGatewayIP + ":8080/inform";
   }
+
+  document.form.current_page.value = "";
+  document.form.next_page.value = "";
+  window.refreshpage = function() {};
+  try { window.parent.refreshpage = function() {}; } catch (e) {}
 
   document.form.unifibridge_enabled.value = isEnabled;
   document.form.unifibridge_auto_gateway.value = isAutoGw;

@@ -77,22 +77,29 @@ type RadioStat struct {
 }
 
 type Port struct {
-	PortIdx    int    `json:"port_idx"`
-	Name       string `json:"name"`
-	Media      string `json:"media"`
-	Up         bool   `json:"up"`
-	Speed      int    `json:"speed"` // 10, 100, 1000, 2500
-	FullDuplex bool   `json:"full_duplex"`
-	Enable     bool   `json:"enable"`
-	IsUplink   bool   `json:"is_uplink"`
-	RxBytes    int64  `json:"rx_bytes"`
-	TxBytes    int64  `json:"tx_bytes"`
-	RxPackets  int64  `json:"rx_packets"`
-	TxPackets  int64  `json:"tx_packets"`
-	RxErrors   int64  `json:"rx_errors"`
-	TxErrors   int64  `json:"tx_errors"`
-	RxDropped  int64  `json:"rx_dropped"`
-	TxDropped  int64  `json:"tx_dropped"`
+	PortIdx      int    `json:"port_idx"`
+	Name         string `json:"name"`
+	Media        string `json:"media"`
+	Up           bool   `json:"up"`
+	Speed        int    `json:"speed"` // 10, 100, 1000, 2500
+	FullDuplex   bool   `json:"full_duplex"`
+	Enable       bool   `json:"enable"`
+	Enabled      bool   `json:"enabled"`
+	IsUplink     bool   `json:"is_uplink"`
+	OpMode       string `json:"op_mode,omitempty"`
+	Forward      string `json:"forward,omitempty"`
+	Autoneg      bool   `json:"autoneg,omitempty"`
+	PortPoe      bool   `json:"port_poe,omitempty"`
+	StpState     string `json:"stp_state,omitempty"`
+	StpPathcost  int    `json:"stp_pathcost,omitempty"`
+	RxBytes      int64  `json:"rx_bytes"`
+	TxBytes      int64  `json:"tx_bytes"`
+	RxPackets    int64  `json:"rx_packets"`
+	TxPackets    int64  `json:"tx_packets"`
+	RxErrors     int64  `json:"rx_errors"`
+	TxErrors     int64  `json:"tx_errors"`
+	RxDropped    int64  `json:"rx_dropped"`
+	TxDropped    int64  `json:"tx_dropped"`
 }
 
 type EthernetPort struct {
@@ -113,6 +120,10 @@ type Uplink struct {
 	FullDuplex       bool   `json:"full_duplex"`
 	Up               bool   `json:"up"`
 	NumPort          int    `json:"num_port"`
+	PortIdx          int    `json:"port_idx,omitempty"`
+	Media            string `json:"media,omitempty"`
+	MaxSpeed         int    `json:"max_speed,omitempty"`
+	UplinkSource     string `json:"uplink_source,omitempty"`
 	UplinkMAC        string `json:"uplink_mac,omitempty"`
 	UplinkRemotePort int    `json:"uplink_remote_port,omitempty"`
 	RxBytes          int64  `json:"rx_bytes"`
@@ -125,8 +136,10 @@ type Uplink struct {
 }
 
 type LastUplink struct {
+	PortIdx          int    `json:"port_idx,omitempty"`
 	UplinkMAC        string `json:"uplink_mac,omitempty"`
 	UplinkRemotePort int    `json:"uplink_remote_port,omitempty"`
+	Type             string `json:"type,omitempty"`
 }
 
 type LLDPEntry struct {
@@ -171,6 +184,7 @@ type InformPayload struct {
 	VAPTable        []VAP          `json:"vap_table"`
 	EthernetTable   []EthernetPort `json:"ethernet_table,omitempty"`
 	PortTable       []Port         `json:"port_table,omitempty"`
+	SwPortTable     []Port         `json:"sw_port_table,omitempty"`
 	Uplink          *Uplink        `json:"uplink,omitempty"`
 	UplinkMAC       string         `json:"uplink_mac,omitempty"`
 	LastUplink      *LastUplink    `json:"last_uplink,omitempty"`

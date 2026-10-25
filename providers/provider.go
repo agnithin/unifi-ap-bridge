@@ -19,5 +19,6 @@ type TelemetryProvider interface {
 	GetVAPs(wlanMapping map[string]string) ([]telemetry.VAP, error)
 	GetRadioStats() ([]telemetry.RadioStat, error)
 	GetPortTable() ([]telemetry.Port, []telemetry.EthernetPort, *telemetry.Uplink, error)
+	GetLLDPTable() ([]telemetry.LLDPEntry, error)
 	GetSystemStats() (*telemetry.SystemStats, *telemetry.SysStats, error)
 }

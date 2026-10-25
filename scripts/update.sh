@@ -220,6 +220,7 @@ cmd_apply() {
     "$INSTALL_DIR/start.sh"
 
     write_update_status "SUCCESS" "$branch" "$remote_ver" "$remote_ver" "Successfully updated to ${remote_ver} (${branch})"
+    (sleep 5 && write_update_status "UP_TO_DATE" "$branch" "$remote_ver" "$remote_ver" "UniFi AP Bridge is up to date (${remote_ver})") >/dev/null 2>&1 &
 
     echo "[*] Propagating update to cluster nodes..."
     if [ -f "$INSTALL_DIR/sync_nodes.sh" ]; then

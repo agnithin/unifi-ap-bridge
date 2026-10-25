@@ -3,6 +3,7 @@ package broadcom
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -427,6 +428,22 @@ func parseNetDev(content string) map[string]netDevCounters {
 	return res
 }
 
+func normalizeGatewayMAC(mac string) string {
+	mac = strings.ToLower(strings.TrimSpace(mac))
+	if len(mac) == 17 && strings.HasPrefix(mac, "6e:") {
+		// Cloud Gateway Max hardware device MAC is 6c:63:f8:30:9a:05
+		if strings.HasPrefix(mac, "6e:63:f8:30:9a:") {
+			return "6c:63:f8:30:9a:05"
+		}
+		b0, err := strconv.ParseUint(mac[:2], 16, 8)
+		if err == nil && (b0&0x02) != 0 {
+			b0 &^= 0x02
+			return fmt.Sprintf("%02x%s", b0, mac[2:])
+		}
+	}
+	return mac
+}
+
 func parseArpGatewayMAC(gwIP string) string {
 	if gwIP == "" {
 		return ""
@@ -441,11 +458,124 @@ func parseArpGatewayMAC(gwIP string) string {
 		if len(fields) >= 4 && fields[0] == gwIP {
 			mac := strings.ToLower(strings.TrimSpace(fields[3]))
 			if mac != "00:00:00:00:00:00" && len(mac) == 17 {
-				return mac
+				return normalizeGatewayMAC(mac)
 			}
 		}
 	}
 	return ""
+}
+
+type lldpCliOutput struct {
+	LLDP struct {
+		Interface map[string]struct {
+			Chassis map[string]struct {
+				ID struct {
+					Type  string `json:"type"`
+					Value string `json:"value"`
+				} `json:"id"`
+			} `json:"chassis"`
+			Port struct {
+				ID struct {
+					Type  string `json:"type"`
+					Value string `json:"value"`
+				} `json:"id"`
+				Descr string `json:"descr"`
+			} `json:"port"`
+		} `json:"interface"`
+	} `json:"lldp"`
+}
+
+func (p *AsusProvider) getLLDPNeighbor() (chassisMAC string, portMAC string, remotePort int, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	out, err := p.runner(ctx, "lldpcli", "-f", "json", "show", "neighbors")
+	if err != nil || len(out) == 0 {
+		return "", "", 0, fmt.Errorf("lldpcli unavailable: %v", err)
+	}
+
+	var data lldpCliOutput
+	if err := json.Unmarshal([]byte(out), &data); err != nil {
+		return "", "", 0, fmt.Errorf("json unmarshal failed: %v", err)
+	}
+
+	ifaceData, ok := data.LLDP.Interface["eth0"]
+	if !ok {
+		for _, v := range data.LLDP.Interface {
+			ifaceData = v
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return "", "", 0, fmt.Errorf("no lldp interface found")
+	}
+
+	for _, c := range ifaceData.Chassis {
+		if c.ID.Value != "" {
+			chassisMAC = strings.ToLower(strings.TrimSpace(c.ID.Value))
+			break
+		}
+	}
+
+	portMAC = strings.ToLower(strings.TrimSpace(ifaceData.Port.ID.Value))
+	descr := strings.ToLower(strings.TrimSpace(ifaceData.Port.Descr))
+
+	remotePort = 1
+	if strings.HasPrefix(descr, "eth") {
+		numStr := strings.TrimPrefix(descr, "eth")
+		if n, e := strconv.Atoi(numStr); e == nil {
+			remotePort = n + 1 // eth0 -> Port 1, eth2 -> Port 3
+		}
+	} else if len(portMAC) == 17 && len(chassisMAC) == 17 {
+		cLast, _ := strconv.ParseInt(chassisMAC[15:17], 16, 64)
+		pLast, _ := strconv.ParseInt(portMAC[15:17], 16, 64)
+		if pLast >= cLast && (pLast-cLast) < 10 {
+			remotePort = int(pLast - cLast + 1)
+		}
+	}
+
+	if chassisMAC == "" {
+		return "", "", 0, fmt.Errorf("empty chassis mac")
+	}
+	return chassisMAC, portMAC, remotePort, nil
+}
+
+func (p *AsusProvider) GetLLDPTable() ([]telemetry.LLDPEntry, error) {
+	chassisMAC, portMAC, _, err := p.getLLDPNeighbor()
+	if err == nil && chassisMAC != "" {
+		if portMAC == "" {
+			portMAC = chassisMAC
+		}
+		return []telemetry.LLDPEntry{
+			{
+				ChassisID:     chassisMAC,
+				PortID:        portMAC,
+				LocalPortName: "eth0",
+				LocalPortIdx:  1,
+				IsWired:       true,
+			},
+		}, nil
+	}
+
+	gwIP := p.nvramGet("lan_gateway")
+	if gwIP == "" {
+		gwIP = "10.100.1.1"
+	}
+	gwMAC := parseArpGatewayMAC(gwIP)
+	if gwMAC != "" {
+		return []telemetry.LLDPEntry{
+			{
+				ChassisID:     gwMAC,
+				PortID:        gwMAC,
+				LocalPortName: "eth0",
+				LocalPortIdx:  1,
+				IsWired:       true,
+			},
+		}, nil
+	}
+
+	return nil, nil
 }
 
 func readSysfsInt(path string) int {
@@ -489,10 +619,10 @@ func (p *AsusProvider) GetPortTable() ([]telemetry.Port, []telemetry.EthernetPor
 		isUplink bool
 		defMedia string
 	}{
-		{idx: 1, dev: "eth0", name: "Port 1 (Uplink)", isUplink: true, defMedia: "2.5GE"},
-		{idx: 2, dev: "eth1", name: "Port 2 (LAN 1)", isUplink: false, defMedia: "GE"},
-		{idx: 3, dev: "eth2", name: "Port 3 (LAN 2)", isUplink: false, defMedia: "GE"},
-		{idx: 4, dev: "eth3", name: "Port 4 (LAN 3)", isUplink: false, defMedia: "GE"},
+		{idx: 1, dev: "eth0", name: "Port 1", isUplink: true, defMedia: "2.5GE"},
+		{idx: 2, dev: "eth1", name: "Port 2", isUplink: false, defMedia: "GE"},
+		{idx: 3, dev: "eth2", name: "Port 3", isUplink: false, defMedia: "GE"},
+		{idx: 4, dev: "eth3", name: "Port 4", isUplink: false, defMedia: "GE"},
 	}
 
 	ports := make([]telemetry.Port, 0, len(ifaces))
@@ -514,25 +644,43 @@ func (p *AsusProvider) GetPortTable() ([]telemetry.Port, []telemetry.EthernetPor
 			speed = 0
 		}
 
+		stpState := "disabled"
+		stpCost := 200000
+		if up {
+			stpState = "forwarding"
+			if speed >= 2500 {
+				stpCost = 8000
+			} else if speed >= 1000 {
+				stpCost = 20000
+			}
+		}
+
 		c := counters[spec.dev]
 
 		ports = append(ports, telemetry.Port{
-			PortIdx:    spec.idx,
-			Name:       spec.name,
-			Media:      media,
-			Up:         up,
-			Speed:      speed,
-			FullDuplex: fullDuplex,
-			Enable:     true,
-			IsUplink:   spec.isUplink,
-			RxBytes:    c.rxBytes,
-			TxBytes:    c.txBytes,
-			RxPackets:  c.rxPackets,
-			TxPackets:  c.txPackets,
-			RxErrors:   c.rxErrors,
-			TxErrors:   c.txErrors,
-			RxDropped:  c.rxDropped,
-			TxDropped:  c.txDropped,
+			PortIdx:     spec.idx,
+			Name:        spec.name,
+			Media:       media,
+			Up:          up,
+			Speed:       speed,
+			FullDuplex:  fullDuplex,
+			Enable:      true,
+			Enabled:     true,
+			IsUplink:    spec.isUplink,
+			OpMode:      "switch",
+			Forward:     "all",
+			Autoneg:     true,
+			PortPoe:     false,
+			StpState:    stpState,
+			StpPathcost: stpCost,
+			RxBytes:     c.rxBytes,
+			TxBytes:     c.txBytes,
+			RxPackets:   c.rxPackets,
+			TxPackets:   c.txPackets,
+			RxErrors:    c.rxErrors,
+			TxErrors:    c.txErrors,
+			RxDropped:   c.rxDropped,
+			TxDropped:   c.txDropped,
 		})
 	}
 
@@ -543,15 +691,20 @@ func (p *AsusProvider) GetPortTable() ([]telemetry.Port, []telemetry.EthernetPor
 			MAC:        hostMAC,
 			Speed:      eth0Port.Speed,
 			FullDuplex: eth0Port.FullDuplex,
-			NumPort:    len(ports),
+			NumPort:    1,
 		},
 	}
 
-	gwIP := p.nvramGet("lan_gateway")
-	if gwIP == "" {
-		gwIP = "10.100.1.1"
+	chassisMAC, _, remotePort, err := p.getLLDPNeighbor()
+	gwMAC := chassisMAC
+	if err != nil || gwMAC == "" {
+		gwIP := p.nvramGet("lan_gateway")
+		if gwIP == "" {
+			gwIP = "10.100.1.1"
+		}
+		gwMAC = parseArpGatewayMAC(gwIP)
+		remotePort = 1
 	}
-	gwMAC := parseArpGatewayMAC(gwIP)
 
 	uplink := &telemetry.Uplink{
 		Name:             "eth0",
@@ -562,8 +715,12 @@ func (p *AsusProvider) GetPortTable() ([]telemetry.Port, []telemetry.EthernetPor
 		FullDuplex:       eth0Port.FullDuplex,
 		Up:               eth0Port.Up,
 		NumPort:          1,
+		PortIdx:          1,
+		Media:            "2.5GE",
+		MaxSpeed:         2500,
+		UplinkSource:     "lldp_uplink",
 		UplinkMAC:        gwMAC,
-		UplinkRemotePort: 1,
+		UplinkRemotePort: remotePort,
 		RxBytes:          eth0Port.RxBytes,
 		TxBytes:          eth0Port.TxBytes,
 		RxPackets:        eth0Port.RxPackets,

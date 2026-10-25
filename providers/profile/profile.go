@@ -161,18 +161,45 @@ func (p *ProfileProvider) GetRadioStats() ([]telemetry.RadioStat, error) {
 
 func (p *ProfileProvider) GetPortTable() ([]telemetry.Port, []telemetry.EthernetPort, *telemetry.Uplink, error) {
 	ports := []telemetry.Port{
-		{PortIdx: 1, Name: "Port 1 (Uplink)", Media: "2.5GE", Up: true, Speed: 2500, FullDuplex: true, Enable: true, IsUplink: true, RxBytes: 1048576, TxBytes: 2097152},
-		{PortIdx: 2, Name: "Port 2 (LAN 1)", Media: "GE", Up: false, Speed: 0, FullDuplex: false, Enable: true, IsUplink: false},
-		{PortIdx: 3, Name: "Port 3 (LAN 2)", Media: "GE", Up: false, Speed: 0, FullDuplex: false, Enable: true, IsUplink: false},
-		{PortIdx: 4, Name: "Port 4 (LAN 3)", Media: "GE", Up: true, Speed: 1000, FullDuplex: true, Enable: true, IsUplink: false, RxBytes: 524288, TxBytes: 524288},
+		{PortIdx: 1, Name: "Port 1", Media: "2.5GE", Up: true, Speed: 2500, FullDuplex: true, Enable: true, Enabled: true, IsUplink: true, OpMode: "switch", Forward: "all", Autoneg: true, StpState: "forwarding", StpPathcost: 8000, RxBytes: 1048576, TxBytes: 2097152},
+		{PortIdx: 2, Name: "Port 2", Media: "GE", Up: false, Speed: 0, FullDuplex: false, Enable: true, Enabled: true, IsUplink: false, OpMode: "switch", Forward: "all", Autoneg: true, StpState: "disabled", StpPathcost: 200000},
+		{PortIdx: 3, Name: "Port 3", Media: "GE", Up: false, Speed: 0, FullDuplex: false, Enable: true, Enabled: true, IsUplink: false, OpMode: "switch", Forward: "all", Autoneg: true, StpState: "disabled", StpPathcost: 200000},
+		{PortIdx: 4, Name: "Port 4", Media: "GE", Up: true, Speed: 1000, FullDuplex: true, Enable: true, Enabled: true, IsUplink: false, OpMode: "switch", Forward: "all", Autoneg: true, StpState: "forwarding", StpPathcost: 20000, RxBytes: 524288, TxBytes: 524288},
 	}
 	ethTable := []telemetry.EthernetPort{
-		{Name: "eth0", MAC: p.data.MAC, Speed: 2500, FullDuplex: true, NumPort: 4},
+		{Name: "eth0", MAC: p.data.MAC, Speed: 2500, FullDuplex: true, NumPort: 1},
 	}
 	uplink := &telemetry.Uplink{
-		Name: "eth0", MAC: p.data.MAC, IP: p.data.IP, Type: "wire", Speed: 2500, FullDuplex: true, Up: true, NumPort: 1, UplinkMAC: "6e:63:f8:30:9a:06", UplinkRemotePort: 1, RxBytes: 1048576, TxBytes: 2097152,
+		Name:             "eth0",
+		MAC:              p.data.MAC,
+		IP:               p.data.IP,
+		Type:             "wire",
+		Speed:            2500,
+		FullDuplex:       true,
+		Up:               true,
+		NumPort:          1,
+		PortIdx:          1,
+		Media:            "2.5GE",
+		MaxSpeed:         2500,
+		UplinkSource:     "lldp_uplink",
+		UplinkMAC:        "6c:63:f8:30:9a:05",
+		UplinkRemotePort: 1,
+		RxBytes:          1048576,
+		TxBytes:          2097152,
 	}
 	return ports, ethTable, uplink, nil
+}
+
+func (p *ProfileProvider) GetLLDPTable() ([]telemetry.LLDPEntry, error) {
+	return []telemetry.LLDPEntry{
+		{
+			ChassisID:     "6c:63:f8:30:9a:05",
+			PortID:        "6c:63:f8:30:9a:05",
+			LocalPortName: "eth0",
+			LocalPortIdx:  1,
+			IsWired:       true,
+		},
+	}, nil
 }
 
 func (p *ProfileProvider) GetSystemStats() (*telemetry.SystemStats, *telemetry.SysStats, error) {

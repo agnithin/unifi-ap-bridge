@@ -28,12 +28,14 @@ var (
 )
 
 type Config struct {
-	ControllerURL string            `json:"controller_url"`
-	IntervalSec   int               `json:"interval_sec"`
-	Model         string            `json:"model"`
-	StatePath     string            `json:"state_path"`
-	Branch        string            `json:"branch,omitempty"`
-	WlanMapping   map[string]string `json:"wlan_mapping"`
+	ControllerURL    string            `json:"controller_url"`
+	IntervalSec      int               `json:"interval_sec"`
+	Model            string            `json:"model"`
+	StatePath        string            `json:"state_path"`
+	Branch           string            `json:"branch,omitempty"`
+	UplinkMAC        string            `json:"uplink_mac,omitempty"`
+	UplinkRemotePort int               `json:"uplink_remote_port,omitempty"`
+	WlanMapping      map[string]string `json:"wlan_mapping"`
 }
 
 func loadConfig(path string) (*Config, error) {
@@ -267,11 +269,21 @@ func main() {
 			}
 		}
 
-		// Retrieve Ethernet ports, uplink and system load telemetry
+		// Retrieve Ethernet ports, uplink, LLDP and system load telemetry
 		pTable, ethTable, uplink, _ := provider.GetPortTable()
 		ports = pTable
+		lldpEntries, _ := provider.GetLLDPTable()
 		systemStats, sysStatsLegacy, _ := provider.GetSystemStats()
 		sysStats = systemStats
+
+		if uplink != nil {
+			if cfg.UplinkMAC != "" {
+				uplink.UplinkMAC = cfg.UplinkMAC
+			}
+			if cfg.UplinkRemotePort > 0 {
+				uplink.UplinkRemotePort = cfg.UplinkRemotePort
+			}
+		}
 
 		// Calculate station count per radio
 		for i := range radioStats {
@@ -312,7 +324,9 @@ func main() {
 			VAPTable:        vaps,
 			EthernetTable:   ethTable,
 			PortTable:       ports,
+			SwPortTable:     ports,
 			Uplink:          uplink,
+			LLDPTable:       lldpEntries,
 			SysStats:        sysStatsLegacy,
 			SystemStats:     systemStats,
 		}
@@ -320,17 +334,10 @@ func main() {
 		if uplink != nil && uplink.UplinkMAC != "" {
 			payload.UplinkMAC = uplink.UplinkMAC
 			payload.LastUplink = &telemetry.LastUplink{
+				PortIdx:          uplink.PortIdx,
 				UplinkMAC:        uplink.UplinkMAC,
 				UplinkRemotePort: uplink.UplinkRemotePort,
-			}
-			payload.LLDPTable = []telemetry.LLDPEntry{
-				{
-					ChassisID:     uplink.UplinkMAC,
-					IsWired:       true,
-					LocalPortIdx:  1,
-					LocalPortName: "eth0",
-					PortID:        "1",
-				},
+				Type:             "wire",
 			}
 		}
 
