@@ -1,13 +1,13 @@
 # Full-System Audit & Current Operational State
 
 **Audit Date:** 2026-10-24 21:38 PDT  
-**System Status:** **AP HEARTBEATS HEALTHY; CONTROLLER VERIFICATION AND AUDIT FOLLOW-UP OPEN**
-**Active Release Track:** `dev`; documented package baseline `v1.2.2` / `53153bb`, but both live daemons report `1.2.1` (build provenance unverified)
+**System Status:** **DEV UPDATE DEPLOYED; AP AND CONTROLLER HEARTBEATS HEALTHY; TOPOLOGY FOLLOW-UP OPEN**
+**Active Release Track:** `dev`, live `1.2.2`, build commit `1b6ce07affb18f30ef86a822e5939b9217b3648f` (verified on both APs)
 **Repository Path:** `/Users/nithinag/workspace/unifi-ap-bridge`
 
 ---
 
-> **Evidence precedence:** The latest implementation review in section 7 supersedes conflicting dispositions in sections 1–6; section 5 preserves the earlier independent live sample. Those sections preserve the earlier reported baseline; they are not all independently verified. In particular, controller topology, zero client disruption, and deployment provenance are not established by the follow-up checks.
+> **Evidence precedence:** The deployment evidence in section 8 supersedes earlier live-state and pending-deployment statements. Section 7 records implementation review; section 5 preserves the earlier independent live sample. Those sections preserve the earlier reported baseline; they are not all independently verified. In particular, controller topology, zero client disruption, and deployment provenance are not established by the follow-up checks.
 
 ## 1. Network Topology & Hardware Infrastructure
 
@@ -313,3 +313,52 @@ Local validation passed: Go tests with the race detector, Go vet, three cluster 
 Build outputs remain in `/private/tmp/unifi-fixes-9oj5polz/artifacts`; tracked `bin/` artifacts have not been overwritten. Final rebuilt artifact checksums are recorded in that directory's manifest. Hosted CI and live deployment validation are still pending.
 
 **Release status:** Keep `dev`. Source fixes do not close live deployment verification. A2 credential rotation and topology investigation remain open; A4 full architecture review is not claimed complete. Do not merge to `main` without explicit approval.
+
+
+---
+
+## 8. Development Build Deployment — 2026-10-24, approximately 22:20–22:23 PDT
+
+**Operator authorization:** Commit and push changes to the dev build and update the addon to the latest version. No merge to `main` was performed.
+
+### Published source and build
+
+- `5a40d05`: daemon, cluster, permission, key validation, logging, CI, and audit fixes.
+- The first hosted run caught a real portability defect: dash discarded transfer stdin for a background SSH command despite `<&0`. The APs were not updated from that failed build.
+- `1b6ce07`: preserve caller stdin on file descriptor 3 before launching background SSH. Local tests and the Ubuntu CI regressions passed afterward.
+- Successful build/release: https://github.com/agnithin/unifi-ap-bridge/actions/runs/40165119811
+- The published ARMv7 archive matched the release SHA-256 manifest. Running its version command before installation reported `1.2.2`, full commit `1b6ce07affb18f30ef86a822e5939b9217b3648f`, build date `2026-10-25` (UTC).
+
+### Installation and verification
+
+Main's existing updater ran `update.sh apply dev`, restarted the telemetry bridge, and propagated the package/scripts/configuration to Node through the updated cluster script. Rollback archives were created first on each AP at `/tmp/unifi-bridge-before-dev-1b6ce07/addon.tar.gz` inside private directories. These are RAM-backed temporary backups and will not survive reboot; they contain sensitive addon state and must remain private.
+
+| Check | Main (`10.100.1.10`) | Node (`10.100.1.11`) |
+|---|---|---|
+| Runtime version | `1.2.2` | `1.2.2` |
+| Runtime commit | `1b6ce07affb18f30ef86a822e5939b9217b3648f` | Same |
+| Release track | `dev` | `dev` |
+| New daemon PID | `8418` | `15893` |
+| Adoption / cipher | Adopted, GCM | Adopted, GCM |
+| Recent logs | Repeated successful `noop` heartbeats | Repeated successful `noop` heartbeats |
+| Station count | 28 | 32 |
+| Addon / SSH directory modes | `0755` / `0700` | `0755` / `0700` |
+| Persistent state file mode | `0600` | `0600` |
+| Installed script, WebUI, version checksums | Match committed source | Match committed source |
+| Controller state / model | `ONLINE` / `U6 IW` | `ONLINE` / `U6 IW` |
+| Controller heartbeat age at final query | 5.2 seconds | 2.2 seconds |
+| Controller Port 1 | UP, 2500 Mbps | UP, 2500 Mbps |
+| Controller Port 4 | DOWN | UP, 1000 Mbps |
+
+All seven checked installed files matched local committed source via SHA-256: apply handler, cluster script, CLI, updater, watchdog, WebUI ASP, and version file. The state files retained their pre-update sampled modification times; no re-adoption was needed. A total of 60 associated stations was observed before and after; this is not a packet-loss or zero-disruption measurement.
+
+The cluster table briefly showed cached pre-restart status during the update. After both new daemons produced fresh telemetry, Main's `sync_nodes.sh status` regenerated the view: both nodes `RUNNING` at `1.2.2`, with Node labeled `Version Match (Config Unverified)`. No production Wi-Fi service restart was requested; only the telemetry addon was restarted.
+
+### Remaining open work
+
+- **A1/A3:** Permission enforcement and deployed version/provenance now verified on both APs.
+- **A2:** Official API access and current-document credential removal verified. Rotation of the previously exposed, still-active credential remains open.
+- **A4/A5:** Implemented regressions and normal live operation passed. Controlled outage/recovery tests and the wider architecture review remain open; do not claim them complete.
+- **A6:** Daemon log cap is deployed. Watchdog log growth and broader persistent-write review remain open.
+- **Topology:** The final official device responses still return `uplink: null` for both APs. Gateway parent-port topology remains unresolved despite correct physical/controller port links.
+- **Release:** Keep `dev`. No approval to merge into `main` has been given. This deployment record is documentation-only and does not change the published build's code identity.
