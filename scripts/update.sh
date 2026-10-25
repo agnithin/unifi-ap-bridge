@@ -54,6 +54,40 @@ get_local_version() {
     echo "1.0.0"
 }
 
+# Compare semver versions v1 and v2.
+# Strips leading 'v' and any prerelease suffix (-dev, etc.).
+# Returns:
+#   0 if v1 == v2
+#   1 if v1 > v2
+#   2 if v1 < v2
+version_cmp() {
+    v1=$(echo "$1" | sed 's/^v//' | sed 's/-.*//' | tr -d ' \t\r\n')
+    v2=$(echo "$2" | sed 's/^v//' | sed 's/-.*//' | tr -d ' \t\r\n')
+    [ "$v1" = "$v2" ] && return 0
+
+    v1_maj=$(echo "$v1" | awk -F. '{print $1}')
+    v1_min=$(echo "$v1" | awk -F. '{print $2}')
+    v1_pat=$(echo "$v1" | awk -F. '{print $3}')
+    v2_maj=$(echo "$v2" | awk -F. '{print $1}')
+    v2_min=$(echo "$v2" | awk -F. '{print $2}')
+    v2_pat=$(echo "$v2" | awk -F. '{print $3}')
+
+    [ -z "$v1_maj" ] && v1_maj=0
+    [ -z "$v1_min" ] && v1_min=0
+    [ -z "$v1_pat" ] && v1_pat=0
+    [ -z "$v2_maj" ] && v2_maj=0
+    [ -z "$v2_min" ] && v2_min=0
+    [ -z "$v2_pat" ] && v2_pat=0
+
+    [ "$v1_maj" -gt "$v2_maj" ] 2>/dev/null && return 1
+    [ "$v1_maj" -lt "$v2_maj" ] 2>/dev/null && return 2
+    [ "$v1_min" -gt "$v2_min" ] 2>/dev/null && return 1
+    [ "$v1_min" -lt "$v2_min" ] 2>/dev/null && return 2
+    [ "$v1_pat" -gt "$v2_pat" ] 2>/dev/null && return 1
+    [ "$v1_pat" -lt "$v2_pat" ] 2>/dev/null && return 2
+    return 0
+}
+
 # Write update_status.js for WebUI consumption
 write_update_status() {
     status="$1"
@@ -107,9 +141,15 @@ cmd_check() {
     clean_local=$(echo "$local_ver" | sed 's/^v//')
     clean_remote=$(echo "$raw_ver" | sed 's/^v//')
 
-    if [ "$clean_local" = "$clean_remote" ]; then
+    version_cmp "$clean_local" "$clean_remote"
+    cmp_res=$?
+
+    if [ "$cmp_res" -eq 0 ]; then
         echo "UniFi AP Bridge is up to date (version: ${raw_ver}, branch: ${branch})"
         write_update_status "UP_TO_DATE" "$branch" "$local_ver" "$raw_ver" "UniFi AP Bridge is up to date (${raw_ver})"
+    elif [ "$cmp_res" -eq 1 ]; then
+        echo "Installed version (${local_ver}) is newer than remote (${raw_ver}) on branch '${branch}'"
+        write_update_status "UP_TO_DATE" "$branch" "$local_ver" "$raw_ver" "Installed version (${local_ver}) is up to date (newer than ${raw_ver})"
     else
         echo "New version available: ${raw_ver} (installed: ${local_ver})"
         write_update_status "UPDATE_AVAILABLE" "$branch" "$local_ver" "$raw_ver" "Update available: ${raw_ver}"

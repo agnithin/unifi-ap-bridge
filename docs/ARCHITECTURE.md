@@ -173,4 +173,11 @@ CI tests the Go packages, cluster SSH/freshness behavior, and shell syntax befor
 
 For API-key diagnostics, use `/proxy/network/integration/v1` and the controller's version-specific API documentation. The earlier `X-API-KEY` request to legacy `/proxy/network/api/s/default/stat/device` returned 401, while the same key authenticated successfully to the official Integration API. A locally exported environment variable is not automatically forwarded through SSH and `pct exec`.
 
+## 8. Release Track Management & Software Updates
+
+* **Track Selection:** Supports switching between `main` (official tagged releases) and `dev` (continuous development builds).
+* **Semver-Aware Comparison:** `scripts/update.sh` uses `version_cmp` to parse `major.minor.patch`. Local versions greater than or equal to remote versions report `UP_TO_DATE` and prevent unintended downgrades.
+* **Asuswrt CGI Integration:** Because Asuswrt-Merlin's `apply.cgi` drops non-NVRAM form inputs, the WebUI passes target track identifiers via `action_script` (`start_unifi_bridge_check_update_${branch}`) and NVRAM `amng_custom`. `scripts/apply_config.sh` parses `$2` and `amng_custom` to update `config.json` and `/jffs/addons/custom_settings.txt`.
+* **Topology Preservation:** Configuration updates preserve dynamic `uplink_mac` and `uplink_remote_port` values.
+
 Keep credentials out of repository files, command output, and WebUI status. The earlier exposed key remains active and requires coordinated rotation. Read-only device details/statistics establish online state, recent heartbeats, and port links; the prior `uplink: null` values were traced to the malformed raw AP interface/uplink schema. Verify the normalized parent/speed fields and actual UI after applying v1.2.3.

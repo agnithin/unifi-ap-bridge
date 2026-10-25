@@ -364,7 +364,10 @@ function updateUpdateUI(u) {
   var pBox = document.getElementById("update_progress_box");
 
   if (u.current_version && u.current_version !== "-") curVal.textContent = u.current_version;
-  if (u.remote_version && u.remote_version !== "-") remVal.textContent = "Latest available: " + u.remote_version;
+  if (u.remote_version && u.remote_version !== "-") {
+    var trackLabel = u.branch ? (" (" + u.branch + ")") : "";
+    remVal.textContent = "Latest" + trackLabel + ": " + u.remote_version;
+  }
   if (u.message) desc.textContent = u.message + (u.last_check ? " (Checked: " + u.last_check + ")" : "");
 
   if (u.status === "UPDATE_AVAILABLE") {
@@ -435,9 +438,14 @@ function checkUpdateNow() {
   try { window.parent.refreshpage = function() {}; } catch (e) {}
 
   document.form.unifibridge_branch.value = selectedBranch;
-  document.form.action_script.value = "start_unifi_bridge_check_update";
+  document.form.action_script.value = "start_unifi_bridge_check_update_" + selectedBranch;
   document.form.action_mode.value = "apply";
   document.form.action_wait.value = "3";
+
+  var amng = document.getElementById("amng_custom");
+  if (amng) {
+    amng.value = JSON.stringify({ action: "check_update", branch: selectedBranch });
+  }
 
   var badge = document.getElementById("update_badge");
   badge.className = "badge_online";
@@ -467,9 +475,14 @@ function doUpdateNow() {
   }
 
   document.form.unifibridge_branch.value = selectedBranch;
-  document.form.action_script.value = "start_unifi_bridge_do_update";
+  document.form.action_script.value = "start_unifi_bridge_do_update_" + selectedBranch;
   document.form.action_mode.value = "apply";
   document.form.action_wait.value = "5";
+
+  var amng = document.getElementById("amng_custom");
+  if (amng) {
+    amng.value = JSON.stringify({ action: "do_update", branch: selectedBranch });
+  }
 
   document.getElementById("btn_do_update").style.display = "none";
   document.getElementById("update_progress_box").style.display = "block";
@@ -597,6 +610,18 @@ function applySettings() {
   document.form.unifibridge_interval.value = interval;
   document.form.unifibridge_branch.value = branch;
 
+  var amng = document.getElementById("amng_custom");
+  if (amng) {
+    amng.value = JSON.stringify({
+      enabled: isEnabled === "1",
+      auto_gateway: isAutoGw === "1",
+      controller_url: ctrlUrl,
+      model: model,
+      interval: parseInt(interval, 10),
+      branch: branch
+    });
+  }
+
   document.form.action_script.value = "start_unifi_bridge_apply";
   document.form.action_mode.value = "apply";
   document.form.action_wait.value = "4";
@@ -644,6 +669,7 @@ function initial(){
 <input type="hidden" name="firmver" value="<% nvram_get("firmver"); %>">
 
 <!-- Custom Plugin Settings -->
+<input type="hidden" name="amng_custom" id="amng_custom" value="">
 <input type="hidden" name="unifibridge_enabled" value="1">
 <input type="hidden" name="unifibridge_auto_gateway" value="1">
 <input type="hidden" name="unifibridge_controller_url" value="http://10.100.1.1:8080/inform">

@@ -71,5 +71,22 @@ class ClusterTests(unittest.TestCase):
             self.assertEqual(node["status"] == "RUNNING", expected)
             self.assertEqual(node["sync_status"], "Version Match (Config Unverified)" if expected else "Stale or Stopped")
 
+    def test_version_cmp(self):
+        update_src = (Path(__file__).parent / "update.sh").read_text()
+        func = update_src[update_src.index("version_cmp() {"):update_src.index("# Write update_status.js")]
+        cases = [
+            ("1.2.3", "1.2.3", 0),
+            ("1.2.3", "v1.2.3", 0),
+            ("1.2.3", "1.2.2", 1),
+            ("1.2.3", "v1.2.1", 1),
+            ("1.2.3", "1.3.0", 2),
+            ("1.2.3", "2.0.0", 2),
+            ("1.3.0", "1.2.9", 1),
+            ("v1.2.3-dev", "v1.2.3", 0),
+        ]
+        for v1, v2, expected in cases:
+            res = subprocess.run(["sh", "-c", func + '\nversion_cmp "$1" "$2"', "test", v1, v2])
+            self.assertEqual(res.returncode, expected, f"Failed comparing {v1} and {v2}")
+
 if __name__ == "__main__":
     unittest.main()

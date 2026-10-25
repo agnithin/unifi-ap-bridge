@@ -188,3 +188,22 @@ The U6IW profile supplies UniFi's model labels such as `PoE Out + Data` and `Dat
 Local verification: Go race tests, Go vet, cluster regression tests, and wire serialization/shared-MAC/capability regressions passed. The final working-tree source matches the published code commit; documentation commits after it do not require another binary deployment.
 
 Remaining work: rotate the previously exposed controller credential, complete controlled failure/recovery and broader code/security reviews, and review watchdog logging/write paths. Merge to `main` still requires explicit approval.
+
+---
+
+## 6. Software Update Checker & Track Management Fixes
+
+**Context:** The Asuswrt WebUI update manager showed `UPDATE AVAILABLE: v1.2.1` when `1.2.2`/`1.2.3` was installed on the `dev` track, offering a downgrade to an older release.
+
+### Root Causes & Fixes Applied:
+1. **Semver Comparison in `scripts/update.sh`:**
+   - Previous implementation used simple string equality (`clean_local = clean_remote`). If versions differed, it unconditionally raised `UPDATE_AVAILABLE`.
+   - Added POSIX `version_cmp` evaluating `major.minor.patch`. When `clean_local >= clean_remote`, it reports `UP_TO_DATE` (e.g. `Installed version (1.2.3) is up to date (newer than v1.2.1)`), eliminating false downgrade prompts.
+2. **Track Parameter Persistence Across Asuswrt `apply.cgi`:**
+   - Asuswrt-Merlin's `apply.cgi` only accepts known NVRAM variables, dropping arbitrary form parameters like `unifibridge_branch`.
+   - `webui/unifi-bridge.asp` now passes the target branch directly within `action_script` (`start_unifi_bridge_check_update_${branch}` and `start_unifi_bridge_do_update_${branch}`) and sets the standard Merlin NVRAM variable `amng_custom`.
+   - `scripts/apply_config.sh` parses `$2` and `amng_custom`, synchronizing both `config.json` and `/jffs/addons/custom_settings.txt`.
+3. **Topology Setting Preservation in `apply_config.sh`:**
+   - When saving settings from the WebUI, `scripts/apply_config.sh` now reads and preserves existing `uplink_mac` and `uplink_remote_port` values.
+4. **Automated Testing:**
+   - Added `test_version_cmp` in `scripts/test_sync_nodes.py` covering matching, newer, older, and pre-release semver combinations. All 4 unit tests pass cleanly.
