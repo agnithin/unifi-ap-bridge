@@ -1,6 +1,6 @@
 # unifi-ap-bridge
 
-> **Current delivery status — 2026-10-25:** v1.2.5 fixes are committed to dev (implementation `6254fc5`, test-fixture correction `be106ec`) and passed [hosted tests and ARM builds](https://github.com/agnithin/unifi-ap-bridge/actions/runs/40210104250). Both APs were last verified on v1.2.4 dev (`f77fafb`) around 01:45–01:55 PDT. No v1.2.5 rollout or fresh AP check is implied. Credential rotation/revocation completed separately at 16:07 UTC. Stable publication, startup-asset migration and live acceptance remain pending. Latest stable tag was last checked as v1.2.1; merging main does not publish a release.
+> **Current delivery status — 2026-10-25, 16:25–16:28 UTC:** both APs now run **v1.2.5 dev**, commit `be106ec33fe6790af30a600d11bd05246445c530`, after a sequential Node-then-Main migration. Fresh adopted GCM heartbeats, three radios per AP, gateway parents and HomeBase attachment were verified. Configuration files were unchanged. Credential remediation completed at 16:07 UTC. Asus settings/UI acceptance, controlled persistence/recovery tests and stable release publication remain pending. Latest stable tag was last checked as v1.2.1; main was not changed by this rollout.
 
 A high-performance, ultra-lightweight standalone daemon and WebUI addon for **Asuswrt-Merlin** and Linux routers that bridges Broadcom Wi-Fi and switch telemetry into the **Ubiquiti UniFi Inform Protocol** (`:8080/inform`).
 
@@ -10,7 +10,7 @@ It emulates a genuine UniFi 6 Access Point—featuring native **UniFi 6 In-Wall 
 
 ## Current deployment
 
-Last verified **2026-10-25, approximately 01:45 PDT**: both XT8 APs run **v1.2.4 on `dev`**, code commit `f77fafbc08688faca4b0fd9a286b73790d5a25da`. Both are adopted, running, and sending successful GCM heartbeats. A runtime sample counted 31 stations on Main and 29 on Node; counts fluctuate normally.
+Verified **2026-10-25 around 09:25–09:28 PDT (16:25–16:28 UTC)**: both XT8 APs run **v1.2.5 dev**, commit `be106ec33fe6790af30a600d11bd05246445c530`. Both are adopted and sending fresh GCM heartbeats. A post-migration sample counted Main 29 and Node 31 clients (60 total); counts fluctuate normally. All three physical radios appear in the actual UniFi overview on both APs.
 
 The actual UniFi browser UI now shows Main connected to Cloud Gateway Max **Port 1** and Node to **Port 3**, both at **2.5 GbE**. Port Manager shows those uplinks active and **Bridge-EufyHomeBase3 on Node Port 4 at GbE**. This closes the two reported UI issues. The exposed controller API key was rotated and revoked on 2026-10-25; controlled outage/recovery checks and broader review remain open. The operator approved promoting all current changes to `main` on 2026-10-25. The APs remain on the verified `dev` deployment.
 
@@ -47,7 +47,7 @@ The prior bridge sent an uplink object shaped like a REST response and omitted t
   * Preserves dynamically discovered remote ports so cluster configuration synchronization does not overwrite satellite nodes with Main's uplink port, preventing port collisions on the upstream gateway switch.
   * Populates `uplink_mac`, `last_uplink`, and `lldp_table` from available neighbor data, aligning with gateway `downlink_table` entries.
 * **Router CPU & Memory Utilization Telemetry (v1.2.0+):**
-  * v1.2.5 source uses `/proc/stat` CPU deltas and `/proc/meminfo`, preferring MemAvailable; first/unknown CPU samples are omitted. Deployed v1.2.4 still uses a load-derived CPU estimate.
+  * v1.2.5 source uses `/proc/stat` CPU deltas and `/proc/meminfo`, preferring MemAvailable; first/unknown CPU samples are omitted. This replaces the prior v1.2.4 load-derived estimate.
   * Renders live CPU and RAM status cards in the Asuswrt WebUI and CLI.
 * **WiFi Experience Scoring (v1.2.0+):**
   * Dynamically computes 0–100% `satisfaction` scores for each associated station using a signal/cumulative-retry heuristic; v1.2.5 omits the score when signal is missing. This is not native UniFi scoring parity, populating the UniFi "WiFi Experience" column.
@@ -60,7 +60,7 @@ The prior bridge sent an uplink object shaped like a REST response and omitted t
   * Prefers unicast counters when provided by the driver. Fallback total counters and station-summed VAP counters require care across client churn; stable per-interface counters remain pending.
   * Aggregates counters per-client in `sta_table` and per-SSID in `vap_table`, populating UniFi real-time client throughput and bandwidth utilization graphs.
 * **Ultra-Low Resource Footprint:**
-  * **RAM:** ~3–5 MB RSS (< 1% of 512 MB router RAM).
+  * **RAM:** approximately 9.7 MB RSS per AP in the v1.2.5 rollout sample; whole-router memory includes other services and RAM-backed files.
   * **CPU:** Samples telemetry at a default 10-second interval. Sampling cost varies with station count and external `wl`/NVRAM/LLDP commands; no sub-millisecond or fixed CPU-use guarantee is established.
   * **Runtime writes:** Caches, logs, and WebUI status live under `/tmp/`. Regular-file daemon logs are capped at 1 MiB. Persistent adoption state is `0600` and saved atomically when controller state changes; flash writes are reduced, not eliminated.
 * **Native Asuswrt-Merlin WebUI Integration & Form Isolation (v1.2.2+):**
@@ -236,11 +236,11 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="$BUILD_FLAGS"
 ### Implemented features (source and deployment distinguished above)
 * [x] **Zero-Dependency Architecture:** Static Go binary running directly on clean Asuswrt-Merlin firmware.
 * [x] **UniFi Inform Engine:** Wire protocol implementation supporting AES-128-CBC bootstrap and AES-128-GCM adopted encryption.
-* [x] **Broadcom Wireless Telemetry:** Physical/virtual discovery across 2.4/5 GHz; v1.2.5 adds complete tri-radio identity and configured VIF discovery, pending live acceptance.
+* [x] **Broadcom Wireless Telemetry:** Physical/virtual discovery across 2.4/5 GHz; v1.2.5 adds complete tri-radio identity and configured VIF discovery, verified in the live UniFi overview on both APs.
 * [x] **Wi-Fi 6 (`802.11ax`) & Wi-Fi 4 (`802.11n`) Classification:** Generation mapping covered by parser tests; unknown driver formats require validation.
 * [x] **Physical Switch Port Telemetry & Bridge FDB Client Discovery (`U6-IW` Emulation) (v1.2.2):** 2.5G WAN uplink and 1G LAN ports reporting live carrier state, speed, full duplex, traffic counters, and learned client MAC tables (`mac_table`) directly into the UniFi Port Manager.
 * [x] **LLDP Topology Telemetry & Conflict Prevention (v1.2.2):** Discovers upstream neighbors via `lldpcli`, preserving distinct remote ports (Port 1 for Main, Port 3 for Node) and aligning with gateway `downlink_table` entries.
-* [x] **Router CPU/Memory Stats & WiFi Experience Scoring (v1.2.0):** The deployed build reports load-derived CPU estimates and heuristic experience scores. The current source fix uses CPU counter deltas and avoids invented noise/experience when measurements are missing; remaining quality improvements are tracked below.
+* [x] **Router CPU/Memory Stats & WiFi Experience Scoring (v1.2.0):** The deployed v1.2.5 build uses CPU counter deltas and avoids invented noise/experience when measurements are missing; remaining quality improvements are tracked below.
 * [x] **RF Channel Utilization & Airtime Telemetry (v1.1.0):** Broadcom `chanim_stats` streaming `cu_total`, `cu_self_rx`, and `cu_self_tx` into UniFi RF graphs and router WebUI.
 * [x] **Cumulative Client Traffic Usage Counters (v1.1.0):** Parsing `tx/rx` unicast bytes, packets, retries, rates, and association uptime from `wl sta_info`.
 * [x] **Native Asuswrt WebUI Integration & Form Isolation (v1.2.2):** Advanced Settings > Wireless tab with dynamic slot discovery (`user1`–`user20.asp`), zero-refresh background polling, and form preservation.
@@ -250,14 +250,14 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="$BUILD_FLAGS"
 
 ### Prioritized backlog and operator decisions
 
-The detailed evidence and acceptance criteria are in [the project audit/backlog](docs/AUDIT_STATE.md#8-approved-backlog-and-fix-batch--2026-10-25). The current batch passed local tests, ARM builds and [hosted validation](https://github.com/agnithin/unifi-ap-bridge/actions/runs/40210104250); it is not deployed. APs remain on the verified v1.2.4 dev build.
+The detailed evidence and acceptance criteria are in [the project audit/backlog](docs/AUDIT_STATE.md#8-approved-backlog-and-fix-batch--2026-10-25). The current batch passed local tests, ARM builds and [hosted validation](https://github.com/agnithin/unifi-ap-bridge/actions/runs/40210104250); it is now deployed on both APs. Runtime/three-radio/topology acceptance passed; settings UI and controlled recovery/persistence checks remain pending. See [rollout evidence](docs/AUDIT_STATE.md#9-v125-sequential-rollout-and-live-acceptance--2026-10-25).
 
 | Work | Status / next step |
 |---|---|
 | B1–B2: Reliable bridge-addon updates | Fail-closed download/checksum/archive/version/startup/heartbeat checks implemented and tested in dev. Immutable complete release bundles, transaction locking, rollback and verified per-node outcomes remain pending. Stable release publication is separate from merging main. |
 | B3: Preserve settings | JSON merge preserves custom WLAN mappings, node lists, topology and unknown fields; validation, private atomic writes and no-op detection implemented and tested in dev. |
 | B4: Respect disabled state | Daemon and shared tracked startup enforce enabled=false for boot, cluster and manual entry points; startup distribution included in addon updates. Local regression tests pass. |
-| B5: Accurate tri-band telemetry | Separate physical radio/VAP identities, actual channel widths and per-radio counts implemented and tested in dev. Third-radio rendering under U6IW still needs controller acceptance testing. |
+| B5: Accurate tri-band telemetry | Separate physical radio/VAP identities, actual channel widths and per-radio counts implemented and tested in dev. Three-radio rendering under U6IW passed in the actual UniFi overview on both APs; other diagnostic/control surfaces remain outside that check. |
 | B6: Exposed controller key | Resolved: replacement installed privately in CT107 and verified; exposed key revoked (old 401, new 200). Temporary secret copies removed. Historical exposure remains documented without key values. |
 | B7–B10: Health and telemetry correctness | CPU deltas, unknown noise/experience handling, topology/FDB corrections, UI freshness/unverified labels and watchdog log cap implemented and tested in dev. Sampling deadlines/caching, stable traffic counters, rollback, structured config verification and remaining form transport work stay open. |
 | F1: WLAN discovery | Resolve/cache exact SSID-to-legacy-ObjectId mapping; handle duplicate names and modern UUID differences. Keep broad API credentials off the AP. |

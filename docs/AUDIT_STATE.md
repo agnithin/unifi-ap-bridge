@@ -1,12 +1,12 @@
 # Audit State & Current Operations
 
-> **Current delivery status — 2026-10-25:** v1.2.5 fixes are committed to dev (implementation `6254fc5`, test-fixture correction `be106ec`) and passed [hosted tests and ARM builds](https://github.com/agnithin/unifi-ap-bridge/actions/runs/40210104250). Both APs were last verified on v1.2.4 dev (`f77fafb`) around 01:45–01:55 PDT. No v1.2.5 rollout or fresh AP check is implied. Credential rotation/revocation completed separately at 16:07 UTC. Stable publication, startup-asset migration and live acceptance remain pending. Latest stable tag was last checked as v1.2.1; merging main does not publish a release.
+> **Current delivery status — 2026-10-25, 16:25–16:28 UTC:** both APs now run **v1.2.5 dev**, commit `be106ec33fe6790af30a600d11bd05246445c530`, after a sequential Node-then-Main migration. Fresh adopted GCM heartbeats, three radios per AP, gateway parents and HomeBase attachment were verified. Configuration files were unchanged. Credential remediation completed at 16:07 UTC. Asus settings/UI acceptance, controlled persistence/recovery tests and stable release publication remain pending. Latest stable tag was last checked as v1.2.1; main was not changed by this rollout.
 
-**Last live verification:** 2026-10-25, approximately 01:50–01:55 PDT. Section 7 preserves the original code audit; Section 8 records current fixes and pending acceptance. Earlier sections retain dated rollout evidence.
+**Last live verification:** 2026-10-25, approximately 09:25–09:28 PDT (16:25–16:28 UTC); see Section 9. Section 7 preserves the original code audit; Section 8 records current fixes and pending acceptance. Earlier sections retain dated rollout evidence.
 
-**Status:** Both APs remain healthy on v1.2.4 dev. Prior browser fixes remain recorded in Sections 5–6. The review found update integrity, configuration preservation, disabled-state and tri-radio gaps (Section 7); tested dev fixes and remaining acceptance are recorded in Section 8. Controller credential rotation is complete (Section 8); controlled outage testing remains open.
+**Status:** Both APs are verified on v1.2.5 dev (Section 9). Prior browser fixes remain recorded in Sections 5–6. The review found update integrity, configuration preservation, disabled-state and tri-radio gaps (Section 7); tested dev fixes and remaining acceptance are recorded in Section 8. Controller credential rotation is complete (Section 8); controlled outage testing remains open.
 
-**Release track:** `dev`, daemon `1.2.4`, deployed code commit `f77fafbc08688faca4b0fd9a286b73790d5a25da` on both APs. Promotion of all current changes to `main` was approved by the operator on 2026-10-25. Section 5 supersedes earlier v1.2.2 UI-closure/provenance claims.
+**Release track:** `dev`, daemon `1.2.5`, deployed code commit `be106ec33fe6790af30a600d11bd05246445c530` on both APs. Promotion of all current changes to `main` was approved by the operator on 2026-10-25. Section 5 supersedes earlier v1.2.2 UI-closure/provenance claims.
 
 **Repository:** `/Users/nithinag/workspace/unifi-ap-bridge`.
 
@@ -74,7 +74,7 @@ See [README](../README.md) for usage and [ARCHITECTURE.md](ARCHITECTURE.md) for 
 |---|---|---|
 | A1 — Key directory security | Deployed and verified | Both addon directories `0755`, SSH directories `0700`, state files `0600`. Installer/updater/cluster paths enforce the directory modes. |
 | A2 — Controller access / credential hygiene | Rotated and verified | Replacement installed at `/etc/ops-broker/unifi-api-key` (0600) on CT107; exposed key revoked. On 2026-10-25 at 16:07 UTC: old key HTTP 401, replacement info/sites HTTP 200; broker active/running. Historical exposure retained as evidence. |
-| A3 — Version / provenance | Runtime verified; release packaging open | Both APs run `1.2.4` / `f77fafb…` on dev. Main was promoted to `c8ebaa4…`; stable release remains v1.2.1. See B1–B2. |
+| A3 — Version / provenance | Runtime verified; release packaging open | Both APs run `1.2.5` / `be106ec…` on dev; runtime verified in Section 9. Main was promoted to `c8ebaa4…`; stable release remains v1.2.1. See B1–B2. |
 | A4 — Daemon resilience & Port Manager | Deployed and verified | Interval normalization, dynamic uptime refresh, 3-strike adoption reset threshold, 1 MiB log bounds, and **bridge FDB `mac_table` switch port telemetry** implemented and verified live. |
 | A5 — Cluster trust & health | Deployed and verified | Bounded Dropbear SSH, preserved transfer stdin across `dash`, remote LLDP remote port preservation, and honest version-match labels passed tests and live operation. |
 | A6 — Flash and RAM writes | Partly resolved | Runtime telemetry and daemon logs use `/tmp`; daemon log cap is 1 MiB. State saves use atomic rename. v1.2.5 source also caps watchdog logs; rollout, stale-process recovery and backoff remain open (B7). |
@@ -301,7 +301,7 @@ This section supersedes the original feature recommendations where the operator 
 - **AirView correction:** AirView is also a diagnostics UI, not one universally available scanner. Passive channel/client statistics can use existing radio counters. Continuous dedicated-radio scans/spectrum functions are hardware-dependent; active scans on a serving radio can disrupt clients. Keep scanner/capture integration and proprietary optimization parity deferred; collect accurate passive data only.
 - Dynamic WLAN mapping, effective guest/VLAN reporting, passive diagnostics and community packaging remain future features. Guest tagging must not be confused with isolation enforcement. Broad controller credentials should not be added to AP/WebUI status.
 
-### Current implementation batch (validated dev source; not deployed)
+### Implementation batch at validation time (subsequently deployed in Section 9)
 
 | Item | Implemented / tested in dev; hosted CI passed | Still pending |
 |---|---|---|
@@ -324,6 +324,8 @@ Added a narrow literal X-API-Key header guard and regressions, including escaped
 
 ### Verification and deployment boundary
 
+The paragraphs below preserve the pre-rollout validation boundary. Section 9 supersedes the v1.2.4 deployment and third-radio acceptance status; remaining tests are still open.
+
 This batch passed local and hosted validation, including synthetic update/startup failure fixtures and no real reboot, scan, radio reconfiguration or firmware flash. The runtime baseline remains v1.2.4 dev on both APs until an explicitly verified addon rollout is recorded. The new source version is v1.2.5 for update detection; changing version.txt alone is not proof of deployment. Completed test/build results and credential remediation are recorded below.
 
 #### Local batch validation
@@ -341,3 +343,38 @@ Rollout note: the currently deployed v1.2.4 updater does not acquire startup ass
 - The historical GitGuardian exposure is remediated by revocation. Git history was not force-rewritten; the GitGuardian dashboard finding status itself was not changed or independently verified.
 - Source implementation: `6254fc592f892a5ad87da91ff4cdd1b3fd66f18e`. First CI caught a Linux `/tmp` path-substitution bug in the startup test fixture, not a daemon failure. Corrected in `be106ec33fe6790af30a600d11bd05246445c530`; tests now exercise a `/tmp` root on macOS as well. [Hosted validation and ARM release build 40210104250](https://github.com/agnithin/unifi-ap-bridge/actions/runs/40210104250) passed and published the v1.2.5 dev artifacts.
 - Main and the AP deployments were not changed by this source-fix batch. Live v1.2.5 radio/UI and upgrade-migration acceptance remain pending. Reboot-command support is queued, not implemented or enabled; UniFi-driven updates and firmware remain deferred.
+
+## 9. v1.2.5 Sequential Rollout and Live Acceptance — 2026-10-25
+
+**Evidence window:** approximately 16:25–16:28 UTC (09:25–09:28 PDT). The operator continued the proposed migration/acceptance work. Node was migrated and verified before Main. Only the telemetry bridge was restarted; no AP reboot, Wi-Fi/radio reconfiguration, firmware update, active scan or re-adoption was performed. Client counts are observations, not packet-loss measurements.
+
+### Migration and preservation
+
+- Downloaded published ARMv7 dev artifact; verified SHA-256 against its release manifest and restricted archive members. Scripts/WebUI/version were obtained from exact source commit `be106ec33fe6790af30a600d11bd05246445c530`, matching the binary's on-device version/commit/build-date output.
+- Explicitly installed tracked `start.sh` and matching apply/sync/CLI/update/watchdog scripts plus WebUI and binary archive. This bypassed the old updater's missing startup/checksum guarantees without calling its update path or triggering automatic cluster propagation.
+- Each AP retained a private RAM-backed prior asset/runtime backup at `/tmp/unifi-v125-migration/backup`. Migration had failure restoration logic, but rollback was not exercised. RAM backups do not survive reboot and are not a persistent recovery strategy.
+- Each configuration file was byte-for-byte unchanged across migration. Existing adoption identity remained adopted with GCM; state files remained `0600`, and Main cluster private key remained `0600`. No adoption key or private credential was printed or copied into documentation.
+
+### Verified results
+
+| Check | Main | Node |
+|---|---|---|
+| Version / source | v1.2.5 dev / `be106ec` | v1.2.5 dev / `be106ec` |
+| Runtime | Live matching PID; adopted, Active GCM | Live matching PID; adopted, Active GCM |
+| Sample freshness | 3 seconds | 8 seconds |
+| Radio clients (2.4 / 5-low / 5-high) | 23 / 3 / 3 | 19 / 8 / 4 |
+| Radio channels / UI widths | 6 / 20 MHz; 36 / 40 MHz; 161 / 40 MHz | 6 / 20 MHz; 36 / 40 MHz; 161 / 40 MHz |
+| Gateway parent in actual UniFi UI | Cloud Gateway Max Port 1; 2.5 GbE | Cloud Gateway Max Port 3; 2.5 GbE |
+| Downstream wired link | LAN ports down in sample | Port 4 up, full-duplex 1 GbE; HomeBase in FDB and actual Port Manager |
+| Bridge RSS | about 9.7 MB | about 9.6 MB |
+
+UniFi overview rendered all three radios on each U6IW-emulated AP. This closes the specific third-radio overview acceptance gate without claiming compatibility with every UniFi radio-control/diagnostic surface. Node Port Manager retained Cloud Gateway Max on Port 1 at 2.5 GbE and Bridge-EufyHomeBase3 on Port 4 at GbE. The measured memory percentage is higher than v1.2.4 because it now uses kernel MemAvailable (approximately 38 MB Main / 78 MB Node available in a later sample); the values were checked against `/proc/meminfo`, not inferred from process RSS.
+
+### Remaining acceptance and backlog
+
+- Asus page requires login; browser settings-save/no-op preservation, update-check flow and cluster labels on v1.2.5 remain pending. Do not infer these from successful shell/runtime checks.
+- Controlled disable/re-enable, reboot persistence, controller outage/recovery, rollback and extended sampling-overhead tests remain unperformed.
+- Immutable complete release bundles, updater locking/automatic rollback and final per-node results still need implementation. The bounded manual migration does not close those generic updater gaps.
+- Structured cluster config/commit verification, background settings/sync completion, sample deadlines/cache/backoff, interval retry/VAP counters, broader LLDP validation and VLAN discovery remain open.
+- Simple authenticated reboot command support is queued. WLAN auto-discovery and guest/VLAN reporting remain future features. UniFi-driven upgrades, router firmware, broad provisioning and scanner/capture integration remain deferred.
+- Main/stable publication was not changed. Stable release remains held pending remaining acceptance and release packaging work.

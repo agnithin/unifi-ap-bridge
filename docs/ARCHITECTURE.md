@@ -1,6 +1,6 @@
 # Architecture & Technical Reference
 
-> **Current delivery status — 2026-10-25:** v1.2.5 fixes are committed to dev (implementation `6254fc5`, test-fixture correction `be106ec`) and passed [hosted tests and ARM builds](https://github.com/agnithin/unifi-ap-bridge/actions/runs/40210104250). Both APs were last verified on v1.2.4 dev (`f77fafb`) around 01:45–01:55 PDT. No v1.2.5 rollout or fresh AP check is implied. Credential rotation/revocation completed separately at 16:07 UTC. Stable publication, startup-asset migration and live acceptance remain pending. Latest stable tag was last checked as v1.2.1; merging main does not publish a release.
+> **Current delivery status — 2026-10-25, 16:25–16:28 UTC:** both APs now run **v1.2.5 dev**, commit `be106ec33fe6790af30a600d11bd05246445c530`, after a sequential Node-then-Main migration. Fresh adopted GCM heartbeats, three radios per AP, gateway parents and HomeBase attachment were verified. Configuration files were unchanged. Credential remediation completed at 16:07 UTC. Asus settings/UI acceptance, controlled persistence/recovery tests and stable release publication remain pending. Latest stable tag was last checked as v1.2.1; main was not changed by this rollout.
 
 `unifi-ap-bridge` is a standalone, dependency-free daemon and WebUI extension engineered for Asuswrt-Merlin and Broadcom-based routers. It translates raw Linux and Broadcom wireless and switch telemetry into the Ubiquiti UniFi Inform protocol (`:8080/inform`).
 
@@ -40,7 +40,7 @@ graph TD
 ### 2.1 Broadcom Wireless Telemetry (`providers/broadcom/asus.go`)
 * **Radio & Band Enumeration:**
   * Discovers active interfaces from NVRAM (`wl_ifnames`) and configured virtual interfaces (`wlN_vifnames`), skipping explicitly disabled BSS interfaces.
-  * Maps physical Broadcom radios (`eth4`, `eth5`, `eth6`) into normalized UniFi bands: `wifi-ng` (2.4 GHz) and `wifi-na` and `wifi-na-1` (distinct 5 GHz radios). VAPs and counts retain their physical parent; third-radio controller acceptance under U6IW remains pending.
+  * Maps physical Broadcom radios (`eth4`, `eth5`, `eth6`) into normalized UniFi bands: `wifi-ng` (2.4 GHz) and `wifi-na` and `wifi-na-1` (distinct 5 GHz radios). VAPs and counts retain their physical parent; three-radio overview acceptance under U6IW passed on both APs on 2026-10-25.
   * Evaluates channel spectrum configuration using Broadcom chanspec encoding (`wl chanspec`).
 * **RF Airtime & Channel Utilization:**
   * Queries `wl chanim_stats` periodically.
@@ -179,7 +179,7 @@ For API-key diagnostics, use `/proxy/network/integration/v1` and the controller'
 * **Asuswrt CGI Integration:** Because Asuswrt-Merlin's `apply.cgi` drops non-NVRAM form inputs, the WebUI passes target track identifiers via `action_script` (`start_unifi_bridge_check_update_${branch}_${request_id}`) and NVRAM `amng_custom`. `scripts/apply_config.sh` parses `$2` and `amng_custom` to dispatch the selected operation. Checking a track does not persist a track change; installation persists the selected track.
 * **Topology Preservation:** Configuration updates preserve dynamic `uplink_mac` and `uplink_remote_port` values.
 
-Keep credentials out of repository files, command output, and WebUI status. The earlier exposed key was revoked on 2026-10-25; its replacement was installed privately and verified (old HTTP 401, replacement HTTP 200). Read-only device details/statistics establish online state, recent heartbeats, and port links; the prior `uplink: null` values were traced to the malformed raw AP interface/uplink schema. Normalized parent/speed fields and actual UI were verified after v1.2.3 and retained in the v1.2.4 baseline. v1.2.5 radio/UI and migration acceptance remains pending.
+Keep credentials out of repository files, command output, and WebUI status. The earlier exposed key was revoked on 2026-10-25; its replacement was installed privately and verified (old HTTP 401, replacement HTTP 200). Read-only device details/statistics establish online state, recent heartbeats, and port links; the prior `uplink: null` values were traced to the malformed raw AP interface/uplink schema. Normalized parent/speed fields and actual UI were verified after v1.2.3 and retained in the v1.2.4 baseline. v1.2.5 radio/UniFi UI and manual migration acceptance passed; Asus settings UI and controlled recovery testing remain pending.
 
 ### Update requests (v1.2.4)
 
@@ -189,10 +189,10 @@ Update checks and installs POST to the normal Asuswrt dispatcher through XHR. Th
 
 The existing daemon binary also provides `-apply-settings -config <path> -settings-format json|custom -gateway <IP>`. This helper performs typed JSON merging without adding jq/Python dependencies to Asus firmware, retains fields not owned by the settings form, and writes private files atomically. The installer distributes the tracked startup script; startup and daemon configuration both honor enabled=false. Updating old installs must distribute the matching binary and startup/script set together; an older binary rejects the new settings flag.
 
-Radio names now identify physical radios even when two share 5 GHz, and each VAP retains its actual parent. Chanspec width/control-sideband parsing and per-parent client counts replace band-wide aggregation. Controller acceptance of a third radio under U6IW still needs live validation. CPU uses /proc/stat deltas; a first/missing sample is omitted. Unknown noise is not replaced with a constant floor. These are source changes pending rollout, not a claim of native UniFi provisioning, firmware control or dedicated-scanner support. See the approved backlog for remaining gaps and operator deferrals.
+Radio names now identify physical radios even when two share 5 GHz, and each VAP retains its actual parent. Chanspec width/control-sideband parsing and per-parent client counts replace band-wide aggregation. The actual UniFi overview displayed all three radios on both APs after the v1.2.5 rollout. CPU uses /proc/stat deltas; a first/missing sample is omitted. Unknown noise is not replaced with a constant floor. These changes are deployed; they do not establish native UniFi provisioning, firmware control or dedicated-scanner support. See the approved backlog for remaining gaps and operator deferrals.
 
 ### Lifecycle and release boundaries
 
 `-is-enabled -config <path>` exits 0 for enabled and 3 for disabled before hardware/adoption access. Disabled status retains version, branch and model, including with older startup callers. Semantic settings no-ops avoid flash writes; concurrent settings/sync serialization remains pending.
 
-The first v1.2.4 upgrade requires reviewed matching scripts, checksum-verified binary and explicit tracked-startup installation. Immutable all-assets bundles, transaction locking, automatic rollback and verified final per-node outcomes remain pending. No live v1.2.5 rollout, reboot or disable/re-enable test has been performed. Reboot command support is queued; UniFi-triggered updates, router firmware and broad provisioning remain deferred.
+The first v1.2.4 upgrade requires reviewed matching scripts, checksum-verified binary and explicit tracked-startup installation. Immutable all-assets bundles, transaction locking, automatic rollback and verified final per-node outcomes remain pending. The sequential v1.2.5 rollout and per-node heartbeat verification passed; reboot and disable/re-enable persistence tests remain pending. Reboot command support is queued; UniFi-triggered updates, router firmware and broad provisioning remain deferred.
