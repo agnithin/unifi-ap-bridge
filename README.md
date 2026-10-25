@@ -1,6 +1,6 @@
 # unifi-ap-bridge
 
-> **Current delivery status — 2026-10-25, 16:25–16:28 UTC:** both APs now run **v1.2.5 dev**, commit `be106ec33fe6790af30a600d11bd05246445c530`, after a sequential Node-then-Main migration. Fresh adopted GCM heartbeats, three radios per AP, gateway parents and HomeBase attachment were verified. Configuration files were unchanged. Credential remediation completed at 16:07 UTC. Asus settings/UI acceptance, controlled persistence/recovery tests and stable release publication remain pending. Latest stable tag was last checked as v1.2.1; main was not changed by this rollout.
+> **Current delivery status — 2026-10-25, 20:40–20:42 UTC:** Node is verified on v1.2.5 dev candidate `6224430`. Main is reachable again on prior daemon `be106ec` with fresh GCM after a recent system restart of unknown cause. Main retains a compatibility bootstrap bundle containing the old daemon/scripts and candidate updater; its candidate rollout is incomplete. Do not retry until the missing-stage failure and migration provenance are reviewed. See [recovery evidence](docs/AUDIT_STATE.md#13-independent-main-recovery-observations--2026-10-25-20382042-utc). Stable publication and Asus browser/recovery acceptance remain pending.
 
 A high-performance, ultra-lightweight standalone daemon and WebUI addon for **Asuswrt-Merlin** and Linux routers that bridges Broadcom Wi-Fi and switch telemetry into the **Ubiquiti UniFi Inform Protocol** (`:8080/inform`).
 
@@ -10,9 +10,9 @@ It emulates a genuine UniFi 6 Access Point—featuring native **UniFi 6 In-Wall 
 
 ## Current deployment
 
-Verified **2026-10-25 around 09:25–09:28 PDT (16:25–16:28 UTC)**: both XT8 APs run **v1.2.5 dev**, commit `be106ec33fe6790af30a600d11bd05246445c530`. Both are adopted and sending fresh GCM heartbeats. A post-migration sample counted Main 29 and Node 31 clients (60 total); counts fluctuate normally. All three physical radios appear in the actual UniFi overview on both APs.
+Current runtime evidence: **Node `6224430`**, **Main previous daemon `be106ec`**, both adopted and Active GCM at the 20:40–20:42 UTC checks. Main SSH recovered after a recent system restart of unknown cause; its failed rollout remains unaccepted. Earlier 16:25 tri-radio/60-client results are dated baseline evidence, not the present deployment or a disruption-free measurement.
 
-The actual UniFi browser UI now shows Main connected to Cloud Gateway Max **Port 1** and Node to **Port 3**, both at **2.5 GbE**. Port Manager shows those uplinks active and **Bridge-EufyHomeBase3 on Node Port 4 at GbE**. This closes the two reported UI issues. The exposed controller API key was rotated and revoked on 2026-10-25; controlled outage/recovery checks and broader review remain open. The operator approved promoting all current changes to `main` on 2026-10-25. The APs remain on the verified `dev` deployment.
+The actual UniFi browser UI now shows Main connected to Cloud Gateway Max **Port 1** and Node to **Port 3**, both at **2.5 GbE**. Port Manager shows those uplinks active and **Bridge-EufyHomeBase3 on Node Port 4 at GbE**. These original UI issues were closed at the dated baseline. Main gateway Port 1 was observed again after recovery; an extra empty controller radio row now requires investigation. The exposed controller API key was rotated and revoked on 2026-10-25; controlled outage/recovery checks and broader review remain open. The operator approved promoting all current changes to `main` on 2026-10-25. The APs remain on the verified `dev` deployment.
 
 See [audit state and action items](docs/AUDIT_STATE.md) and the [architecture reference](docs/ARCHITECTURE.md).
 
