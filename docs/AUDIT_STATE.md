@@ -1,16 +1,16 @@
 # Audit State & Current Operations
 
-**Last live verification:** 2026-10-24, approximately 23:05 PDT. This document records dated evidence; it does not imply a new live check on each documentation edit.
+**Last live verification:** 2026-10-24, approximately 23:28–23:30 PDT. The observations below are dated samples.
 
-**Status:** AP heartbeats healthy. Later screenshots disproved the earlier UI-closure claim. v1.2.3 candidate fixes both issues on Node in the actual browser; published rollout and Main verification follow below. Credential rotation and wider failure-path review remain open.
+**Status:** Both reported UI issues are resolved in the actual browser on the published build: correct AP gateway parents/uplink speeds and active Port Manager connections, including HomeBase on Node Port 4. Credential rotation and wider failure-path review remain open.
 
-**Release track:** `dev`, daemon `1.2.2`, deployed code commit `1d0160e` + switch FDB telemetry. Documentation commits may be newer without changing the deployed code. Do not merge to `main` without explicit operator approval.
+**Release track:** `dev`, daemon `1.2.3`, deployed code commit `b6188805e1b2e96fe94ab4b22b9c992c13978b1f` on both APs. No merge to `main` is approved. Section 5 supersedes earlier v1.2.2 UI-closure/provenance claims.
 
 **Repository:** `/Users/nithinag/workspace/unifi-ap-bridge`.
 
 See [README](../README.md) for usage and [ARCHITECTURE.md](ARCHITECTURE.md) for implementation details.
 
-## 1. Latest Verified Deployment — 2026-10-24, approximately 23:00–23:06 PDT
+## 1. Previous v1.2.2 Deployment — 2026-10-24, approximately 23:00–23:06 PDT
 
 **Operator authorization:** Implement fixes for "Connected To" and Port Manager client discovery, deploy to both APs, and update all documentation. No merge to `main` was performed.
 
@@ -88,7 +88,7 @@ See [README](../README.md) for usage and [ARCHITECTURE.md](ARCHITECTURE.md) for 
 | XT8 Node | `10.100.1.11` | `fc:34:97:4f:ac:60` | Adopted as U6 IW; Port 1 at 2500 Mbps and Port 4 at 1000 Mbps independently verified. |
 | USW Flex 2.5G 5 | `10.100.1.18` | `8c:ed:e1:12:7a:fc` | Official API reports online at the 22:09 sample. |
 
-Operator-reported cabling: Main to gateway Port 1, Node to Port 3, Flex switch to Port 4. Node's Port 4 downstream device is reported as HomeBase. These parent-port/client identities are not proven by carrier/speed alone. Official API AP details return `uplink: null`; inspect controller topology rendering and live LLDP/payload evidence before declaring gateway linking fixed.
+Operator-reported cabling: Main to gateway Port 1, Node to Port 3, Flex switch to Port 4. Node's Port 4 downstream device is reported as HomeBase. These parent-port/client identities are not proven by carrier/speed alone. Earlier API AP details returned `uplink: null`. Section 5 records the wire-schema correction and final browser verification of both parent links.
 
 ### Backlog acceptance criteria
 
@@ -159,3 +159,32 @@ Three bounded Node candidates isolated uplink schema, shared-interface identity,
 **Verification:** Added raw-wire serialization and shared-MAC regression tests; Go race tests, vet, and cluster tests passed. Release version bumped to `1.2.3` so the version checker can detect this patch. Final rollout evidence will supersede the older deployment/provenance and Ready for Review claims above.
 
 **Reference:** Official controller package inspected read-only: https://dl.ui.com/unifi/10.6.109/unifi_sysvinit_all.deb. Downloaded tools and extracted implementation remain in the OS temporary directory, outside Git. No controller configuration/database edits were made.
+
+
+### Final published v1.2.3 rollout and UI closure
+
+- Source committed and pushed on `dev` as `b6188805e1b2e96fe94ab4b22b9c992c13978b1f`.
+- Hosted tests, both ARM builds, and release publication passed: https://github.com/agnithin/unifi-ap-bridge/actions/runs/40169087543
+- Main verified the published ARMv7 archive against its SHA-256 manifest and checked its embedded version/commit before installation.
+- Main's normal `update.sh apply dev` installed v1.2.3 and propagated it to Node, replacing all temporary candidate binaries. Main rollback archive: `/tmp/unifi-ui-before-v123/addon.tar.gz`; Node's pre-candidate backup remains at the path above. Both are private, RAM-backed backups.
+
+| Final observation | Main (`10.100.1.10`) | Node (`10.100.1.11`) |
+|---|---|---|
+| Runtime version / commit | `1.2.3` / full `b618880…` | Same |
+| Daemon PID | `5022` | `14151` |
+| Adoption / heartbeat | Adopted, repeated GCM `noop` success | Adopted, repeated GCM `noop` success |
+| Last sampled successful inform | `2026-10-24 23:28:04` | `2026-10-24 23:27:57` |
+| Sampled station count | 29 | 31 |
+| Controller device state | Online (`state: 1`) | Online (`state: 1`) |
+| Controller record age at final query | 6.4 seconds | 2.4 seconds |
+| Normalized uplink parent | Cloud Gateway Max, remote Port 1 | Cloud Gateway Max, remote Port 3 |
+| Uplink link state / speed | Up, 2500 Mbps | Up, 2500 Mbps |
+| Port Manager Port 4 | Down | Up, 1000 Mbps, HomeBase connected |
+
+The actual Chrome UniFi devices page showed both APs online at 2.5 GbE with their correct parent-port buttons. Port Manager showed active blue uplink markers on both APs and an active green Node Port 4 row labeled `Bridge-EufyHomeBase3`, speed `GbE`, MAC `10:2c:b1:73:3d:00`. These browser observations close both screenshot-reported issues; they are stronger evidence than the previous gateway-downlink/client-assignment-only checks.
+
+The U6IW profile supplies UniFi's model labels such as `PoE Out + Data` and `Data`. Those labels describe the emulated profile, not PoE hardware on the Asus router. Disconnected ports appropriately retain grey markers and `Auto` speed. The station count changed between samples; no fixed client-count or zero-packet-loss guarantee is implied.
+
+Local verification: Go race tests, Go vet, cluster regression tests, and wire serialization/shared-MAC/capability regressions passed. The final working-tree source matches the published code commit; documentation commits after it do not require another binary deployment.
+
+Remaining work: rotate the previously exposed controller credential, complete controlled failure/recovery and broader code/security reviews, and review watchdog logging/write paths. Merge to `main` still requires explicit approval.

@@ -2,7 +2,7 @@
 
 `unifi-ap-bridge` is a standalone, dependency-free daemon and WebUI extension engineered for Asuswrt-Merlin and Broadcom-based routers. It translates raw Linux and Broadcom wireless and switch telemetry into the Ubiquiti UniFi Inform protocol (`:8080/inform`).
 
-**Release baseline:** v1.2.3 fixes the raw AP inform schema and Port Manager capability advertisement. Node canary verified in the browser; see the audit ledger for final deployed build provenance. See [current audit and release status](AUDIT_STATE.md) for dated observations and remaining work.
+**Deployed baseline:** v1.2.3 on `dev`, code commit `b618880`, verified on both APs and in the UniFi browser UI on 2026-10-24 around 23:28–23:30 PDT. This fixes the raw AP inform schema and Port Manager capability advertisement. See [current audit and release status](AUDIT_STATE.md) for dated observations and remaining work.
 
 ---
 
@@ -83,7 +83,7 @@ graph TD
   * Raw AP informs must send `uplink` as the interface name string (`"eth0"`) and provide live `if_table` rows. UniFi derives the normalized REST uplink object from these and LLDP. Sending the REST-shaped uplink object in an inform fails to populate the parent/speed fields.
   * XT8 interfaces share one hardware MAC. The wire interface builder groups that MAC under the management interface with `num_port: 4`, keeping per-port counters and clients in `port_table`.
   * U6IW informs advertise `fw_caps: 16` (switch-port capability). Network 10.6.109 only merges AP `port_stats` into the UI's `port_table` when that bit is set. Without it, live stats and learned clients can exist while ports still render grey. `sw_port_table` or REST-shaped `ethernet_table` alone does not fix this.
-  * Node canary verification established the displayed gateway parent (Port 3), 2.5 GbE uplink, and HomeBase on active GbE Port 4.
+  * Final published-build browser verification established Main on gateway Port 1, Node on Port 3, both 2.5 GbE uplinks active, and HomeBase on Node Port 4 at GbE.
 
 ---
 
