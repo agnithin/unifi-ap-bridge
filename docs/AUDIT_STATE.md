@@ -1,8 +1,10 @@
 # Audit State & Current Operations
 
-**Last live verification:** 2026-10-25, approximately 01:50–01:55 PDT. Section 7 is the current code audit and prioritized backlog; earlier sections retain dated rollout evidence.
+> **Current delivery status — 2026-10-25:** v1.2.5 fixes are committed to dev (implementation `6254fc5`, test-fixture correction `be106ec`) and passed [hosted tests and ARM builds](https://github.com/agnithin/unifi-ap-bridge/actions/runs/40210104250). Both APs were last verified on v1.2.4 dev (`f77fafb`) around 01:45–01:55 PDT. No v1.2.5 rollout or fresh AP check is implied. Credential rotation/revocation completed separately at 16:07 UTC. Stable publication, startup-asset migration and live acceptance remain pending. Latest stable tag was last checked as v1.2.1; merging main does not publish a release.
 
-**Status:** Both APs remain healthy on v1.2.4 dev. Prior browser fixes remain recorded in Sections 5–6. The new review found update integrity, configuration preservation, disabled-state propagation, and tri-band radio reporting gaps; see Section 7. Controller credential rotation is complete (Section 8); controlled outage testing remains open.
+**Last live verification:** 2026-10-25, approximately 01:50–01:55 PDT. Section 7 preserves the original code audit; Section 8 records current fixes and pending acceptance. Earlier sections retain dated rollout evidence.
+
+**Status:** Both APs remain healthy on v1.2.4 dev. Prior browser fixes remain recorded in Sections 5–6. The review found update integrity, configuration preservation, disabled-state and tri-radio gaps (Section 7); tested dev fixes and remaining acceptance are recorded in Section 8. Controller credential rotation is complete (Section 8); controlled outage testing remains open.
 
 **Release track:** `dev`, daemon `1.2.4`, deployed code commit `f77fafbc08688faca4b0fd9a286b73790d5a25da` on both APs. Promotion of all current changes to `main` was approved by the operator on 2026-10-25. Section 5 supersedes earlier v1.2.2 UI-closure/provenance claims.
 
@@ -75,9 +77,9 @@ See [README](../README.md) for usage and [ARCHITECTURE.md](ARCHITECTURE.md) for 
 | A3 — Version / provenance | Runtime verified; release packaging open | Both APs run `1.2.4` / `f77fafb…` on dev. Main was promoted to `c8ebaa4…`; stable release remains v1.2.1. See B1–B2. |
 | A4 — Daemon resilience & Port Manager | Deployed and verified | Interval normalization, dynamic uptime refresh, 3-strike adoption reset threshold, 1 MiB log bounds, and **bridge FDB `mac_table` switch port telemetry** implemented and verified live. |
 | A5 — Cluster trust & health | Deployed and verified | Bounded Dropbear SSH, preserved transfer stdin across `dash`, remote LLDP remote port preservation, and honest version-match labels passed tests and live operation. |
-| A6 — Flash and RAM writes | Partly resolved | Runtime telemetry and daemon logs use `/tmp`; daemon log cap is 1 MiB. State saves use atomic rename. Watchdog log bounds and recovery behavior remain open (B7). |
-| A7 — Feature backlog | Deferred; not a v1.2.2 blocker | Dynamic WLAN mapping, guest tagging, and roam events remain future features. Current association telemetry does not claim roam-event generation. |
-| A8 — Merge gate | Completed | Operator approved promotion; main and dev were pushed to `c8ebaa4…`. This did not publish a stable tag or change AP tracks. Newly found gaps remain open in Section 7. |
+| A6 — Flash and RAM writes | Partly resolved | Runtime telemetry and daemon logs use `/tmp`; daemon log cap is 1 MiB. State saves use atomic rename. v1.2.5 source also caps watchdog logs; rollout, stale-process recovery and backoff remain open (B7). |
+| A7 — Feature backlog | Deferred; not a v1.2.2 blocker | Dynamic WLAN mapping and effective guest/VLAN reporting remain future features. Roaming already appears in UniFi; richer event detail is optional, with no duplicate producer planned. |
+| A8 — Merge gate | Completed | Operator approved promotion; main and dev were pushed to `c8ebaa4…`. This did not publish a stable tag or change AP tracks. Subsequent source fixes remain on dev; see Section 8 for remaining gaps. |
 
 ### Topology and hardware baseline
 
@@ -94,7 +96,7 @@ Operator-reported cabling: Main to gateway Port 1, Node to Port 3, Flex switch t
 
 - **WLAN mapping:** Resolve exact SSID-to-ObjectId mappings, handle duplicate/missing matches, cache valid results through outages, and keep credentials out of WebUI status.
 - **Guest tagging:** Derive classification from actual VAP isolation configuration, including node differences; test guest and normal SSIDs separately.
-- **Roaming:** Establish a reliable event source and controller-compatible representation; verify a real cross-AP roam, timestamps, deduplication, and reconnect-versus-roam distinctions.
+- **Roaming:** Existing UniFi visibility is reported working. Only pursue richer timing/reasons or brief-transition detail if a concrete gap is demonstrated; do not build a duplicate event producer by default.
 
 ## 3. Decisions and Historical Evidence
 
@@ -269,7 +271,7 @@ The current bridge supplies useful monitoring: adoption/online state, station as
 |---|---|---|
 | WiFi settings and AP radio settings | UniFi SSID/password/broadcasting-AP, channel/width/power, security, schedules and roaming options are not applied to Asus. | Keep Asus as the configuration authority initially; consider a small opt-in control subset after B1–B5. Do not present ignored settings as applied. |
 | Guest/VLAN/policy management | is_guest=false throughout; no actual VLAN classification or controller policy enforcement. Existing VLAN/isolation configuration is not audited here. | Read effective per-VAP bridge/VLAN/isolation metadata first. Guest tagging is reporting, not enforcement. Controller guest portals, PPSK, speed limits and policies need separate firmware/data-path implementation and validation. |
-| Client history and roaming | Current snapshots lack explicit connect/disconnect/roam reasons, authentication/DHCP failure events, and cross-AP correlation. | Build event-backed association history and deduplicated cross-AP roam inference with confidence/timestamps; prove one real roam. Polling every 10 seconds cannot establish every brief roam or authentication failure. |
+| Client history and roaming | Roaming is already visible in UniFi. Bridge snapshots lack explicit event reasons, authentication/DHCP failure detail and sub-sampling transitions. | Operator reports roaming already visible in UniFi through AP snapshots. No duplicate event producer is planned. Optional richer timing/reasons or brief-transition history requires a demonstrated gap; see Section 8. |
 | AirView / Environment / diagnostics | Channel airtime exists; neighbor surveys, interference breakdown, detailed retries, scan workflow and capture integration do not. | Start with accurate per-radio passive statistics and last-seen neighbor data; on-demand scans/captures require supported firmware commands and disruption testing. A full proprietary AirView/Channel AI implementation is not established. |
 | Device/client actions and port profiles | Locate/reboot/reconnect/radio changes and VLAN/port configuration from UniFi are not implemented. Port Manager currently reports links/attachments. | Optional typed command handlers one at a time, with read-back, permission boundaries and controlled tests; leave unsupported controls documented. |
 | Lifecycle and recovery | Bridge-specific GitHub update path, heuristic cluster status and manual rollback; no native UniFi firmware lifecycle parity. | Immutable release bundles, per-node outcome/commit reporting, configuration verification and tested rollback yield more value than cosmetic capability flags. |
@@ -284,12 +286,12 @@ Vendor references checked during this audit: [UniFi SSID and AP settings](https:
 3. **Highest-value new features:** automatic/cached SSID-to-legacy-WLAN mapping (handle duplicate names and UUID/ObjectId differences; no new API token in WebUI), effective guest/VLAN reporting, and bounded client association/roam history. Prefer existing provision data or an approved off-AP broker/discovery job over broad controller credentials on each AP.
 4. **Optional control:** decide whether this two-AP homelab benefits enough from UniFi configuration ownership to justify it. If so, start with a small opt-in command subset and read-back; SSID/security/VLAN provisioning and controller-driven RF optimization are a substantially larger project. Keep unsupported proprietary diagnostics and physical limitations explicit.
 
-This audit changes documentation only. Findings and feature proposals are not implemented or deployed by this audit.
+Section 7 records the original documentation-only audit before fixes. Section 8 records subsequent implementation and is the current disposition of those findings.
 
 
 ## 8. Approved Backlog and Fix Batch — 2026-10-25
 
-This section supersedes the original feature recommendations where the operator narrowed scope. See the README backlog for the concise work list. B1–B11 retain their original audit evidence above; partial implementation does not close the remaining acceptance criteria.
+This section supersedes the original feature recommendations where the operator narrowed scope. See the [README backlog](../README.md#prioritized-backlog-and-operator-decisions) for the concise work list. B1–B11 retain their original audit evidence above; partial implementation does not close the remaining acceptance criteria.
 
 ### Operator decisions
 
@@ -299,9 +301,9 @@ This section supersedes the original feature recommendations where the operator 
 - **AirView correction:** AirView is also a diagnostics UI, not one universally available scanner. Passive channel/client statistics can use existing radio counters. Continuous dedicated-radio scans/spectrum functions are hardware-dependent; active scans on a serving radio can disrupt clients. Keep scanner/capture integration and proprietary optimization parity deferred; collect accurate passive data only.
 - Dynamic WLAN mapping, effective guest/VLAN reporting, passive diagnostics and community packaging remain future features. Guest tagging must not be confused with isolation enforcement. Broad controller credentials should not be added to AP/WebUI status.
 
-### Current implementation batch (local source; not deployed)
+### Current implementation batch (validated dev source; not deployed)
 
-| Item | Implemented / verified locally | Still pending |
+| Item | Implemented / tested in dev; hosted CI passed | Still pending |
 |---|---|---|
 | B1–B2 addon integrity | Binary required; SHA-256 manifest enforced; archive contents restricted; staged binary/source version match required; failed script/UI copy or startup is an error; successful launcher without fresh matching PID/version/commit and Active heartbeat is not success. Local outcome is labeled separately from asynchronous cluster rollout. | Pin scripts and binary to one immutable source commit/full release bundle; transaction locking, automatic rollback and verified final outcomes on every node. Main/stable publication remains held; no claim of complete update transaction safety. |
 | B3 configuration | Dependency-free Go settings helper validates submitted fields and merges into existing JSON. Preserves WLAN mapping, explicit nodes, topology and unknown fields. Private unique temp file, fsync/atomic rename, no write for semantically unchanged config, and removal of hardcoded homelab WLAN defaults from generic install/apply paths. | Validate UI path on the new binary and serialize concurrent settings/config sync operations. Old binaries reject the helper flag instead of rewriting configuration. |
@@ -322,7 +324,7 @@ Added a narrow literal X-API-Key header guard and regressions, including escaped
 
 ### Verification and deployment boundary
 
-This batch is being tested on local source, with synthetic update/startup failure fixtures and no real reboot, scan, radio reconfiguration or firmware flash. The runtime baseline remains v1.2.4 dev on both APs until an explicitly verified addon rollout is recorded. The new source version is v1.2.5 for update detection; changing version.txt alone is not proof of deployment. Full test/build results and credential-rotation completion are recorded below when available.
+This batch passed local and hosted validation, including synthetic update/startup failure fixtures and no real reboot, scan, radio reconfiguration or firmware flash. The runtime baseline remains v1.2.4 dev on both APs until an explicitly verified addon rollout is recorded. The new source version is v1.2.5 for update detection; changing version.txt alone is not proof of deployment. Completed test/build results and credential remediation are recorded below.
 
 #### Local batch validation
 

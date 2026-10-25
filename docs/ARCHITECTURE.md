@@ -1,8 +1,10 @@
 # Architecture & Technical Reference
 
+> **Current delivery status — 2026-10-25:** v1.2.5 fixes are committed to dev (implementation `6254fc5`, test-fixture correction `be106ec`) and passed [hosted tests and ARM builds](https://github.com/agnithin/unifi-ap-bridge/actions/runs/40210104250). Both APs were last verified on v1.2.4 dev (`f77fafb`) around 01:45–01:55 PDT. No v1.2.5 rollout or fresh AP check is implied. Credential rotation/revocation completed separately at 16:07 UTC. Stable publication, startup-asset migration and live acceptance remain pending. Latest stable tag was last checked as v1.2.1; merging main does not publish a release.
+
 `unifi-ap-bridge` is a standalone, dependency-free daemon and WebUI extension engineered for Asuswrt-Merlin and Broadcom-based routers. It translates raw Linux and Broadcom wireless and switch telemetry into the Ubiquiti UniFi Inform protocol (`:8080/inform`).
 
-**Deployed baseline:** v1.2.3 on `dev`, code commit `b618880`, verified on both APs and in the UniFi browser UI on 2026-10-24 around 23:28–23:30 PDT. This fixes the raw AP inform schema and Port Manager capability advertisement. See [current audit and release status](AUDIT_STATE.md) for dated observations and remaining work.
+This reference describes v1.2.5 source unless explicitly dated as deployed. See [current audit and release status](AUDIT_STATE.md) for evidence and remaining acceptance work.
 
 ---
 
@@ -21,7 +23,7 @@ graph TD
         
         DAEMON --> PKG_INFORM["pkg/inform<br/>(TNBU Framing, AES-CBC/GCM, Zlib)"]
         
-        WEBUI["Asuswrt WebUI<br/>(/www/user/user3.asp)"] <-->|Dynamic Polling| RAMDISK["/tmp/var/wwwext/<br/>(status.js, cluster.js)"]
+        WEBUI["Asuswrt WebUI<br/>(/userN.asp)"] <-->|Dynamic Polling| RAMDISK["/tmp/var/wwwext/<br/>(status.js, cluster.js)"]
         DAEMON --> RAMDISK
     end
 
@@ -37,8 +39,8 @@ graph TD
 
 ### 2.1 Broadcom Wireless Telemetry (`providers/broadcom/asus.go`)
 * **Radio & Band Enumeration:**
-  * Discovers active interfaces from NVRAM (`wl_ifnames`, `lan_ifnames`).
-  * Maps physical Broadcom radios (`eth4`, `eth5`, `eth6`) into normalized UniFi bands: `wifi-ng` (2.4 GHz) and `wifi-na` (5 GHz High/Low).
+  * Discovers active interfaces from NVRAM (`wl_ifnames`) and configured virtual interfaces (`wlN_vifnames`), skipping explicitly disabled BSS interfaces.
+  * Maps physical Broadcom radios (`eth4`, `eth5`, `eth6`) into normalized UniFi bands: `wifi-ng` (2.4 GHz) and `wifi-na` and `wifi-na-1` (distinct 5 GHz radios). VAPs and counts retain their physical parent; third-radio controller acceptance under U6IW remains pending.
   * Evaluates channel spectrum configuration using Broadcom chanspec encoding (`wl chanspec`).
 * **RF Airtime & Channel Utilization:**
   * Queries `wl chanim_stats` periodically.
@@ -50,7 +52,7 @@ graph TD
     * Bitrates (`tx_rate`, `rx_rate`).
     * Unicast traffic counters (`tx_bytes`, `rx_bytes`, `tx_packets`, `rx_packets`).
     * Transmission retries and association duration.
-  * Computes dynamic `satisfaction` (0–100%) score based on SNR thresholds and retry rate penalties.
+  * Computes dynamic `satisfaction` (0–100%) score using a signal/cumulative-retry heuristic. Missing signal omits the score; unknown noise is not fabricated. Interval-based retry scoring remains pending.
 
 ### 2.2 Physical Switch Port Telemetry
 * **Hardware Port Mapping (Broadcom BCM4908 / BCM53134):**
@@ -65,8 +67,8 @@ graph TD
   * Wire counters parsed from `/proc/net/dev`.
 * **UniFi Port Manager Emulation (`U6-IW`) & Switch Forwarding Table (`mac_table`):**
   * Emulates UniFi 6 In-Wall, enabling multi-port switch capabilities in the UniFi controller.
-  * Emits raw `port_table` telemetry with `op_mode: "switch"`, `forward: "all"`, `autoneg: true`, `enabled: true`, and spanning tree states (`stp_state: "forwarding"` when active, `"disabled"` when link down).
-  * **Bridge FDB Inspection:** Inspects Linux bridge ports (`/sys/class/net/br0/brif/<iface>/port_no`) and queries `brctl showmacs br0` mapped against `/proc/net/arp`. External wired clients learned on LAN interfaces (`eth1` &rarr; Port 2, `eth2` &rarr; Port 3, `eth3` &rarr; Port 4) are populated into that port's `mac_table` and `last_connection`.
+  * Emits raw `port_table` telemetry with `op_mode: "switch"`, `forward: "all"`, `autoneg: true`, `enabled: true`, and actual spanning-tree state/cost read from bridge sysfs when available; unknown values are omitted.
+  * **Bridge FDB Inspection:** Inspects Linux bridge ports (`/sys/class/net/br0/brif/<iface>/port_no`) and queries `brctl showmacs br0` mapped against `/proc/net/arp`. External wired clients learned on LAN interfaces (`eth1` &rarr; Port 2, `eth2` &rarr; Port 3, `eth3` &rarr; Port 4) populate that port's `mac_table`; `last_connection` is set only for an unambiguous single client. FDB age is last-seen age, not connection uptime; unknown VLAN is omitted.
   * Allows UniFi Port Manager to associate downstream wired devices (such as smart home hubs or Ethernet clients) directly to their physical AP switch ports rather than dumping them onto the upstream gateway.
 
 ### 2.3 LLDP Neighbor Discovery & Topology Resolution
@@ -122,16 +124,13 @@ All communication with `:8080/inform` utilizes the UniFi binary wire packet form
 ## 4. WebUI Architecture & Lifecycle
 
 ### 4.1 Dynamic User Slot Allocation
-Asuswrt-Merlin exposes customizable navigation slots via `/www/user/user1.asp` through `user20.asp`. To avoid collisions with existing addons:
-* At install time, the bridge scans `/www/user/` for the first available slot.
-* Registers the slot title in `/www/user/<slot>.title` ("UniFi Bridge").
-* Injects navigation links into `Advanced_Wireless_Content.asp` top tabs.
+The installer scans `/tmp/var/wwwext/user1.asp` through `user20.asp` and their title/addon markers, records the slot in `.user_slot`, and serves it as `/userN.asp`. Startup binds `/tmp/menuTree.js` over `/www/require/modules/menuTree.js` to register navigation. Status assets are served under `/ext/unifi-bridge/`.
 
-### 4.2 Zero-Reload Form Architecture
-Standard Asuswrt forms submit to `/start_apply.htm` in a hidden iframe, which triggers `top_delay_redirect()` or `parent.refreshpage()`, causing the browser to reload the entire page and lose form state.
+### 4.2 Background updates and form isolation
+Update check/install actions use bounded background XHR with request matching. Settings and sync still use the native hidden iframe; bounded background transport for those forms remains pending. Standard Asuswrt forms submit to `/start_apply.htm` in a hidden iframe, which triggers `top_delay_redirect()` or `parent.refreshpage()`, causing the browser to reload the entire page and lose form state.
 * **Neutralization:** On load and before submission, `window.refreshpage = function() {}` neutralizes reload handlers.
 * **Target Isolation:** `document.form.current_page.value = ""` and `document.form.next_page.value = ""` instruct `start_apply.htm` to terminate silently in the iframe.
-* **Dynamic Background Polling:** The WebUI injects cache-busted `<script>` tags referencing `/tmp/var/wwwext/unifi-bridge/status.js` and `cluster.js` every 15 seconds (optional) or upon manual action.
+* **Dynamic Background Polling:** The WebUI injects cache-busted `<script>` tags referencing `/ext/unifi-bridge/status.js` and `cluster.js` every 15 seconds (optional) or upon manual action.
 * **Targeted DOM Patching:** Only text counters and table rows are rewritten; form inputs (`<input>`, `<select>`) are populated strictly once via `initFormOnce()` and never clobbered.
 
 ---
@@ -165,9 +164,9 @@ A version match is labeled `Version Match (Config Unverified)`. It does not prov
 | `uptime` | Latest sampled system uptime |
 | `version`, `commit`, `build_date` | Embedded daemon build metadata |
 
-Status is written atomically under `/tmp/var/wwwext/unifi-bridge`. The WebUI prefers the successful-inform timestamp and displays inform errors without treating attempts as successes. Regular-file daemon log output is bounded to 1 MiB by truncating when the next write would exceed the limit; there is no persistent rotated archive. Terminal/pipe output is unchanged. Watchdog log bounds and broader write-path review remain open.
+Status is written atomically under `/tmp/var/wwwext/unifi-bridge`. The WebUI prefers the successful-inform timestamp and displays inform errors without treating attempts as successes. Regular-file daemon log output is bounded to 1 MiB by truncating when the next write would exceed the limit; there is no persistent rotated archive. Terminal/pipe output is unchanged. v1.2.5 also caps the RAM watchdog log; stale-process recovery, restart backoff and broader write-path review remain open.
 
-CI tests the Go packages, cluster SSH/freshness behavior, and shell syntax before compiling the full `./cmd/unifi-bridge` package for ARMv7 and ARM64. Linker flags embed version, source commit, and UTC build date. Release assets include a SHA-256 manifest; successful download alone is not checksum verification. The existing updater does not automatically enforce that manifest.
+CI tests the Go packages, cluster SSH/freshness behavior, and shell syntax before compiling the full `./cmd/unifi-bridge` package for ARMv7 and ARM64. Linker flags embed version, source commit, and UTC build date. Release assets include a SHA-256 manifest; successful download alone is not checksum verification. The deployed v1.2.4 updater does not enforce it. v1.2.5 requires checksums, validates archive members/staged versions and requires fresh matching PID/version/commit plus Active heartbeat before local success. CI also covers updater failure paths, startup, WebUI behavior and the narrow literal API-header guard.
 
 ## 7. Controller Verification Interface
 
@@ -180,7 +179,7 @@ For API-key diagnostics, use `/proxy/network/integration/v1` and the controller'
 * **Asuswrt CGI Integration:** Because Asuswrt-Merlin's `apply.cgi` drops non-NVRAM form inputs, the WebUI passes target track identifiers via `action_script` (`start_unifi_bridge_check_update_${branch}_${request_id}`) and NVRAM `amng_custom`. `scripts/apply_config.sh` parses `$2` and `amng_custom` to dispatch the selected operation. Checking a track does not persist a track change; installation persists the selected track.
 * **Topology Preservation:** Configuration updates preserve dynamic `uplink_mac` and `uplink_remote_port` values.
 
-Keep credentials out of repository files, command output, and WebUI status. The earlier exposed key was revoked on 2026-10-25; its replacement was installed privately and verified (old HTTP 401, replacement HTTP 200). Read-only device details/statistics establish online state, recent heartbeats, and port links; the prior `uplink: null` values were traced to the malformed raw AP interface/uplink schema. Verify the normalized parent/speed fields and actual UI after applying v1.2.3.
+Keep credentials out of repository files, command output, and WebUI status. The earlier exposed key was revoked on 2026-10-25; its replacement was installed privately and verified (old HTTP 401, replacement HTTP 200). Read-only device details/statistics establish online state, recent heartbeats, and port links; the prior `uplink: null` values were traced to the malformed raw AP interface/uplink schema. Normalized parent/speed fields and actual UI were verified after v1.2.3 and retained in the v1.2.4 baseline. v1.2.5 radio/UI and migration acceptance remains pending.
 
 ### Update requests (v1.2.4)
 
@@ -191,3 +190,9 @@ Update checks and installs POST to the normal Asuswrt dispatcher through XHR. Th
 The existing daemon binary also provides `-apply-settings -config <path> -settings-format json|custom -gateway <IP>`. This helper performs typed JSON merging without adding jq/Python dependencies to Asus firmware, retains fields not owned by the settings form, and writes private files atomically. The installer distributes the tracked startup script; startup and daemon configuration both honor enabled=false. Updating old installs must distribute the matching binary and startup/script set together; an older binary rejects the new settings flag.
 
 Radio names now identify physical radios even when two share 5 GHz, and each VAP retains its actual parent. Chanspec width/control-sideband parsing and per-parent client counts replace band-wide aggregation. Controller acceptance of a third radio under U6IW still needs live validation. CPU uses /proc/stat deltas; a first/missing sample is omitted. Unknown noise is not replaced with a constant floor. These are source changes pending rollout, not a claim of native UniFi provisioning, firmware control or dedicated-scanner support. See the approved backlog for remaining gaps and operator deferrals.
+
+### Lifecycle and release boundaries
+
+`-is-enabled -config <path>` exits 0 for enabled and 3 for disabled before hardware/adoption access. Disabled status retains version, branch and model, including with older startup callers. Semantic settings no-ops avoid flash writes; concurrent settings/sync serialization remains pending.
+
+The first v1.2.4 upgrade requires reviewed matching scripts, checksum-verified binary and explicit tracked-startup installation. Immutable all-assets bundles, transaction locking, automatic rollback and verified final per-node outcomes remain pending. No live v1.2.5 rollout, reboot or disable/re-enable test has been performed. Reboot command support is queued; UniFi-triggered updates, router firmware and broad provisioning remain deferred.
