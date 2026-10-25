@@ -29,6 +29,10 @@ jobs:
           go test ./...
           python3 scripts/test_sync_nodes.py
           python3 scripts/test_update_backend.py
+          python3 scripts/test_update_apply.py
+          python3 scripts/test_startup.py
+          python3 scripts/test_secret_guard.py
+          python3 scripts/check_secrets.py
           node scripts/test_update_ui.js
           for script in scripts/*.sh; do sh -n "$script"; done
 

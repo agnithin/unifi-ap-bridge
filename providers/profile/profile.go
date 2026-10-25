@@ -207,7 +207,7 @@ func (p *ProfileProvider) GetLLDPTable() ([]telemetry.LLDPEntry, error) {
 
 func (p *ProfileProvider) GetSystemStats() (*telemetry.SystemStats, *telemetry.SysStats, error) {
 	return &telemetry.SystemStats{
-		CPU:    15.5,
+		CPU:    func() *float64 { v := 15.5; return &v }(),
 		Mem:    48.2,
 		Uptime: 3600,
 	}, &telemetry.SysStats{

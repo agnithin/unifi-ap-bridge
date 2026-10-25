@@ -205,3 +205,70 @@ func TestParseBrctlShowmacs(t *testing.T) {
 		t.Errorf("expected 0 macs on uplink port 1, got %d", len(macsByPort[1]))
 	}
 }
+
+func TestTriBandParentIdentityAndWidth(t *testing.T) {
+	runner := func(ctx context.Context, name string, args ...string) (string, error) {
+		full := name + " " + strings.Join(args, " ")
+		switch full {
+		case "nvram get wl_ifnames":
+			return "eth4 eth5 eth6", nil
+		case "wl -i eth4 chanspec":
+			return "6", nil
+		case "wl -i eth5 chanspec", "wl -i wl1.1 chanspec":
+			return "36l", nil
+		case "wl -i eth6 chanspec", "wl -i wl2.1 chanspec":
+			return "161/80", nil
+		case "nvram get wl1_vifnames":
+			return "wl1.1", nil
+		case "nvram get wl2_vifnames":
+			return "wl2.1", nil
+		case "wl -i eth5 txchain":
+			return "0x3", nil
+		case "wl -i eth6 txchain":
+			return "15 (0xf)", nil
+		case "wl -i wl1.1 ssid", "wl -i wl2.1 ssid":
+			return `Current SSID: "test"`, nil
+		case "wl -i wl1.1 bssid":
+			return "02:00:00:00:01:01", nil
+		case "wl -i wl2.1 bssid":
+			return "02:00:00:00:02:01", nil
+		case "wl -i wl1.1 assoclist", "wl -i wl2.1 assoclist":
+			return "assoclist 02:00:00:00:00:11", nil
+		}
+		return "", nil
+	}
+	p := NewAsusProvider(runner)
+	radios, e := p.GetRadios()
+	if e != nil {
+		t.Fatal(e)
+	}
+	if len(radios) != 3 || radios[1].HT != "40" || radios[2].HT != "80" || radios[1].Nss != 2 || radios[2].Nss != 4 {
+		t.Fatalf("bad radio inventory: %+v", radios)
+	}
+	vaps, e := p.GetVAPs(nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if len(vaps) != 2 || vaps[0].RadioName != radios[1].Name || vaps[1].RadioName != radios[2].Name || vaps[0].RadioName == vaps[1].RadioName {
+		t.Fatalf("parent identity lost: %+v", vaps)
+	}
+	stats, e := p.GetRadioStats()
+	if e != nil {
+		t.Fatal(e)
+	}
+	if len(stats) != 3 || stats[1].Name != radios[1].Name || stats[2].Name != radios[2].Name {
+		t.Fatalf("stats identity lost: %+v", stats)
+	}
+}
+
+func TestFDBAgeIsLastSeenAndMultipleClientsAreUnambiguous(t *testing.T) {
+	raw := "3 02:00:00:00:00:11 no 5.0\n3 02:00:00:00:00:12 no 7.0"
+	macs, last := parseBrctlShowmacs(raw, map[int]string{3: "eth3"}, nil)
+	if len(macs[4]) != 2 || last[4] != nil {
+		t.Fatal("multiple clients presented as one last connection")
+	}
+	_, last = parseBrctlShowmacs("3 02:00:00:00:00:11 no 5.0", map[int]string{3: "eth3"}, nil)
+	if last[4].ConnectedAt != 0 {
+		t.Fatal("FDB age treated as connection duration")
+	}
+}

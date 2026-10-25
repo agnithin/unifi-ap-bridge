@@ -65,3 +65,32 @@ timeouts[0]();assert.equal(reloads,1);
 assert.equal(context.displayVersion('v1.2.3'),'v1.2.3');
 assert.equal(context.displayVersion('1.2.3'),'v1.2.3');
 console.log('Update UI regressions passed: background POST, track/version labels, stale responses, timeout, errors, install-only reload.');
+
+assert.equal(context.clusterState({status:'RUNNING',sync_status:'Local'}),'local');
+assert.equal(context.clusterState({status:'RUNNING',sync_status:'Version Match (Config Unverified)'}),'unverified');
+assert.equal(context.clusterState({status:'RUNNING',sync_status:'Config Synced'}),'unverified');
+assert.equal(context.clusterState({status:'STOPPED',sync_status:'Stale or Stopped'}),'error');
+assert.equal(context.escapeHTML('<img onerror="x">'), '&lt;img onerror=&quot;x&quot;&gt;');
+clock=1000000;
+assert.equal(context.statusIsFresh({status_updated_at:990,interval_sec:10}),true);
+assert.equal(context.statusIsFresh({status_updated_at:900,interval_sec:10}),false);
+assert.equal(context.statusIsFresh({running:true}),false);
+console.log('Health UI regressions passed: stale status, unverified cluster state, escaped text.');
+
+// Applying unrelated settings after checking main must retain installed dev.
+for (const name of ['unifibridge_enabled','unifibridge_auto_gateway','unifibridge_controller_url','unifibridge_model','unifibridge_interval']) form[name]={value:''};
+form.submit=()=>{};
+node('unifibridge_enabled_1').checked=true;
+node('unifibridge_auto_1').checked=false;
+node('input_controller_url').value='http://controller.test:8080/inform';
+node('select_model').value='U6IW';node('select_interval').value='10';
+node('select_branch').value='main';context.currentBranch='dev';
+context.applySettings();
+assert.equal(JSON.parse(node('amng_custom').value).branch,'dev');
+console.log('Settings track regression passed: checking main does not change installed dev on save.');
+
+context.formInitialized=false;
+context.initFormOnce({enabled:false,branch:'dev',model_code:'U6IW',interval_sec:10});
+assert.equal(node('unifibridge_enabled_1').checked,false);
+assert.equal(node('unifibridge_enabled_0').checked,true);
+console.log('Disabled UI regression passed: unrelated edits do not silently re-enable the service.');

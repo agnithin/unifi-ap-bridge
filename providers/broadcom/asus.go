@@ -6,10 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/bits"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -28,7 +28,9 @@ func defaultCmdRunner(ctx context.Context, name string, args ...string) (string,
 }
 
 type AsusProvider struct {
-	runner CmdRunner
+	runner      CmdRunner
+	radioNames  map[string]string
+	previousCPU cpuSample
 }
 
 func NewAsusProvider(runner CmdRunner) *AsusProvider {
@@ -102,37 +104,43 @@ func (p *AsusProvider) getRadioInterfaces() []string {
 	if raw == "" {
 		return []string{"eth4", "eth6"}
 	}
-	all := strings.Fields(raw)
-	// On tri-band XT8 (eth4=2.4G, eth5=5G-1, eth6=5G-2), client traffic is on eth4 and eth6
-	if len(all) >= 3 && all[0] == "eth4" && all[2] == "eth6" {
-		return []string{"eth4", "eth6"}
-	}
-	return all
+	return strings.Fields(raw)
 }
 
 func (p *AsusProvider) GetRadios() ([]telemetry.Radio, error) {
 	ifaces := p.getRadioInterfaces()
 	radios := make([]telemetry.Radio, 0, len(ifaces))
+	p.radioNames = make(map[string]string)
+	bandCounts := make(map[string]int)
 
 	for _, iface := range ifaces {
 		chanspecRaw, _ := p.wlCmd(iface, "chanspec")
-		channel, _ := ParseChanspec(chanspecRaw)
+		channel, width := ParseChanspec(chanspecRaw)
 		band := BandForChannel(channel)
 		radioName := "wifi-" + band
+		if bandCounts[band] > 0 {
+			radioName += "-" + strconv.Itoa(bandCounts[band])
+		}
+		bandCounts[band]++
+		p.radioNames[iface] = radioName
 
-		ht := "20"
+		ht := strconv.Itoa(width)
 		nss := 2
 		maxTx := 22
 		minTx := 6
 		hasVHT := false
 		if band == "na" {
-			ht = "80"
 			nss = 4
 			maxTx = 26
 			minTx = 12
 			hasVHT = true
 		}
 
+		if chainRaw, e := p.wlCmd(iface, "txchain"); e == nil && len(strings.Fields(chainRaw))>0 {
+			if mask, e := strconv.ParseUint(strings.Fields(chainRaw+" ")[0], 0, 32); e == nil && mask != 0 {
+				nss = bits.OnesCount32(uint32(mask))
+			}
+		}
 		cuTotal, cuSelfRx, cuSelfTx := p.parseChanimStats(iface)
 
 		radios = append(radios, telemetry.Radio{
@@ -157,17 +165,41 @@ func (p *AsusProvider) GetRadios() ([]telemetry.Radio, error) {
 }
 
 func (p *AsusProvider) GetVAPs(wlanMapping map[string]string) ([]telemetry.VAP, error) {
-	candidates := []string{
-		"eth4", "eth5", "eth6",
-		"wl0.1", "wl0.2", "wl0.3",
-		"wl1.1", "wl1.2", "wl1.3",
-		"wl2.1", "wl2.2", "wl2.3",
+	if p.radioNames == nil {
+		if _, err := p.GetRadios(); err != nil {
+			return nil, err
+		}
+	}
+	physical := p.getRadioInterfaces()
+	candidates := append([]string(nil), physical...)
+	parent := make(map[string]string)
+	units := make(map[string]int)
+	for unit, iface := range physical {
+		parent[iface] = iface
+		units[iface] = unit
+		virtual := strings.Fields(p.nvramGet(fmt.Sprintf("wl%d_vifnames", unit)))
+		if len(virtual) == 0 {
+			for sub := 1; sub <= 3; sub++ {
+				virtual = append(virtual, fmt.Sprintf("wl%d.%d", unit, sub))
+			}
+		}
+		for _, vif := range virtual {
+			parent[vif] = iface
+			units[vif] = unit
+		}
+		candidates = append(candidates, virtual...)
 	}
 
 	vaps := make([]telemetry.VAP, 0, len(candidates))
-	vapIndex := 0
 
 	for _, iface := range candidates {
+		nvramPrefix := iface
+		if !strings.HasPrefix(iface, "wl") {
+			nvramPrefix = fmt.Sprintf("wl%d", units[iface])
+		}
+		if p.nvramGet(nvramPrefix+"_bss_enabled") == "0" {
+			continue
+		}
 		ssidRaw, err := p.wlCmd(iface, "ssid")
 		if err != nil {
 			continue
@@ -200,19 +232,16 @@ func (p *AsusProvider) GetVAPs(wlanMapping map[string]string) ([]telemetry.VAP, 
 		}
 
 		band := BandForChannel(channel)
-		radioName := "wifi-" + band
+		radioName := p.radioNames[parent[iface]]
 
-		vapName := fmt.Sprintf("ath%d", vapIndex)
+		sub := 0
+		if dot := strings.IndexByte(iface, '.'); dot >= 0 {
+			sub, _ = strconv.Atoi(iface[dot+1:])
+		}
+		vapName := fmt.Sprintf("ath%d", units[iface]*16+sub)
 
 		// Get associated clients for this VAP
 		stations := p.getStationsForIface(iface, vapName, bssid, ssid, channel, band)
-
-		// Skip unused intermediate backhaul interfaces if they have 0 clients
-		if iface == "eth5" && len(stations) == 0 {
-			continue
-		}
-
-		vapIndex++
 
 		var vapTxBytes, vapRxBytes, vapTxPackets, vapRxPackets int64
 		for _, s := range stations {
@@ -296,8 +325,6 @@ func (p *AsusProvider) getStationsForIface(iface, vapName, bssid, ssid string, c
 			rssiRaw, _ := p.wlCmd(iface, "rssi", rawMAC)
 			if rssiVal, err := strconv.Atoi(strings.TrimSpace(rssiRaw)); err == nil {
 				sta.Signal = rssiVal
-				sta.Noise = -90
-				sta.RSSI = rssiVal - (-90)
 			}
 			if band == "na" {
 				sta.RadioProto = "ac"
@@ -361,6 +388,7 @@ func (p *AsusProvider) parseChanimStats(iface string) (cuTotal int, cuSelfRx int
 }
 
 func (p *AsusProvider) GetRadioStats() ([]telemetry.RadioStat, error) {
+    if p.radioNames==nil {if _,err:=p.GetRadios();err!=nil{return nil,err}}
 	ifaces := p.getRadioInterfaces()
 	stats := make([]telemetry.RadioStat, 0, len(ifaces))
 
@@ -368,7 +396,10 @@ func (p *AsusProvider) GetRadioStats() ([]telemetry.RadioStat, error) {
 		chanspecRaw, _ := p.wlCmd(iface, "chanspec")
 		channel, _ := ParseChanspec(chanspecRaw)
 		band := BandForChannel(channel)
-		radioName := "wifi-" + band
+		radioName := p.radioNames[iface]
+		if radioName == "" {
+			radioName = "wifi-" + band
+		}
 
 		cuTotal, cuSelfRx, cuSelfTx := p.parseChanimStats(iface)
 
@@ -522,7 +553,7 @@ func (p *AsusProvider) getLLDPNeighbor() (chassisMAC string, portMAC string, rem
 	portMAC = strings.ToLower(strings.TrimSpace(ifaceData.Port.ID.Value))
 	descr := strings.ToLower(strings.TrimSpace(ifaceData.Port.Descr))
 
-	remotePort = 1
+	remotePort = 0
 	if strings.HasPrefix(descr, "eth") {
 		numStr := strings.TrimPrefix(descr, "eth")
 		if n, e := strconv.Atoi(numStr); e == nil {
@@ -666,18 +697,23 @@ func parseBrctlShowmacs(data string, bridgePortMap map[int]string, arpMap map[st
 		}
 
 		macsByPort[portIdx] = append(macsByPort[portIdx], telemetry.PortMacEntry{
-			MAC:  mac,
-			Age:  ageSec,
-			Vlan: 1,
+			MAC: mac,
+			Age: ageSec,
 		})
 
 		ip := arpMap[mac]
 		lastConnByPort[portIdx] = &telemetry.PortLastConnection{
-			Connected:   true,
-			MAC:         mac,
-			IP:          ip,
-			ConnectedAt: time.Now().Unix() - int64(ageSec),
-			LastSeen:    time.Now().Unix(),
+			Connected: true,
+			MAC:       mac,
+			IP:        ip,
+			// FDB age is last-seen age, not connection uptime.
+			ConnectedAt: 0,
+			LastSeen:    time.Now().Unix() - int64(ageSec),
+		}
+	}
+	for port, macs := range macsByPort {
+		if len(macs) != 1 {
+			delete(lastConnByPort, port)
 		}
 	}
 	return macsByPort, lastConnByPort
@@ -731,7 +767,7 @@ func (p *AsusProvider) GetPortTable() ([]telemetry.Port, []telemetry.EthernetPor
 			gwIP = "10.100.1.1"
 		}
 		gwMAC = parseArpGatewayMAC(gwIP)
-		remotePort = 1
+		remotePort = 0
 	}
 
 	// Physical port mapping for Asuswrt (XT8 / BCM4908 / BCM53134):
@@ -771,15 +807,11 @@ func (p *AsusProvider) GetPortTable() ([]telemetry.Port, []telemetry.EthernetPor
 			speed = 0
 		}
 
-		stpState := "disabled"
-		stpCost := 200000
-		if up {
-			stpState = "forwarding"
-			if speed >= 2500 {
-				stpCost = 8000
-			} else if speed >= 1000 {
-				stpCost = 20000
-			}
+		stpStates := map[string]string{"0": "disabled", "1": "listening", "2": "learning", "3": "forwarding", "4": "blocking"}
+		stpState := stpStates[readSysfsString("/sys/class/net/br0/brif/"+spec.dev+"/state")]
+		stpCost := readSysfsInt("/sys/class/net/br0/brif/" + spec.dev + "/path_cost")
+		if stpCost < 0 {
+			stpCost = 0
 		}
 
 		c := counters[spec.dev]
@@ -878,7 +910,8 @@ func (p *AsusProvider) GetSystemStats() (*telemetry.SystemStats, *telemetry.SysS
 	}
 
 	// Memory from /proc/meminfo
-	var memTotal, memFree, buffers, cached, used int64
+	var memTotal, memFree, memAvailable, buffers, cached, used int64
+	hasAvailable := false
 	if data, err := os.ReadFile("/proc/meminfo"); err == nil {
 		lines := strings.Split(string(data), "\n")
 		for _, line := range lines {
@@ -894,6 +927,9 @@ func (p *AsusProvider) GetSystemStats() (*telemetry.SystemStats, *telemetry.SysS
 				switch key {
 				case "MemTotal":
 					memTotal = val
+				case "MemAvailable":
+					memAvailable = val
+					hasAvailable = true
 				case "MemFree":
 					memFree = val
 				case "Buffers":
@@ -908,14 +944,22 @@ func (p *AsusProvider) GetSystemStats() (*telemetry.SystemStats, *telemetry.SysS
 	memPct := 0.0
 	if memTotal > 0 {
 		used = memTotal - (memFree + buffers + cached)
+		if hasAvailable {
+			used = memTotal - memAvailable
+		}
 		if used < 0 {
 			used = 0
 		}
 		memPct = math.Round((float64(used)/float64(memTotal)*100.0)*10) / 10
 	}
 
-	// CPU & load averages from /proc/loadavg
-	cpuPct := 0.0
+	// Load is a run-queue metric, not CPU utilization. Keep it separately.
+	cpuPct := -1.0
+	if raw, err := os.ReadFile("/proc/stat"); err == nil {
+		current := parseCPUSample(string(raw))
+		cpuPct = cpuBusyPercent(p.previousCPU, current)
+		p.previousCPU = current
+	}
 	var load1Str, load5Str, load15Str string
 	if data, err := os.ReadFile("/proc/loadavg"); err == nil {
 		fields := strings.Fields(string(data))
@@ -923,17 +967,7 @@ func (p *AsusProvider) GetSystemStats() (*telemetry.SystemStats, *telemetry.SysS
 			load1Str = fields[0]
 			load5Str = fields[1]
 			load15Str = fields[2]
-			if load1, err := strconv.ParseFloat(load1Str, 64); err == nil {
-				numCores := runtime.NumCPU()
-				if numCores <= 0 {
-					numCores = 4
-				}
-				pct := (load1 / float64(numCores)) * 100.0
-				if pct > 100.0 {
-					pct = 100.0
-				}
-				cpuPct = math.Round(pct*10) / 10
-			}
+
 		}
 	}
 
@@ -947,7 +981,12 @@ func (p *AsusProvider) GetSystemStats() (*telemetry.SystemStats, *telemetry.SysS
 	}
 
 	return &telemetry.SystemStats{
-		CPU:    cpuPct,
+		CPU: func() *float64 {
+			if cpuPct < 0 {
+				return nil
+			}
+			return &cpuPct
+		}(),
 		Mem:    memPct,
 		Uptime: uptime,
 	}, sysStats, nil

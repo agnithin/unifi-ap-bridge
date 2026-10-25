@@ -194,9 +194,9 @@ type SysStats struct {
 }
 
 type SystemStats struct {
-	CPU    float64 `json:"cpu"`    // CPU utilization percentage (0.0 - 100.0)
-	Mem    float64 `json:"mem"`    // Memory utilization percentage (0.0 - 100.0)
-	Uptime int64   `json:"uptime"` // System uptime in seconds
+	CPU    *float64 `json:"cpu,omitempty"` // CPU utilization percentage (0.0 - 100.0)
+	Mem    float64  `json:"mem"`           // Memory utilization percentage (0.0 - 100.0)
+	Uptime int64    `json:"uptime"`        // System uptime in seconds
 }
 
 type InformPayload struct {

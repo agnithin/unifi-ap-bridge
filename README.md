@@ -205,6 +205,12 @@ unifi-bridge start             # Start the daemon
 go test -race ./...
 go vet ./...
 python3 scripts/test_sync_nodes.py
+python3 scripts/test_update_backend.py
+python3 scripts/test_update_apply.py
+python3 scripts/test_startup.py
+python3 scripts/test_secret_guard.py
+python3 scripts/check_secrets.py
+node scripts/test_update_ui.js
 for script in scripts/*.sh; do sh -n "$script"; done
 
 # Build the command package, including health/log helpers.
@@ -230,10 +236,10 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="$BUILD_FLAGS"
 * [x] **Zero-Dependency Architecture:** Static Go binary running directly on clean Asuswrt-Merlin firmware.
 * [x] **UniFi Inform Engine:** Wire protocol implementation supporting AES-128-CBC bootstrap and AES-128-GCM adopted encryption.
 * [x] **Broadcom Wireless Telemetry:** Automatic discovery of physical and virtual VAPs across 2.4 GHz and 5 GHz bands.
-* [x] **Wi-Fi 6 (`802.11ax`) & Wi-Fi 4 (`802.11n`) Classification:** Flawless generation mapping in UniFi Controller.
+* [x] **Wi-Fi 6 (`802.11ax`) & Wi-Fi 4 (`802.11n`) Classification:** Generation mapping covered by parser tests; unknown driver formats require validation.
 * [x] **Physical Switch Port Telemetry & Bridge FDB Client Discovery (`U6-IW` Emulation) (v1.2.2):** 2.5G WAN uplink and 1G LAN ports reporting live carrier state, speed, full duplex, STP state, traffic counters, and learned client MAC tables (`mac_table`) directly into the UniFi Port Manager.
 * [x] **LLDP Topology Telemetry & Conflict Prevention (v1.2.2):** Discovers upstream neighbors via `lldpcli`, preserving distinct remote ports (Port 1 for Main, Port 3 for Node) and aligning with gateway `downlink_table` entries.
-* [x] **Router CPU/Memory Stats & WiFi Experience Scoring (v1.2.0):** Live `/proc/loadavg` and `/proc/meminfo` metrics; dynamic 0–100% satisfaction scores based on RSSI, SNR, and packet retry penalties.
+* [x] **Router CPU/Memory Stats & WiFi Experience Scoring (v1.2.0):** The deployed build reports load-derived CPU estimates and heuristic experience scores. The current source fix uses CPU counter deltas and avoids invented noise/experience when measurements are missing; remaining quality improvements are tracked below.
 * [x] **RF Channel Utilization & Airtime Telemetry (v1.1.0):** Broadcom `chanim_stats` streaming `cu_total`, `cu_self_rx`, and `cu_self_tx` into UniFi RF graphs and router WebUI.
 * [x] **Cumulative Client Traffic Usage Counters (v1.1.0):** Parsing `tx/rx` unicast bytes, packets, retries, rates, and association uptime from `wl sta_info`.
 * [x] **Native Asuswrt WebUI Integration & Form Isolation (v1.2.2):** Advanced Settings > Wireless tab with dynamic slot discovery (`user1`–`user20.asp`), zero-refresh background polling, and form preservation.
@@ -241,19 +247,26 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="$BUILD_FLAGS"
 * [x] **Automated In-WebUI Updates & Dual Tracks:** Instant release/dev update checks and one-click upgrades.
 * [x] **Cluster Mesh Synchronization:** Centralized AP configuration and binary propagation over SSH.
 
-### Current follow-up
+### Prioritized backlog and operator decisions
 
-Credential rotation, controlled failure/recovery checks, and watchdog logging/write-path review are tracked in [AUDIT_STATE.md](docs/AUDIT_STATE.md). These are separate from the feature backlog below.
+The detailed evidence and acceptance criteria are in [the project audit/backlog](docs/AUDIT_STATE.md#8-approved-backlog-and-fix-batch--2026-10-25). The current batch is source changes under test, not a deployed release. APs remain on the verified v1.2.4 dev build.
 
-### Pending Roadmap Items
-1. **Dynamic WLAN Mapping UI / Auto-Discovery:**
-   - WebUI interface to map custom SSIDs to UniFi 24-hex WLAN ObjectIds, or optional auto-resolution by querying the UniFi Controller API directly.
-2. **Community Package Directory Submission:**
-   - Prepare package submission for `amtm` (Asuswrt-Merlin Terminal Menu) third-party script directory and SNBForums.
-3. **Dynamic Guest Network Tagging:**
-   - Automatically tag isolated guest virtual APs (`is_guest: true`) so UniFi groups them into Guest analytics.
-4. **Roaming & Fast Transition Event Telemetry:**
-   - Listen to Broadcom wireless events or hostapd logs to generate UniFi client roam events (`STA-TRAFFIC-STAT`, `roamed from AP X to AP Y`).
+| Work | Status / next step |
+|---|---|
+| B1–B2: Reliable bridge-addon updates | Fail-closed download/checksum/archive/version/startup/heartbeat checks implemented locally. Immutable complete release bundles, transaction locking, rollback and verified per-node outcomes remain pending. Stable release publication is separate from merging main. |
+| B3: Preserve settings | JSON merge preserves custom WLAN mappings, node lists, topology and unknown fields; validation, private atomic writes and no-op detection implemented locally. |
+| B4: Respect disabled state | Daemon and shared tracked startup enforce enabled=false for boot, cluster and manual entry points; startup distribution included in addon updates. Local regression tests pass. |
+| B5: Accurate tri-band telemetry | Separate physical radio/VAP identities, actual channel widths and per-radio counts implemented locally. Third-radio rendering under U6IW still needs controller acceptance testing. |
+| B6: Exposed controller key | Historical exposure confirmed; the old key still authenticated at investigation time. Operator approved rotation; replacement creation/install/revocation verification is tracked in the audit. No values belong in Git/chat. |
+| B7–B10: Health and telemetry correctness | CPU deltas, unknown noise/experience handling, topology/FDB corrections, UI freshness/unverified labels and watchdog log cap implemented locally. Sampling deadlines/caching, stable traffic counters, rollback, structured config verification and remaining form transport work stay open. |
+| F1: WLAN discovery | Resolve/cache exact SSID-to-legacy-ObjectId mapping; handle duplicate names and modern UUID differences. Keep broad API credentials off the AP. |
+| F2: Guest/VLAN classification | Report actual VAP bridge/VLAN/isolation metadata first. Classification does not enforce network policy. |
+| F3: Roaming | Already visible in UniFi per operator. No replacement roam-event implementation planned without a demonstrated gap; optional future detail is timing, reason codes and transitions shorter than sampling. |
+| F4: RF diagnostics | Passive statistics only for now. Continuous spectrum/scanning-radio parity requires supported hardware; active off-channel scans/captures and proprietary AirView/Channel AI parity are deferred. |
+| F5: Simple UniFi device commands | Reboot and other small commands are eligible for an explicit typed allowlist and controlled tests. Reboot interrupts service; no arbitrary command execution or automatic live reboot tests. |
+| F6: UniFi provisioning / firmware | **Deferred by operator:** firmware updates, UniFi-triggered bridge upgrades and broad SSID/security/radio/VLAN provisioning. Asus remains the configuration authority. Existing GitHub bridge-addon updater correctness is a separate maintenance fix. |
+| F7: Community distribution | amtm/SNBForums submission after installation, release integrity and compatibility gaps are closed. |
+
 
 ---
 

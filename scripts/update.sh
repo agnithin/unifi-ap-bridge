@@ -126,6 +126,7 @@ cmd_check() {
     request_id="${2:-}"
     installed_newer=false
     branch=$(get_branch "${1:-}")
+    case "$branch" in main|dev) ;; *) echo "Invalid release track" >&2; return 1 ;; esac
     local_ver=$(get_local_version)
     echo "Checking for updates on branch '${branch}' (current version: ${local_ver})..."
 
@@ -179,8 +180,10 @@ cmd_apply() {
     request_id="${2:-}"
     installed_newer=false
     branch=$(get_branch "${1:-}")
+    case "$branch" in main|dev) ;; *) echo "Invalid release track" >&2; return 1 ;; esac
     local_ver=$(get_local_version)
     tmp_dir="/tmp/unifi-update-$$"
+    umask 077
 
     echo "====================================================="
     echo " Starting update on track '${branch}'..."
@@ -203,7 +206,7 @@ cmd_apply() {
     echo "[*] Downloading scripts from branch '${branch}'..."
     failed=0
     cb=$(date +%s)
-    for f in apply_config.sh sync_nodes.sh unifi-bridge.sh update.sh watchdog.sh; do
+    for f in start.sh apply_config.sh sync_nodes.sh unifi-bridge.sh update.sh watchdog.sh; do
         if ! curl -fsSL --connect-timeout 8 --max-time 20 "${REPO_RAW}/${branch}/scripts/${f}?_=${cb}" -o "${tmp_dir}/${f}"; then
             echo "[!] Failed downloading scripts/${f}"
             failed=1
@@ -242,34 +245,71 @@ cmd_apply() {
     fi
 
     if curl -fsSL --connect-timeout 10 --max-time 60 "$bin_url" -o "$bin_tarball" 2>/dev/null; then
-        echo "[*] Verified binary package download from releases."
-        cp -f "$bin_tarball" "$INSTALL_DIR/unifi-bridge.tar.gz"
+        echo "[*] Downloaded binary package from releases; validating next."
+        : # Validate the complete staged archive before touching installed files.
     elif curl -fsSL --connect-timeout 10 --max-time 60 "${REPO_RAW}/${branch}/bin/unifi-bridge-${ARCH_SUFFIX}.tar.gz?_=${cb}" -o "$bin_tarball" 2>/dev/null; then
-        echo "[*] Verified binary package download from branch repository."
-        cp -f "$bin_tarball" "$INSTALL_DIR/unifi-bridge.tar.gz"
+        echo "[*] Downloaded binary package from branch repository; validating next."
+        : # Validate the complete staged archive before touching installed files.
     else
-        echo "[!] Note: Binary package not found at ${bin_url}; keeping existing binary and updating scripts/WebUI."
+        write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Binary download failed; installed files were not changed"
+        rm -rf "$tmp_dir"
+        return 1
     fi
+
+    # The existing bridge-addon updater must fail closed. This is not router
+    # firmware support or a UniFi-triggered firmware update implementation.
+    manifest="${tmp_dir}/sha256sums.txt"
+    if ! curl -fsSL --connect-timeout 8 --max-time 20 "${bin_url%/*}/sha256sums.txt" -o "$manifest"; then
+        write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Checksum manifest unavailable; installed files were not changed"
+        rm -rf "$tmp_dir"; return 1
+    fi
+    expected=$(awk -v name="unifi-bridge-${ARCH_SUFFIX}.tar.gz" '$2==name {print $1}' "$manifest")
+    actual=$(openssl dgst -sha256 "$bin_tarball" 2>/dev/null | awk '{print $NF}')
+    if [ "${#expected}" -ne 64 ] || [ "$expected" != "$actual" ]; then
+        write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Binary checksum mismatch; installed files were not changed"
+        rm -rf "$tmp_dir"; return 1
+    fi
+    contents=$(tar -tzf "$bin_tarball" 2>/dev/null)
+    if [ "$contents" != "unifi-bridge-${ARCH_SUFFIX}" ]; then
+        write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Unexpected binary archive contents; installed files were not changed"
+        rm -rf "$tmp_dir"; return 1
+    fi
+    mkdir -p "$tmp_dir/staged"
+    if ! tar -xzf "$bin_tarball" -C "$tmp_dir/staged"; then
+        write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Binary extraction failed"
+        rm -rf "$tmp_dir"; return 1
+    fi
+    staged_version=$("$tmp_dir/staged/unifi-bridge-${ARCH_SUFFIX}" -version 2>/dev/null)
+    case "$staged_version" in
+        "unifi-bridge ${remote_ver} (commit: "*) ;;
+        *) write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Binary and source versions differ; installed files were not changed"
+           rm -rf "$tmp_dir"; return 1 ;;
+    esac
+    cp -f "$bin_tarball" "$INSTALL_DIR/unifi-bridge.tar.gz" || {
+        write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Could not install binary archive"
+        rm -rf "$tmp_dir"; return 1
+    }
 
     # 3. Apply updated scripts & WebUI
     echo "[*] Installing updated scripts to ${INSTALL_DIR}..."
-    cp -fp "${tmp_dir}/apply_config.sh" "$INSTALL_DIR/apply_config.sh" && chmod 755 "$INSTALL_DIR/apply_config.sh"
-    cp -fp "${tmp_dir}/sync_nodes.sh" "$INSTALL_DIR/sync_nodes.sh" && chmod 755 "$INSTALL_DIR/sync_nodes.sh"
-    cp -fp "${tmp_dir}/update.sh" "$INSTALL_DIR/update.sh" && chmod 755 "$INSTALL_DIR/update.sh"
-    cp -fp "${tmp_dir}/watchdog.sh" "$INSTALL_DIR/watchdog.sh" && chmod 755 "$INSTALL_DIR/watchdog.sh"
-    cp -fp "${tmp_dir}/version.txt" "$INSTALL_DIR/version.txt" && chmod 644 "$INSTALL_DIR/version.txt"
-
-    # CLI tool
-    cp -fp "${tmp_dir}/unifi-bridge.sh" "$INSTALL_DIR/unifi-bridge.sh" && chmod 755 "$INSTALL_DIR/unifi-bridge.sh"
+    for f in start.sh apply_config.sh sync_nodes.sh unifi-bridge.sh update.sh watchdog.sh; do
+        if ! cp -fp "${tmp_dir}/$f" "$INSTALL_DIR/$f" || ! chmod 755 "$INSTALL_DIR/$f"; then
+            write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Script installation failed; inspect service status before retrying"
+            rm -rf "$tmp_dir"; return 1
+        fi
+    done
     ln -sf "$INSTALL_DIR/unifi-bridge.sh" "/jffs/scripts/unifi-bridge"
-
-    # WebUI
     mkdir -p "$INSTALL_DIR/webui"
-    cp -fp "${tmp_dir}/unifi-bridge.asp" "$INSTALL_DIR/webui/unifi-bridge.asp"
     slot="user3"
     [ -f "$INSTALL_DIR/.user_slot" ] && slot=$(cat "$INSTALL_DIR/.user_slot" 2>/dev/null | tr -d ' \t\r\n')
     [ -z "$slot" ] && slot="user3"
-    cp -fp "${tmp_dir}/unifi-bridge.asp" "/tmp/var/wwwext/${slot}.asp"
+    if ! cp -fp "${tmp_dir}/version.txt" "$INSTALL_DIR/version.txt" ||
+       ! cp -fp "${tmp_dir}/unifi-bridge.asp" "$INSTALL_DIR/webui/unifi-bridge.asp" ||
+       ! cp -fp "${tmp_dir}/unifi-bridge.asp" "/tmp/var/wwwext/${slot}.asp"; then
+        write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "UI installation failed; inspect service status before retrying"
+        rm -rf "$tmp_dir"; return 1
+    fi
+    chmod 644 "$INSTALL_DIR/version.txt"
 
     # 4. Update branch in config.json
     if [ -f "$CONFIG_FILE" ]; then
@@ -282,9 +322,46 @@ cmd_apply() {
 
     # 5. Restart local daemon cleanly
     echo "[*] Restarting UniFi AP Bridge daemon..."
-    "$INSTALL_DIR/start.sh"
+    started_at=$(date +%s)
+    if ! "$INSTALL_DIR/start.sh"; then
+        write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Bridge startup failed; inspect service status before retrying"
+        rm -rf "$tmp_dir"; return 1
+    fi
 
-    write_update_status "SUCCESS" "$branch" "$remote_ver" "$remote_ver" "Successfully updated to ${remote_ver} (${branch})"
+    # A shell launch is not proof that the daemon is running the new binary or
+    # exchanging informs. Disabled installs intentionally have no heartbeat.
+    if "$tmp_dir/staged/unifi-bridge-${ARCH_SUFFIX}" -config "$CONFIG_FILE" -is-enabled; then
+        attempts=0
+        verified=0
+        staged_commit=$(printf '%s' "$staged_version" | sed -n 's/.*commit: \([^,]*\),.*/\1/p')
+        while [ "$attempts" -lt 30 ]; do
+            live_pid=$(pidof unifi-bridge 2>/dev/null | awk '{print $1}')
+            updated=$(grep '"status_updated_at":' "$STATUS_JS" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ,\t\r\n')
+            case "$live_pid:$updated" in *[!0-9:]*|:*|*:) ;;
+                *) if [ "$updated" -ge "$started_at" ] &&
+                      grep -Eq "\"pid\":[[:space:]]*${live_pid}[,[:space:]]" "$STATUS_JS" &&
+                      grep -Fq "\"version\": \"${remote_ver}\"" "$STATUS_JS" &&
+                      grep -Fq "\"commit\": \"${staged_commit}\"" "$STATUS_JS" &&
+                      grep -Fq '"last_status": "Active (' "$STATUS_JS"; then
+                    verified=1; break
+                   fi ;;
+            esac
+            attempts=$((attempts + 1))
+            sleep 2
+        done
+        if [ "$verified" -ne 1 ]; then
+            write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "New daemon heartbeat and build identity were not verified; inspect service status"
+            rm -rf "$tmp_dir"; return 1
+        fi
+    else
+        enabled_result=$?
+        if [ "$enabled_result" -ne 3 ]; then
+            write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Installed configuration could not be validated"
+            rm -rf "$tmp_dir"; return 1
+        fi
+    fi
+
+    write_update_status "SUCCESS" "$branch" "$remote_ver" "$remote_ver" "Local addon updated to ${remote_ver} (${branch}); cluster rollout is reported separately"
     (sleep 5 && write_update_status "UP_TO_DATE" "$branch" "$remote_ver" "$remote_ver" "UniFi AP Bridge is up to date (${remote_ver})") >/dev/null 2>&1 &
 
     echo "[*] Propagating update to cluster nodes..."

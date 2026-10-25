@@ -8,12 +8,25 @@ INSTALL_DIR="/jffs/addons/$ADDON_NAME"
 CONFIG_FILE="$INSTALL_DIR/config/config.json"
 WATCHDOG_LOG="/tmp/unifi-bridge-watchdog.log"
 
+# Bound the RAM log even if repeated startup failures occur.
+if [ -f "$WATCHDOG_LOG" ] && [ "$(wc -c < "$WATCHDOG_LOG")" -gt 1048576 ]; then
+    : > "$WATCHDOG_LOG"
+fi
+
 # Check if configuration exists
 [ ! -f "$CONFIG_FILE" ] && exit 0
 
-# Check if explicitly disabled
-if grep -q '"enabled": false' "$CONFIG_FILE" 2>/dev/null; then
-    exit 0
+# Ask the JSON-aware daemon helper; nested addon/node fields must not be
+# mistaken for the root enabled flag. A missing binary is handled by start.sh.
+if [ -x /tmp/unifi-bridge/unifi-bridge ]; then
+    if /tmp/unifi-bridge/unifi-bridge -config "$CONFIG_FILE" -is-enabled; then
+        :
+    else
+        enabled_result=$?
+        [ "$enabled_result" -eq 3 ] && exit 0
+        echo "Configuration could not be validated; watchdog did not restart the service" >> "$WATCHDOG_LOG"
+        exit 1
+    fi
 fi
 
 # Check if process is alive

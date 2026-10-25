@@ -7,7 +7,7 @@ import (
 )
 
 var (
-	chanspecRegex = regexp.MustCompile(`^(\d{1,3})(?:/(20|40|80|160))?(?:[lu])?(?:\s|$)`)
+	chanspecRegex = regexp.MustCompile(`^(\d{1,3})(?:/(20|40|80|160))?([lu])?(?:\s|$)`)
 )
 
 // ParseChanspec extracts primary channel and bandwidth in MHz.
@@ -40,6 +40,15 @@ func ParseChanspec(raw string) (channel int, width int) {
 					width = 20
 				}
 			}
+			// The low byte is the center channel; control-sideband bits select
+			// the primary 20 MHz channel within the bonded block.
+			if width > 20 {
+				sideband := int((val & 0x0700) >> 8)
+				if sideband >= width/20 {
+					return 0, width
+				}
+				channel = channel - (width/10 - 2) + 4*sideband
+			}
 			return channel, width
 		}
 	}
@@ -59,12 +68,11 @@ func ParseChanspec(raw string) (channel int, width int) {
 		}
 	}
 
+	if len(match) > 3 && match[3] != "" && width == 0 {
+		width = 40
+	}
 	if width == 0 {
-		if channel > 14 {
-			width = 80 // Default for 5 GHz
-		} else {
-			width = 20 // Default for 2.4 GHz
-		}
+		width = 20
 	}
 
 	return channel, width

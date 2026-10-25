@@ -9,12 +9,12 @@ import (
 )
 
 var (
-	rssiRegex       = regexp.MustCompile(`(?i)(?:rssi|signal):\s*(-?\d+)`)
-	noiseRegex      = regexp.MustCompile(`(?i)noise(?:\s*floor)?:\s*(-?\d+)`)
-	txRateKbpsRegex = regexp.MustCompile(`(?i)rate of last tx pkt:\s*(\d+)\s*kbps`)
-	rxRateKbpsRegex = regexp.MustCompile(`(?i)rate of last rx pkt:\s*(\d+)\s*kbps`)
-	legacyRateRegex = regexp.MustCompile(`(?i)legacy rate\s*(\d+)\s*mbps`)
-	genericRateRegex= regexp.MustCompile(`(?i)(?:rate|rate_mbps):\s*(\d+)`)
+	rssiRegex         = regexp.MustCompile(`(?i)(?:rssi|signal):\s*(-?\d+)`)
+	noiseRegex        = regexp.MustCompile(`(?i)noise(?:\s*floor)?:\s*(-?\d+)`)
+	txRateKbpsRegex   = regexp.MustCompile(`(?i)rate of last tx pkt:\s*(\d+)\s*kbps`)
+	rxRateKbpsRegex   = regexp.MustCompile(`(?i)rate of last rx pkt:\s*(\d+)\s*kbps`)
+	legacyRateRegex   = regexp.MustCompile(`(?i)legacy rate\s*(\d+)\s*mbps`)
+	genericRateRegex  = regexp.MustCompile(`(?i)(?:rate|rate_mbps):\s*(\d+)`)
 	txUcastBytesRegex = regexp.MustCompile(`(?i)tx ucast bytes:\s*(\d+)`)
 	txTotalBytesRegex = regexp.MustCompile(`(?i)tx total bytes:\s*(\d+)`)
 	rxUcastBytesRegex = regexp.MustCompile(`(?i)rx ucast bytes:\s*(\d+)`)
@@ -23,9 +23,9 @@ var (
 	txTotalPktsRegex  = regexp.MustCompile(`(?i)tx total pkts:\s*(\d+)`)
 	rxUcastPktsRegex  = regexp.MustCompile(`(?i)rx ucast pkts:\s*(\d+)`)
 	rxDataPktsRegex   = regexp.MustCompile(`(?i)rx (?:data|total) pkts:\s*(\d+)`)
-	txRetriesRegex  = regexp.MustCompile(`(?i)tx (?:pkts retries|data pkts retried):\s*(\d+)`)
-	uptimeRegex     = regexp.MustCompile(`(?i)in network\s*(\d+)\s*seconds`)
-	idleRegex       = regexp.MustCompile(`(?i)idle\s*(\d+)\s*seconds`)
+	txRetriesRegex    = regexp.MustCompile(`(?i)tx (?:pkts retries|data pkts retried):\s*(\d+)`)
+	uptimeRegex       = regexp.MustCompile(`(?i)in network\s*(\d+)\s*seconds`)
+	idleRegex         = regexp.MustCompile(`(?i)idle\s*(\d+)\s*seconds`)
 )
 
 type ParsedStaInfo struct {
@@ -49,9 +49,7 @@ type ParsedStaInfo struct {
 
 // ParseStaInfo parses the text output of `wl sta_info <mac>`.
 func ParseStaInfo(output string, fallbackBand string) ParsedStaInfo {
-	info := ParsedStaInfo{
-		Noise: -90, // Standard default noise floor
-	}
+	info := ParsedStaInfo{}
 
 	lower := strings.ToLower(output)
 
@@ -94,7 +92,7 @@ func ParseStaInfo(output string, fallbackBand string) ParsedStaInfo {
 	}
 
 	// Calculate SNR (RSSI in UniFi is positive SNR = Signal - Noise)
-	if info.Signal != 0 {
+	if info.Signal != 0 && info.Noise != 0 {
 		snr := info.Signal - info.Noise
 		if snr < 0 {
 			snr = 0
@@ -210,6 +208,9 @@ func EnrichStation(sta *telemetry.Station, info ParsedStaInfo) {
 // CalculateSatisfaction computes a 0-100 UniFi WiFi Experience health score
 // based on RSSI/signal strength and transmit packet retry rates.
 func CalculateSatisfaction(signal, rssi int, txPackets, txRetries int64) int {
+	if signal == 0 {
+		return 0
+	} // Missing measurements must not imply perfect experience.
 	score := 100
 
 	if signal != 0 {

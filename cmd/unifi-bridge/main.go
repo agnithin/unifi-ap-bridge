@@ -22,12 +22,13 @@ import (
 )
 
 var (
-	version   = "1.2.4"
+	version   = "1.2.5"
 	commit    = "none"
 	buildDate = "unknown"
 )
 
 type Config struct {
+	Enabled          bool              `json:"enabled"`
 	ControllerURL    string            `json:"controller_url"`
 	IntervalSec      int               `json:"interval_sec"`
 	Model            string            `json:"model"`
@@ -40,6 +41,7 @@ type Config struct {
 
 func loadConfig(path string) (*Config, error) {
 	cfg := &Config{
+		Enabled:       true,
 		ControllerURL: "http://10.100.1.1:8080/inform",
 		IntervalSec:   10,
 		Model:         "U6M",
@@ -106,7 +108,9 @@ func updateWebUIStatus(host *providers.HostInfo, modelProfile models.ModelProfil
 			cuTotal2G = rs.CuTotal
 		} else {
 			sta5G += rs.NumSta
-			cuTotal5G = rs.CuTotal
+			if rs.CuTotal > cuTotal5G {
+				cuTotal5G = rs.CuTotal
+			}
 		}
 	}
 
@@ -122,6 +126,7 @@ func updateWebUIStatus(host *providers.HostInfo, modelProfile models.ModelProfil
 
 	statusObj := map[string]any{
 		"running":                true,
+		"enabled":                cfg.Enabled,
 		"version":                version,
 		"branch":                 cfg.Branch,
 		"pid":                    os.Getpid(),
@@ -168,6 +173,10 @@ func updateWebUIStatus(host *providers.HostInfo, modelProfile models.ModelProfil
 }
 
 func main() {
+	enabledStatusFlag := flag.Bool("is-enabled", false, "Exit 0 when enabled, 3 when disabled; no hardware access")
+	applySettingsFlag := flag.Bool("apply-settings", false, "Merge settings from stdin without starting telemetry")
+	settingsFormat := flag.String("settings-format", "json", "Settings input: json or custom")
+	gatewayFlag := flag.String("gateway", "", "Gateway IP for automatic controller discovery")
 	configPath := flag.String("config", "", "Path to configuration file")
 	controllerFlag := flag.String("controller", "", "UniFi controller inform URL")
 	intervalFlag := flag.Int("interval", 0, "Heartbeat interval in seconds")
@@ -186,11 +195,35 @@ func main() {
 		return
 	}
 
+	if *applySettingsFlag {
+		if *configPath == "" {
+			log.Fatal("-config is required for settings")
+		}
+		if err := mergeSettings(*configPath, os.Stdin, *settingsFormat, *gatewayFlag); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
 	log.SetOutput(&boundedLogWriter{file: os.Stderr, maxBytes: 1024 * 1024})
 
 	cfg, err := loadConfig(*configPath)
 	if err != nil {
 		log.Fatalf("error loading config: %v", err)
+	}
+
+	if *enabledStatusFlag {
+		if !cfg.Enabled {
+			os.Exit(3)
+		}
+		return
+	}
+	if !cfg.Enabled {
+		if err := publishDisabledStatus("/tmp/var/wwwext/unifi-bridge", cfg); err != nil {
+			log.Printf("Could not publish disabled status: %v", err)
+		}
+		log.Print("Bridge disabled in configuration")
+		return
 	}
 
 	if *controllerFlag != "" {
@@ -301,16 +334,7 @@ func main() {
 			}
 		}
 
-		// Calculate station count per radio
-		for i := range radioStats {
-			staCount := 0
-			for _, v := range vaps {
-				if radioStats[i].Name == v.RadioName || radioStats[i].Name == ("wifi-"+v.Radio) {
-					staCount += v.NumSta
-				}
-			}
-			radioStats[i].NumSta = staCount
-		}
+		telemetry.AssignRadioStationCounts(radioStats, vaps)
 
 		for _, v := range vaps {
 			totalStations += v.NumSta

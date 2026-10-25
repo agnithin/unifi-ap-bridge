@@ -237,6 +237,11 @@ function initFormOnce(st) {
     }
   }
 
+  if (typeof st.enabled === "boolean") {
+    document.getElementById("unifibridge_enabled_1").checked = st.enabled;
+    document.getElementById("unifibridge_enabled_0").checked = !st.enabled;
+  }
+
   if (st.model_code) {
     var selM = document.getElementById("select_model");
     if (selM) selM.value = st.model_code;
@@ -264,6 +269,26 @@ function initFormOnce(st) {
   }
 }
 
+function escapeHTML(value) {
+  return String(value === undefined || value === null ? "" : value).replace(/[&<>"']/g, function(c) {
+    return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
+  });
+}
+
+function statusIsFresh(st) {
+  var age = Date.now()/1000 - Number(st.status_updated_at);
+  return Number.isFinite(age) && age >= -30 && age <= 3 * (Number(st.interval_sec) || 10) + 30;
+}
+
+function clusterState(n) {
+  var label=n.sync_status || "Unknown";
+  if (n.status !== "RUNNING" || /Failed|Unreachable|Stale|Stopped|No SSH/i.test(label)) return "error";
+  if (label === "Local") return "local";
+  // A version match is healthy sampling, not proof of configuration equality.
+  if (/Unverified|Config Synced|Version Diff/i.test(label)) return "unverified";
+  return label.indexOf("In Sync") !== -1 ? "verified" : "unverified";
+}
+
 function updateUI(st) {
   if (!st) return;
 
@@ -272,7 +297,11 @@ function updateUI(st) {
 
   var badge = document.getElementById("bridge_badge");
   var statusText = document.getElementById("bridge_status_text");
-  if (st.running) {
+  if (st.running && !statusIsFresh(st)) {
+    badge.className = "badge_offline";
+    badge.textContent = "STALE";
+    statusText.textContent = "Telemetry is stale or the router clock differs; refresh and check the service.";
+  } else if (st.running) {
     badge.className = "badge_online";
     badge.textContent = "RUNNING";
     statusText.textContent = "Daemon Active (PID " + (st.pid || "-") + ")" + (st.last_status && st.last_status.indexOf("Error:") === 0 ? " — " + st.last_status : "");
@@ -303,10 +332,11 @@ function updateUI(st) {
   if (st.system_stats) {
     var sysLoadEl = document.getElementById("stat_sys_load");
     var sysSubEl = document.getElementById("stat_sys_sub");
-    if (sysLoadEl && st.system_stats.cpu !== undefined) {
+    if (sysLoadEl && st.system_stats.cpu !== undefined && st.system_stats.cpu !== null) {
       sysLoadEl.textContent = st.system_stats.cpu + "% CPU";
     }
-    if (sysSubEl && st.system_stats.cpu !== undefined && st.system_stats.mem !== undefined) {
+    if (sysLoadEl && (st.system_stats.cpu === undefined || st.system_stats.cpu === null)) sysLoadEl.textContent = "CPU: measuring...";
+    if (sysSubEl && st.system_stats.cpu !== undefined && st.system_stats.cpu !== null && st.system_stats.mem !== undefined) {
       sysSubEl.textContent = "CPU: " + st.system_stats.cpu + "% | RAM: " + st.system_stats.mem + "%";
     }
   }
@@ -367,6 +397,7 @@ function updateClusterUI(cl) {
 
   var html = "";
   var allInSync = true;
+  var anyUnverified = false;
   var clusterTotal = 0;
   var cluster2g = 0;
   var cluster5g = 0;
@@ -374,29 +405,33 @@ function updateClusterUI(cl) {
   for (var i = 0; i < cl.nodes.length; i++) {
     var n = cl.nodes[i];
     var isLocal = n.role.indexOf("Main") !== -1;
-    var isSync = n.sync_status.indexOf("In Sync") !== -1;
-    if (!isSync) allInSync = false;
+    var state = clusterState(n);
+    var isSync = state === "verified" || state === "local";
+    if (state === "error") allInSync = false;
+    if (state === "unverified") anyUnverified = true;
 
-    clusterTotal += (n.total_clients || 0);
-    cluster2g += (n.clients_2g || 0);
-    cluster5g += (n.clients_5g || 0);
+    if (n.status === "RUNNING") {
+      clusterTotal += Number(n.total_clients) || 0;
+      cluster2g += Number(n.clients_2g) || 0;
+      cluster5g += Number(n.clients_5g) || 0;
+    }
 
     var statusBadge = n.status === "RUNNING"
       ? '<span class="badge_online" style="font-size:10px;">RUNNING</span>'
       : '<span class="badge_offline" style="font-size:10px;">STOPPED</span>';
 
     var syncBadge = isSync
-      ? '<span class="badge_online" style="font-size:10px; background-color:#2980b9;">' + n.sync_status + '</span>'
-      : '<span class="badge_offline" style="font-size:10px;">' + n.sync_status + '</span>';
+      ? '<span class="badge_online" style="font-size:10px; background-color:#2980b9;">' + escapeHTML(n.sync_status) + '</span>'
+      : '<span style="font-size:10px;color:' + (state === 'error' ? '#e74c3c' : '#f1c40f') + ';">' + escapeHTML(n.sync_status) + '</span>';
 
     html += '<tr style="border-bottom:1px solid #3e4d66;">';
-    html += '<td class="settingvalue" style="font-weight:bold; color:#fff;">' + n.name + (isLocal ? ' <span style="font-size:10px; color:#f1c40f;">(This AP)</span>' : '') + '</td>';
-    html += '<td class="settingvalue">' + n.role + '</td>';
-    html += '<td class="settingvalue"><code style="color:#2ecc71;">' + (n.version || "1.0.0") + '</code></td>';
-    html += '<td class="settingvalue"><code>' + n.ip + '</code></td>';
+    html += '<td class="settingvalue" style="font-weight:bold; color:#fff;">' + escapeHTML(n.name) + (isLocal ? ' <span style="font-size:10px; color:#f1c40f;">(This AP)</span>' : '') + '</td>';
+    html += '<td class="settingvalue">' + escapeHTML(n.role) + '</td>';
+    html += '<td class="settingvalue"><code style="color:#2ecc71;">' + escapeHTML(n.version || "Unknown") + '</code></td>';
+    html += '<td class="settingvalue"><code>' + escapeHTML(n.ip) + '</code></td>';
     html += '<td class="settingvalue">' + statusBadge + '</td>';
     var loadTag = (n.cu_2g || n.cu_5g) ? ' <span style="font-size:10px; color:#f39c12;">[' + (n.cu_2g || 0) + '% / ' + (n.cu_5g || 0) + '% load]</span>' : '';
-    html += '<td class="settingvalue">' + n.total_clients + ' <span style="font-size:10px; color:#bdc3c7;">(' + n.clients_2g + 'G / ' + n.clients_5g + 'A)</span>' + loadTag + '</td>';
+    html += '<td class="settingvalue">' + escapeHTML(n.total_clients) + ' <span style="font-size:10px; color:#bdc3c7;">(' + n.clients_2g + 'G / ' + n.clients_5g + 'A)</span>' + loadTag + '</td>';
     html += '<td class="settingvalue">' + syncBadge + '</td>';
     html += '</tr>';
   }
@@ -409,9 +444,11 @@ function updateClusterUI(cl) {
 
   var syncBadgeEl = document.getElementById("cluster_sync_badge");
   if (syncBadgeEl) {
+    syncBadgeEl.style.backgroundColor = allInSync ? (anyUnverified ? "#9a7200" : "#27ae60") : "#c0392b";
     if (allInSync) {
       syncBadgeEl.className = "badge_online";
-      syncBadgeEl.textContent = "ALL NODES IN SYNC";
+      syncBadgeEl.textContent = anyUnverified ? "CONFIGURATION UNVERIFIED" : "ALL NODES IN SYNC";
+      if (anyUnverified) syncBadgeEl.style.backgroundColor = "#9a7200";
     } else {
       syncBadgeEl.className = "badge_offline";
       syncBadgeEl.textContent = "SYNC ATTENTION NEEDED";
@@ -621,7 +658,8 @@ function applySettings() {
   var ctrlUrl = document.getElementById("input_controller_url").value.trim();
   var model = document.getElementById("select_model").value;
   var interval = document.getElementById("select_interval").value;
-  var branch = document.getElementById("select_branch").value;
+  // The comparison selector does not change the installed track.
+  var branch = currentBranch;
 
   if (isAutoGw === "1") {
     ctrlUrl = "http://" + detectedGatewayIP + ":8080/inform";

@@ -9,13 +9,18 @@ func TestParseChanspec(t *testing.T) {
 		wantWidth   int
 	}{
 		{"6", 6, 20},
-		{"6l", 6, 20},
-		{"161", 161, 80},
-		{"161u", 161, 80},
+		{"6l", 6, 40},
+		{"161", 161, 20},
+		{"161u", 161, 40},
 		{"161/80", 161, 80},
 		{"36/40", 36, 40},
 		{"36/160", 36, 160},
-		{"0xe0a1", 161, 80}, // 161 (0xa1) with 80MHz bit set (0x10) -> 0x10a1 / 0xe0a1
+		{"0xe39b", 161, 80}, // center 155, upper control sideband -> channel 161
+		{"0xd826", 36, 40},  // center 38, lower sideband -> channel 36
+		{"0xd024", 36, 20},
+		{"36l (0xd826)", 36, 40},
+		{"6 (0x1006)", 6, 20},
+		{"161/80 (0xe39b)", 161, 80},
 	}
 
 	for _, tt := range tests {
