@@ -8,11 +8,15 @@ It emulates a genuine UniFi 6 Access Point—featuring native **UniFi 6 In-Wall 
 
 ## Current deployment
 
-Last verified **2026-10-24, approximately 23:28–23:30 PDT**: both XT8 APs run **v1.2.3 on `dev`**, code commit `b6188805e1b2e96fe94ab4b22b9c992c13978b1f`. Both are adopted, online, and sending GCM heartbeats. A runtime sample counted 29 stations on Main and 31 on Node; counts fluctuate normally.
+Last verified **2026-10-25, approximately 01:45 PDT**: both XT8 APs run **v1.2.4 on `dev`**, code commit `f77fafbc08688faca4b0fd9a286b73790d5a25da`. Both are adopted, running, and sending successful GCM heartbeats. A runtime sample counted 31 stations on Main and 29 on Node; counts fluctuate normally.
 
 The actual UniFi browser UI now shows Main connected to Cloud Gateway Max **Port 1** and Node to **Port 3**, both at **2.5 GbE**. Port Manager shows those uplinks active and **Bridge-EufyHomeBase3 on Node Port 4 at GbE**. This closes the two reported UI issues. Credential rotation, controlled outage/recovery checks, and broader review remain open. Work stays on `dev`; no merge to `main` is approved.
 
 See [audit state and action items](docs/AUDIT_STATE.md) and the [architecture reference](docs/ARCHITECTURE.md).
+
+### v1.2.4 update-check fix
+
+Checking for updates now finishes in the background without the Asus Applying/Complete overlay. Installed and latest versions consistently use a `v` prefix and explicit track labels. Checking `main` does not change the installed `dev` track; an older stable release is labeled **INSTALLED IS NEWER**. Request matching and timeouts prevent stale status from reloading or leaving the check stuck. Both `main` and `dev` checks were verified in the live Asus browser after deployment.
 
 ### v1.2.3 UI compatibility fix
 

@@ -4,7 +4,7 @@
 
 **Status:** Both reported UI issues are resolved in the actual browser on the published build: correct AP gateway parents/uplink speeds and active Port Manager connections, including HomeBase on Node Port 4. Credential rotation and wider failure-path review remain open.
 
-**Release track:** `dev`, daemon `1.2.3`, deployed code commit `b6188805e1b2e96fe94ab4b22b9c992c13978b1f` on both APs. No merge to `main` is approved. Section 5 supersedes earlier v1.2.2 UI-closure/provenance claims.
+**Release track:** `dev`, daemon `1.2.4`, deployed code commit `f77fafbc08688faca4b0fd9a286b73790d5a25da` on both APs. No merge to `main` is approved. Section 5 supersedes earlier v1.2.2 UI-closure/provenance claims.
 
 **Repository:** `/Users/nithinag/workspace/unifi-ap-bridge`.
 
@@ -213,3 +213,11 @@ Remaining work: rotate the previously exposed controller credential, complete co
 The native hidden-iframe submit executed firmware loading callbacks during a background update check, leaving the global Complete overlay visible. Update operations now use background XHR, correlate status by request ID/operation/track, and stop polling on completion, error, or timeout. A stale installation SUCCESS cannot reload a check. Version labels consistently show `v` and the installed track; checking main keeps an installed dev build labeled dev and explicitly reports when stable is older.
 
 Candidate verification on Main in the signed-in Asus browser: dev check completed with UP TO DATE and an enabled check button; main comparison completed with INSTALLED IS NEWER, installed `v1.2.3 (dev)`, latest `v1.2.1 (main)`, and the firmware overlay hidden. JavaScript regressions and four Python backend tests passed. Published rollout verification follows below.
+
+#### Published rollout verified — 2026-10-25, approximately 01:45 PDT
+
+- Hosted release run [40177753409](https://github.com/agnithin/unifi-ap-bridge/actions/runs/40177753409) passed Go tests, cluster tests, update backend/UI regressions, and shell syntax checks. Published ARMv7 archive SHA-256 matched its manifest; binary version and full source commit were verified before rollout.
+- Main `update.sh apply dev` installed v1.2.4 and propagated it to Node. Both report commit `f77fafbc08688faca4b0fd9a286b73790d5a25da`, branch dev, running/adopted, Active (GCM). Main PID 13260 / 31 clients; Node PID 17053 / 29 clients. Successful inform samples: Main 01:45:30, Node 01:45:34.
+- Published Main Asus UI check: installed `v1.2.4 (dev)`, latest `v1.2.1 (main)`, badge INSTALLED IS NEWER, check button enabled, firmware overlay hidden. Dev check then completed with UP TO DATE and latest `v1.2.4 (dev)`. Selector restored to dev. Browser validation was on Main; Node runtime deployment was verified by SSH.
+- Private RAM-backed rollback archives on each AP: `/tmp/unifi-update-before-v124/addon.tar.gz`. Main archive contains the already-tested candidate UI/scripts and previous v1.2.3 daemon; its original UI/script backup also remains at `/tmp/unifi-update-ui-before-fix/assets.tar.gz`.
+- Existing open audit work remains open. No merge to main was performed.
