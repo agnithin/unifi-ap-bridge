@@ -351,41 +351,6 @@ function updateClusterUI(cl) {
     document.getElementById("stat_5g").textContent = cluster5g;
   }
 }
-    html += '<td class="settingvalue" style="font-weight:bold; color:#fff;">' + n.name + (isLocal ? ' <span style="font-size:10px; color:#f1c40f;">(This AP)</span>' : '') + '</td>';
-    html += '<td class="settingvalue">' + n.role + '</td>';
-    html += '<td class="settingvalue"><code style="color:#2ecc71;">' + (n.version || "1.0.0") + '</code></td>';
-    html += '<td class="settingvalue"><code>' + n.ip + '</code></td>';
-    html += '<td class="settingvalue">' + statusBadge + '</td>';
-    var loadTag = (n.cu_2g || n.cu_5g) ? ' <span style="font-size:10px; color:#f39c12;">[' + (n.cu_2g || 0) + '% / ' + (n.cu_5g || 0) + '% load]</span>' : '';
-    html += '<td class="settingvalue">' + n.total_clients + ' <span style="font-size:10px; color:#bdc3c7;">(' + n.clients_2g + 'G / ' + n.clients_5g + 'A)</span>' + loadTag + '</td>';
-    html += '<td class="settingvalue">' + syncBadge + '</td>';
-    html += '</tr>';
-  }
-
-  tbody.innerHTML = html;
-
-  var syncBadgeEl = document.getElementById("cluster_sync_badge");
-  if (syncBadgeEl) {
-    if (allInSync) {
-      syncBadgeEl.className = "badge_online";
-      syncBadgeEl.textContent = "ALL NODES IN SYNC";
-    } else {
-      syncBadgeEl.className = "badge_offline";
-      syncBadgeEl.textContent = "SYNC ATTENTION NEEDED";
-    }
-  }
-
-  var syncTimeEl = document.getElementById("last_sync_time");
-  if (syncTimeEl) {
-    syncTimeEl.textContent = cl.last_sync || "-";
-  }
-
-  if (cl.nodes.length > 1) {
-    document.getElementById("stat_total").textContent = clusterTotal + " (Cluster)";
-    document.getElementById("stat_2g").textContent = cluster2g;
-    document.getElementById("stat_5g").textContent = cluster5g;
-  }
-}
 
 function updateUpdateUI(u) {
   if (!u) return;

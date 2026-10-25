@@ -346,6 +346,16 @@ cmd_menu() {
     done
 }
 
+cmd_reset() {
+    show_header
+    printf "${C_YELLOW}Resetting UniFi AP adoption identity...${C_RESET}\n"
+    rm -f "$STATE_FILE"
+    killall unifi-bridge 2>/dev/null || true
+    sleep 1
+    "$INSTALL_DIR/start.sh"
+    printf "${C_GREEN}Done! The AP will now broadcast as an unadopted device ready for adoption in the UniFi Console.${C_RESET}\n"
+}
+
 case "${1:-}" in
     status)
         cmd_status ;;
@@ -355,6 +365,8 @@ case "${1:-}" in
         cmd_stop ;;
     restart)
         cmd_restart ;;
+    reset|re-adopt)
+        cmd_reset ;;
     logs|log)
         cmd_logs ;;
     test|check)
@@ -366,6 +378,6 @@ case "${1:-}" in
     "")
         cmd_menu ;;
     *)
-        echo "Usage: $0 {status|sync|update [check|apply] [branch]|start|stop|restart|logs|test}"
+        echo "Usage: $0 {status|sync|update [check|apply] [branch]|start|stop|restart|reset|logs|test}"
         exit 1 ;;
 esac
