@@ -33,7 +33,10 @@ done
 # Dropbear on Merlin does not support OpenSSH ConnectTimeout. Bound the
 # entire command (including connect/auth) with a watchdog; retain stdin for tar.
 cluster_ssh() (
-    ssh -i "$SSH_KEY" -y -o BatchMode=yes -K 5 -I 15 "$@" <&0 &
+    # dash redirects stdin for background jobs before processing their redirects.
+    # Duplicate the caller input first so transfers survive that redirection.
+    exec 3<&0
+    ssh -i "$SSH_KEY" -y -o BatchMode=yes -K 5 -I 15 "$@" <&3 3<&- &
     ssh_pid=$!
     (
         sleep "${CLUSTER_SSH_TIMEOUT:-30}" &
