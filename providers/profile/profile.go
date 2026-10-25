@@ -170,7 +170,7 @@ func (p *ProfileProvider) GetPortTable() ([]telemetry.Port, []telemetry.Ethernet
 		{Name: "eth0", MAC: p.data.MAC, Speed: 2500, FullDuplex: true, NumPort: 4},
 	}
 	uplink := &telemetry.Uplink{
-		Name: "eth0", MAC: p.data.MAC, IP: p.data.IP, Type: "wire", Speed: 2500, FullDuplex: true, Up: true, NumPort: 1, RxBytes: 1048576, TxBytes: 2097152,
+		Name: "eth0", MAC: p.data.MAC, IP: p.data.IP, Type: "wire", Speed: 2500, FullDuplex: true, Up: true, NumPort: 1, UplinkMAC: "6e:63:f8:30:9a:06", UplinkRemotePort: 1, RxBytes: 1048576, TxBytes: 2097152,
 	}
 	return ports, ethTable, uplink, nil
 }

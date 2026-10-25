@@ -104,22 +104,37 @@ type EthernetPort struct {
 }
 
 type Uplink struct {
-	Name       string `json:"name"`
-	MAC        string `json:"mac"`
-	IP         string `json:"ip,omitempty"`
-	Netmask    string `json:"netmask,omitempty"`
-	Type       string `json:"type"` // "wire"
-	Speed      int    `json:"speed"`
-	FullDuplex bool   `json:"full_duplex"`
-	Up         bool   `json:"up"`
-	NumPort    int    `json:"num_port"`
-	RxBytes    int64  `json:"rx_bytes"`
-	TxBytes    int64  `json:"tx_bytes"`
-	RxPackets  int64  `json:"rx_packets"`
-	TxPackets  int64  `json:"tx_packets"`
-	RxErrors   int64  `json:"rx_errors"`
-	TxErrors   int64  `json:"tx_errors"`
-	RxDropped  int64  `json:"rx_dropped"`
+	Name             string `json:"name"`
+	MAC              string `json:"mac"`
+	IP               string `json:"ip,omitempty"`
+	Netmask          string `json:"netmask,omitempty"`
+	Type             string `json:"type"` // "wire"
+	Speed            int    `json:"speed"`
+	FullDuplex       bool   `json:"full_duplex"`
+	Up               bool   `json:"up"`
+	NumPort          int    `json:"num_port"`
+	UplinkMAC        string `json:"uplink_mac,omitempty"`
+	UplinkRemotePort int    `json:"uplink_remote_port,omitempty"`
+	RxBytes          int64  `json:"rx_bytes"`
+	TxBytes          int64  `json:"tx_bytes"`
+	RxPackets        int64  `json:"rx_packets"`
+	TxPackets        int64  `json:"tx_packets"`
+	RxErrors         int64  `json:"rx_errors"`
+	TxErrors         int64  `json:"tx_errors"`
+	RxDropped        int64  `json:"rx_dropped"`
+}
+
+type LastUplink struct {
+	UplinkMAC        string `json:"uplink_mac,omitempty"`
+	UplinkRemotePort int    `json:"uplink_remote_port,omitempty"`
+}
+
+type LLDPEntry struct {
+	ChassisID     string `json:"chassis_id"`
+	IsWired       bool   `json:"is_wired"`
+	LocalPortIdx  int    `json:"local_port_idx"`
+	LocalPortName string `json:"local_port_name"`
+	PortID        string `json:"port_id"`
 }
 
 type SysStats struct {
@@ -157,6 +172,9 @@ type InformPayload struct {
 	EthernetTable   []EthernetPort `json:"ethernet_table,omitempty"`
 	PortTable       []Port         `json:"port_table,omitempty"`
 	Uplink          *Uplink        `json:"uplink,omitempty"`
+	UplinkMAC       string         `json:"uplink_mac,omitempty"`
+	LastUplink      *LastUplink    `json:"last_uplink,omitempty"`
+	LLDPTable       []LLDPEntry    `json:"lldp_table,omitempty"`
 	SysStats        *SysStats      `json:"sys_stats,omitempty"`
 	SystemStats     *SystemStats   `json:"system-stats,omitempty"`
 }

@@ -22,7 +22,7 @@ import (
 )
 
 var (
-	version   = "1.2.0"
+	version   = "1.2.1"
 	commit    = "none"
 	buildDate = "unknown"
 )
@@ -317,6 +317,23 @@ func main() {
 			SystemStats:     systemStats,
 		}
 
+		if uplink != nil && uplink.UplinkMAC != "" {
+			payload.UplinkMAC = uplink.UplinkMAC
+			payload.LastUplink = &telemetry.LastUplink{
+				UplinkMAC:        uplink.UplinkMAC,
+				UplinkRemotePort: uplink.UplinkRemotePort,
+			}
+			payload.LLDPTable = []telemetry.LLDPEntry{
+				{
+					ChassisID:     uplink.UplinkMAC,
+					IsWired:       true,
+					LocalPortIdx:  1,
+					LocalPortName: "eth0",
+					PortID:        "1",
+				},
+			}
+		}
+
 		if *dumpFlag {
 			b, _ := json.MarshalIndent(payload, "", "  ")
 			fmt.Println(string(b))
@@ -333,7 +350,12 @@ func main() {
 
 		respRaw, err := client.Post(ctx, packet)
 		if err != nil {
-			if httpErr, ok := err.(*inform.HTTPError); ok && httpErr.StatusCode == 404 && !adopted {
+			if httpErr, ok := err.(*inform.HTTPError); ok && (httpErr.StatusCode == 404 || httpErr.StatusCode == 400 || httpErr.StatusCode == 401) {
+				if adopted {
+					logEvent("[unifi-bridge] Controller returned HTTP %d for adopted device (device forgotten or reset). Resetting adoption state...", httpErr.StatusCode)
+					_ = stateMgr.Reset()
+					return nil
+				}
 				logEvent("[unifi-bridge] Bootstrap sent; waiting for operator adoption in UniFi UI (MAC: %s)", host.MAC)
 				return nil
 			}

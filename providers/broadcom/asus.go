@@ -427,6 +427,27 @@ func parseNetDev(content string) map[string]netDevCounters {
 	return res
 }
 
+func parseArpGatewayMAC(gwIP string) string {
+	if gwIP == "" {
+		return ""
+	}
+	data, err := os.ReadFile("/proc/net/arp")
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines[1:] {
+		fields := strings.Fields(line)
+		if len(fields) >= 4 && fields[0] == gwIP {
+			mac := strings.ToLower(strings.TrimSpace(fields[3]))
+			if mac != "00:00:00:00:00:00" && len(mac) == 17 {
+				return mac
+			}
+		}
+	}
+	return ""
+}
+
 func readSysfsInt(path string) int {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -526,22 +547,30 @@ func (p *AsusProvider) GetPortTable() ([]telemetry.Port, []telemetry.EthernetPor
 		},
 	}
 
+	gwIP := p.nvramGet("lan_gateway")
+	if gwIP == "" {
+		gwIP = "10.100.1.1"
+	}
+	gwMAC := parseArpGatewayMAC(gwIP)
+
 	uplink := &telemetry.Uplink{
-		Name:       "eth0",
-		MAC:        hostMAC,
-		IP:         p.nvramGet("lan_ipaddr"),
-		Type:       "wire",
-		Speed:      eth0Port.Speed,
-		FullDuplex: eth0Port.FullDuplex,
-		Up:         eth0Port.Up,
-		NumPort:    1,
-		RxBytes:    eth0Port.RxBytes,
-		TxBytes:    eth0Port.TxBytes,
-		RxPackets:  eth0Port.RxPackets,
-		TxPackets:  eth0Port.TxPackets,
-		RxErrors:   eth0Port.RxErrors,
-		TxErrors:   eth0Port.TxErrors,
-		RxDropped:  eth0Port.RxDropped,
+		Name:             "eth0",
+		MAC:              hostMAC,
+		IP:               p.nvramGet("lan_ipaddr"),
+		Type:             "wire",
+		Speed:            eth0Port.Speed,
+		FullDuplex:       eth0Port.FullDuplex,
+		Up:               eth0Port.Up,
+		NumPort:          1,
+		UplinkMAC:        gwMAC,
+		UplinkRemotePort: 1,
+		RxBytes:          eth0Port.RxBytes,
+		TxBytes:          eth0Port.TxBytes,
+		RxPackets:        eth0Port.RxPackets,
+		TxPackets:        eth0Port.TxPackets,
+		RxErrors:         eth0Port.RxErrors,
+		TxErrors:         eth0Port.TxErrors,
+		RxDropped:        eth0Port.RxDropped,
 	}
 
 	return ports, ethTable, uplink, nil

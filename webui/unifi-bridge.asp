@@ -133,6 +133,8 @@ thead.collapsible-jquery {
 
 <script type="text/javascript">
 var autoRefreshTimer = null;
+var formInitialized = false;
+var lastClusterHtml = "";
 var detectedGatewayIP = "<% nvram_get("lan_gateway"); %>" || "10.100.1.1";
 
 var updatePollingTimer = null;
@@ -143,8 +145,55 @@ function SetCurrentPage() {
   document.form.current_page.value = window.location.pathname.substring(1);
 }
 
+function initFormOnce(st) {
+  if (formInitialized || !st) return;
+  formInitialized = true;
+
+  if (st.branch) {
+    currentBranch = st.branch;
+    var selB = document.getElementById("select_branch");
+    if (selB) selB.value = st.branch;
+    if (document.form.unifibridge_branch) document.form.unifibridge_branch.value = st.branch;
+    var hdrT = document.getElementById("hdr_track");
+    if (hdrT) {
+      hdrT.textContent = st.branch === "dev" ? "Dev Track" : "Release Track";
+      hdrT.style.backgroundColor = st.branch === "dev" ? "#d35400" : "#2980b9";
+    }
+  }
+
+  if (st.model_code) {
+    var selM = document.getElementById("select_model");
+    if (selM) selM.value = st.model_code;
+    if (document.form.unifibridge_model) document.form.unifibridge_model.value = st.model_code;
+  }
+
+  if (st.interval_sec) {
+    var selI = document.getElementById("select_interval");
+    if (selI) selI.value = String(st.interval_sec);
+    if (document.form.unifibridge_interval) document.form.unifibridge_interval.value = String(st.interval_sec);
+  }
+
+  if (st.controller_url) {
+    var isAuto = (st.controller_url === ("http://" + detectedGatewayIP + ":8080/inform"));
+    var rad1 = document.getElementById("unifibridge_auto_1");
+    var rad0 = document.getElementById("unifibridge_auto_0");
+    if (rad1 && rad0) {
+      rad1.checked = isAuto;
+      rad0.checked = !isAuto;
+      toggleControllerInput();
+      if (!isAuto) {
+        document.getElementById("input_controller_url").value = st.controller_url;
+      }
+    }
+  }
+}
+
 function updateUI(st) {
   if (!st) return;
+
+  // Initialize form controls ONCE from daemon state so user edits are never overwritten
+  initFormOnce(st);
+
   var badge = document.getElementById("bridge_badge");
   var statusText = document.getElementById("bridge_status_text");
   if (st.running) {
@@ -165,25 +214,7 @@ function updateUI(st) {
     if (curV) curV.textContent = st.version;
   }
 
-  if (st.branch) {
-    currentBranch = st.branch;
-    var selB = document.getElementById("select_branch");
-    if (selB) selB.value = st.branch;
-    if (document.form.unifibridge_branch) document.form.unifibridge_branch.value = st.branch;
-    var hdrT = document.getElementById("hdr_track");
-    if (hdrT) {
-      hdrT.textContent = st.branch === "dev" ? "Dev Track" : "Release Track";
-      hdrT.style.backgroundColor = st.branch === "dev" ? "#d35400" : "#2980b9";
-    }
-  }
-
   document.getElementById("model_val").textContent = (st.model || "UniFi 6 Mesh") + " (Firmware " + (st.firmware || "6.8.2") + ")";
-  if (st.model_code) {
-    var selM = document.getElementById("select_model");
-    if (selM && !selM.dataset.userModified) {
-      selM.value = st.model_code;
-    }
-  }
   document.getElementById("controller_val").textContent = st.controller_url || ("http://" + detectedGatewayIP + ":8080/inform");
   document.getElementById("heartbeat_val").textContent = (st.last_heartbeat || "-") + " [" + (st.mode || "GCM") + "]";
 
@@ -214,7 +245,9 @@ function updateUI(st) {
         pHtml += '<span style="background:' + bg + '; color:#fff; font-size:10px; font-weight:bold; padding:2px 7px; border-radius:3px;">' + label + '</span>';
       }
       pHtml += '</div>';
-      portsEl.innerHTML = pHtml;
+      if (portsEl.innerHTML !== pHtml) {
+        portsEl.innerHTML = pHtml;
+      }
     }
   }
 
@@ -238,8 +271,14 @@ function updateUI(st) {
 
   if (st.recent_logs && st.recent_logs.length > 0) {
     var logBox = document.getElementById("console_box");
-    logBox.textContent = st.recent_logs.join("\n");
-    logBox.scrollTop = logBox.scrollHeight;
+    var newLogText = st.recent_logs.join("\n");
+    if (logBox.textContent !== newLogText) {
+      var wasAtBottom = (logBox.scrollHeight - logBox.clientHeight <= logBox.scrollTop + 20);
+      logBox.textContent = newLogText;
+      if (wasAtBottom) {
+        logBox.scrollTop = logBox.scrollHeight;
+      }
+    }
   }
 }
 
@@ -273,6 +312,45 @@ function updateClusterUI(cl) {
       : '<span class="badge_offline" style="font-size:10px;">' + n.sync_status + '</span>';
 
     html += '<tr style="border-bottom:1px solid #3e4d66;">';
+    html += '<td class="settingvalue" style="font-weight:bold; color:#fff;">' + n.name + (isLocal ? ' <span style="font-size:10px; color:#f1c40f;">(This AP)</span>' : '') + '</td>';
+    html += '<td class="settingvalue">' + n.role + '</td>';
+    html += '<td class="settingvalue"><code style="color:#2ecc71;">' + (n.version || "1.0.0") + '</code></td>';
+    html += '<td class="settingvalue"><code>' + n.ip + '</code></td>';
+    html += '<td class="settingvalue">' + statusBadge + '</td>';
+    var loadTag = (n.cu_2g || n.cu_5g) ? ' <span style="font-size:10px; color:#f39c12;">[' + (n.cu_2g || 0) + '% / ' + (n.cu_5g || 0) + '% load]</span>' : '';
+    html += '<td class="settingvalue">' + n.total_clients + ' <span style="font-size:10px; color:#bdc3c7;">(' + n.clients_2g + 'G / ' + n.clients_5g + 'A)</span>' + loadTag + '</td>';
+    html += '<td class="settingvalue">' + syncBadge + '</td>';
+    html += '</tr>';
+  }
+
+  // Only rewrite innerHTML if content has actually changed to prevent DOM reflow and scroll jumps
+  if (html !== lastClusterHtml) {
+    tbody.innerHTML = html;
+    lastClusterHtml = html;
+  }
+
+  var syncBadgeEl = document.getElementById("cluster_sync_badge");
+  if (syncBadgeEl) {
+    if (allInSync) {
+      syncBadgeEl.className = "badge_online";
+      syncBadgeEl.textContent = "ALL NODES IN SYNC";
+    } else {
+      syncBadgeEl.className = "badge_offline";
+      syncBadgeEl.textContent = "SYNC ATTENTION NEEDED";
+    }
+  }
+
+  var syncTimeEl = document.getElementById("last_sync_time");
+  if (syncTimeEl) {
+    syncTimeEl.textContent = cl.last_sync || "-";
+  }
+
+  if (cl.nodes.length > 1) {
+    document.getElementById("stat_total").textContent = clusterTotal + " (Cluster)";
+    document.getElementById("stat_2g").textContent = cluster2g;
+    document.getElementById("stat_5g").textContent = cluster5g;
+  }
+}
     html += '<td class="settingvalue" style="font-weight:bold; color:#fff;">' + n.name + (isLocal ? ' <span style="font-size:10px; color:#f1c40f;">(This AP)</span>' : '') + '</td>';
     html += '<td class="settingvalue">' + n.role + '</td>';
     html += '<td class="settingvalue"><code style="color:#2ecc71;">' + (n.version || "1.0.0") + '</code></td>';
@@ -480,7 +558,7 @@ function loadStatus() {
 
 function toggleAutoRefresh(cb) {
   if (cb.checked) {
-    if (!autoRefreshTimer) autoRefreshTimer = setInterval(loadStatus, 5000);
+    if (!autoRefreshTimer) autoRefreshTimer = setInterval(loadStatus, 15000);
   } else {
     if (autoRefreshTimer) {
       clearInterval(autoRefreshTimer);
@@ -558,7 +636,7 @@ function initial(){
   document.getElementById("detected_gw_text").textContent = detectedGatewayIP;
   loadStatus();
   loadUpdateStatus();
-  autoRefreshTimer = setInterval(loadStatus, 5000);
+  // Auto-refresh is disabled by default to ensure seamless form editing and scrolling without layout thrashing
 }
 </script>
 </head>
@@ -834,7 +912,7 @@ function initial(){
                         <span style="font-size:12px; font-weight:bold; color:#ecf0f1;">Live Heartbeat Events</span>
                         <div>
                           <label style="font-size:11px; color:#bdc3c7; cursor:pointer;">
-                            <input type="checkbox" id="auto_refresh_chk" checked onclick="toggleAutoRefresh(this);"> Auto-refresh (5s)
+                            <input type="checkbox" id="auto_refresh_chk" onclick="toggleAutoRefresh(this);"> Auto-refresh (15s)
                           </label>
                           <input type="button" class="button_gen" style="margin-left:8px; padding:2px 8px; font-size:11px;" value="Refresh" onclick="loadStatus();">
                         </div>
