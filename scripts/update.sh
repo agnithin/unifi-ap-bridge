@@ -190,6 +190,7 @@ EOF
 
 managed_assets="unifi-bridge.tar.gz
 unifi-bridge.tar.gz.sha256
+install.sh
 start.sh
 apply_config.sh
 sync_nodes.sh
@@ -268,6 +269,9 @@ watchdog.sh"
     for rel in start.sh apply_config.sh sync_nodes.sh unifi-bridge.sh update.sh watchdog.sh; do
         [ "$(openssl dgst -sha256 "$TXN_DIR/snapshot/$rel" 2>/dev/null | awk '{print $NF}')" = "$(openssl dgst -sha256 "$prior_dir/$rel" 2>/dev/null | awk '{print $NF}')" ] || { echo "Prior installed script set does not match its bundle" >&2; rm -rf "$TXN_DIR"; return 1; }
     done
+    if [ -f "$TXN_DIR/snapshot/install.sh" ]; then
+        [ "$(openssl dgst -sha256 "$TXN_DIR/snapshot/install.sh" 2>/dev/null | awk '{print $NF}')" = "$(openssl dgst -sha256 "$prior_dir/install.sh" 2>/dev/null | awk '{print $NF}')" ] || { echo "Prior installed installer does not match its bundle" >&2; rm -rf "$TXN_DIR"; return 1; }
+    fi
     [ "$(openssl dgst -sha256 "$TXN_DIR/snapshot/webui/unifi-bridge.asp" 2>/dev/null | awk '{print $NF}')" = "$(openssl dgst -sha256 "$prior_dir/unifi-bridge.asp" 2>/dev/null | awk '{print $NF}')" ] || { echo "Prior installed WebUI does not match its bundle" >&2; rm -rf "$TXN_DIR"; return 1; }
     if "$prior_binary" -config "$CONFIG_FILE" -is-enabled; then
         prior_status=$(cat "$STATUS_JS" 2>/dev/null)
@@ -318,6 +322,91 @@ atomic_install() {
     return "$result"
 }
 
+file_sha256() {
+    [ -f "$1" ] || return 1
+    digest_output=$(openssl dgst -sha256 "$1" 2>/dev/null) || return 1
+    digest_value=$(printf '%s\n' "$digest_output" | awk '{print $NF}')
+    case "$digest_value" in *[!0-9a-f]*|'') return 1 ;; esac
+    [ "${#digest_value}" -eq 64 ] || return 1
+    printf '%s\n' "$digest_value"
+}
+
+file_mode() {
+    [ -f "$1" ] || return 1
+    mode_output=$(ls -ld "$1" 2>/dev/null) || return 1
+    mode_value=$(printf '%s\n' "$mode_output" | awk 'NF {print substr($1,1,10); exit}')
+    [ "${#mode_value}" -eq 10 ] || return 1
+    case "$mode_value" in -* ) ;; *) return 1 ;; esac
+    case "$mode_value" in *[!rwxstST-]*) return 1 ;; esac
+    printf '%s\n' "$mode_value"
+}
+
+same_file_contents() {
+    expected_digest=$(file_sha256 "$1") || return 1
+    actual_digest=$(file_sha256 "$2") || return 1
+    [ "$expected_digest" = "$actual_digest" ]
+}
+
+same_file_mode() {
+    expected_mode=$(file_mode "$1") || return 1
+    actual_mode=$(file_mode "$2") || return 1
+    [ "$expected_mode" = "$actual_mode" ]
+}
+
+verify_installed_generation() {
+    staged_dir="$1"; staged_archive="$2"; staged_checksum="$3"
+    for rel in install.sh start.sh apply_config.sh sync_nodes.sh unifi-bridge.sh update.sh watchdog.sh version.txt; do
+        [ -f "$staged_dir/$rel" ] && [ -f "$INSTALL_DIR/$rel" ] &&
+            same_file_contents "$staged_dir/$rel" "$INSTALL_DIR/$rel" || return 1
+    done
+    [ -f "$staged_dir/unifi-bridge.asp" ] && [ -f "$INSTALL_DIR/webui/unifi-bridge.asp" ] &&
+        same_file_contents "$staged_dir/unifi-bridge.asp" "$INSTALL_DIR/webui/unifi-bridge.asp" || return 1
+    [ -f "$staged_archive" ] && [ -f "$INSTALL_DIR/unifi-bridge.tar.gz" ] &&
+        same_file_contents "$staged_archive" "$INSTALL_DIR/unifi-bridge.tar.gz" || return 1
+    [ -f "$staged_checksum" ] && [ -f "$INSTALL_DIR/unifi-bridge.tar.gz.sha256" ] &&
+        same_file_contents "$staged_checksum" "$INSTALL_DIR/unifi-bridge.tar.gz.sha256"
+}
+
+verify_restored_generation() {
+    [ -f "$TXN_DIR/manifest" ] || return 1
+    skip_recovery_entry="${1:-0}"
+    restore_mismatch=""
+    while IFS=' ' read -r state rel; do
+        case "$rel" in
+            unifi-bridge.tar.gz|unifi-bridge.tar.gz.sha256|install.sh|start.sh|apply_config.sh|sync_nodes.sh|unifi-bridge.sh|update.sh|watchdog.sh|version.txt|webui/unifi-bridge.asp) ;;
+            *) return 1 ;;
+        esac
+        if [ "$skip_recovery_entry" = 1 ] && [ "$rel" = start.sh ]; then
+            continue
+        fi
+        dest="$INSTALL_DIR/$rel"
+        src="$TXN_DIR/snapshot/$rel"
+        if [ "$state" = present ]; then
+            if [ ! -f "$src" ] || [ ! -f "$dest" ]; then
+                restore_mismatch="$rel missing"; return 1
+            fi
+            if ! same_file_contents "$src" "$dest"; then
+                restore_mismatch="$rel content"; return 1
+            fi
+            if ! same_file_mode "$src" "$dest"; then
+                restore_mismatch="$rel mode"; return 1
+            fi
+        elif [ "$state" = absent ]; then
+            [ ! -e "$dest" ] || { restore_mismatch="$rel"; return 1; }
+        else
+            restore_mismatch="$rel"
+            return 1
+        fi
+    done < "$TXN_DIR/manifest"
+}
+
+validate_staged_generation() {
+    staged_dir="$1"
+    for rel in install.sh start.sh apply_config.sh sync_nodes.sh unifi-bridge.sh update.sh watchdog.sh version.txt bundle.json unifi-bridge.asp; do
+        [ -f "$staged_dir/$rel" ] && [ -r "$staged_dir/$rel" ] || return 1
+    done
+}
+
 restore_transaction() {
     [ -f "$TXN_DIR/active" ] || return 1
     UNIFI_BRIDGE_START_LOCK_OWNER="$$" UNIFI_BRIDGE_MUTATION_LOCK_OWNER="$$" "$INSTALL_DIR/start.sh" --recover-only || return 1
@@ -331,10 +420,11 @@ clear_transaction() {
     rm -rf "$complete"
 }
 
-restore_prior_entry_and_clear() {
-    atomic_install "$TXN_DIR/snapshot/start.sh" "$INSTALL_DIR/start.sh" 755 || return 1
+restore_prior_entry() {
+    tmp="$INSTALL_DIR/start.sh.restore.$$"
+    cp -p "$TXN_DIR/snapshot/start.sh" "$tmp" && mv -f "$tmp" "$INSTALL_DIR/start.sh" || { rm -f "$tmp"; return 1; }
     sync
-    clear_transaction
+    return 0
 }
 
 rollback_and_verify() {
@@ -343,6 +433,10 @@ rollback_and_verify() {
     write_update_status "ERROR" "$branch" "$local_ver" "${remote_ver:-}" "$reason; attempting verified rollback"
     if ! restore_transaction; then
         write_update_status "ERROR" "$branch" "$local_ver" "${remote_ver:-}" "$reason; ROLLBACK FAILED: prior addon assets could not be restored; journal retained"
+        return 1
+    fi
+    if ! verify_restored_generation 1; then
+        write_update_status "ERROR" "$branch" "$local_ver" "${remote_ver:-}" "$reason; ROLLBACK FAILED: restored asset $restore_mismatch did not match the complete snapshot; journal retained"
         return 1
     fi
     if ! UNIFI_BRIDGE_START_LOCK_OWNER="$$" UNIFI_BRIDGE_MUTATION_LOCK_OWNER="$$" "$INSTALL_DIR/start.sh"; then
@@ -398,8 +492,20 @@ rollback_and_verify() {
             return 1
         fi
     fi
-    if ! restore_prior_entry_and_clear; then
+    if ! verify_restored_generation 1; then
+        write_update_status "ERROR" "$branch" "$local_ver" "${remote_ver:-}" "$reason; ROLLBACK FAILED: restored asset $restore_mismatch changed before verification; journal retained"
+        return 1
+    fi
+    if ! restore_prior_entry; then
         write_update_status "ERROR" "$branch" "$local_ver" "${remote_ver:-}" "$reason; prior process verified but recovery entry/journal cleanup failed"
+        return 1
+    fi
+    if ! verify_restored_generation; then
+        write_update_status "ERROR" "$branch" "$local_ver" "${remote_ver:-}" "$reason; ROLLBACK FAILED: restored asset $restore_mismatch did not match the complete snapshot; journal retained"
+        return 1
+    fi
+    if ! clear_transaction; then
+        write_update_status "ERROR" "$branch" "$local_ver" "${remote_ver:-}" "$reason; prior assets verified but transaction cleanup failed"
         return 1
     fi
     write_update_status "ERROR" "$branch" "$local_ver" "${remote_ver:-}" "$reason; previous addon generation restored and verified"
@@ -640,6 +746,10 @@ watchdog.sh"
         write_update_status "ERROR" "$branch" "$local_ver" "-" "Bundle metadata, version, architecture or source commit did not match the resolved release; installed files were not changed"
         rm -rf "$tmp_dir"; return 1
     fi
+    if ! validate_staged_generation "$tmp_dir/staged"; then
+        write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Extracted bundle lost a required staged asset; installed files were not changed"
+        rm -rf "$tmp_dir"; return 1
+    fi
     if ! acquire_mutation_lock; then
         write_update_status "ERROR" "$branch" "$local_ver" "-" "Another settings, sync or addon mutation is active; installed files were not changed"
         rm -rf "$tmp_dir"; return 1
@@ -672,7 +782,7 @@ watchdog.sh"
         rm -rf "$tmp_dir"; return 1
     fi
     sync
-    for f in start.sh apply_config.sh sync_nodes.sh unifi-bridge.sh update.sh watchdog.sh; do
+    for f in install.sh apply_config.sh sync_nodes.sh unifi-bridge.sh update.sh watchdog.sh; do
         [ "$f" = start.sh ] && continue
         if ! atomic_install "${tmp_dir}/staged/$f" "$INSTALL_DIR/$f" 755; then
             rollback_and_verify "Script installation failed at $f"; rm -rf "$tmp_dir"; return 1
@@ -688,6 +798,9 @@ watchdog.sh"
        ! atomic_install "$installed_checksum_file" "$INSTALL_DIR/unifi-bridge.tar.gz.sha256" 644 ||
        ! atomic_install "${tmp_dir}/staged/unifi-bridge.asp" "/tmp/var/wwwext/${slot}.asp" 644; then
         rollback_and_verify "Persistent or live UI installation failed"; rm -rf "$tmp_dir"; return 1
+    fi
+    if ! verify_installed_generation "$tmp_dir/staged" "$bundle_archive" "$installed_checksum_file"; then
+        rollback_and_verify "Installed addon assets did not match the validated candidate generation"; rm -rf "$tmp_dir"; return 1
     fi
 
     # 4. Restart the local daemon and validate this exact invocation.

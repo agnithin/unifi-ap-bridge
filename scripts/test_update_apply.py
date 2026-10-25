@@ -48,6 +48,7 @@ class ApplyFailureTests(unittest.TestCase):
         self.env["UNIFI_BRIDGE_MUTATION_WAIT_SECONDS"] = "1"
         self.write(self.bin / "uname", "#!/bin/sh\necho armv7l\n")
         self.write(self.bin / "sleep", "#!/bin/sh\nexit 0\n")
+        self.write(self.bin / "sync", "#!/bin/sh\nexit 0\n")
         self.write(self.bin / "pidof", '#!/bin/sh\n[ -f "$RUNNING" ] && echo 1234\n')
         self.write(self.bin / "readlink", "#!/bin/sh\necho " + str(self.root / "tmp/unifi-bridge/unifi-bridge") + "\n")
         self.write(self.bin / "killall", '#!/bin/sh\nrm -f "$RUNNING"\nexit 0\n')
@@ -183,7 +184,7 @@ class ApplyFailureTests(unittest.TestCase):
             env=env or self.env,
             capture_output=True,
             text=True,
-            timeout=8,
+            timeout=40,
         )
 
     def assert_failure(self):
@@ -195,6 +196,128 @@ class ApplyFailureTests(unittest.TestCase):
         self.assertEqual((self.install / "version.txt").read_text(), "1.2.4\n")
         self.assertEqual((self.install / ".ssh/cluster_key").read_text(), "private identity fixture", "invalid bundle changed SSH identity")
         return status
+
+    def make_main_compatibility_generation(self):
+        # Main's observed bootstrap layout: prior daemon/scripts and prior
+        # bundle metadata, with the candidate updater installed in both places.
+        self.write(self.install / "update.sh", (ROOT / "scripts/update.sh").read_text())
+        self.make_prior_bundle()
+
+    def generation_snapshot(self):
+        paths = [
+            "unifi-bridge.tar.gz", "unifi-bridge.tar.gz.sha256", "install.sh", "start.sh",
+            "apply_config.sh", "sync_nodes.sh", "unifi-bridge.sh", "update.sh",
+            "watchdog.sh", "version.txt", "webui/unifi-bridge.asp",
+            "config/config.json", "config/state.json", ".ssh/cluster_key",
+        ]
+        result = {}
+        for rel in paths:
+            path = self.install / rel
+            result[rel] = None if not path.exists() else (path.read_bytes(), path.stat().st_mode & 0o777)
+        return result
+
+    def inject_missing_staged_asset(self, *, whole_stage):
+        self.write(self.bin / "cp",
+            "#!/usr/bin/env python3\nimport sys,subprocess,shutil\nfrom pathlib import Path\n"
+            "source=next((Path(arg) for arg in sys.argv[1:] if '/staged/update.sh' in arg),None)\n"
+            "if source is not None:\n"
+            + (" shutil.rmtree(source.parent)\n" if whole_stage else " source.unlink()\n")
+            + "sys.exit(subprocess.call(['/bin/cp']+sys.argv[1:]))\n")
+
+    def remove_staged_update_during_extract(self):
+        real_tar = shutil.which("tar", path=os.pathsep.join(self.env["PATH"].split(os.pathsep)[1:]))
+        self.write(self.bin / "tar",
+            "#!/usr/bin/env python3\nimport sys,subprocess\nfrom pathlib import Path\n"
+            f"args=sys.argv[1:]; rc=subprocess.call([{real_tar!r}]+args)\n"
+            "if rc == 0 and '-xzf' in args and '-C' in args:\n"
+            " target=Path(args[args.index('-C')+1])\n"
+            " if target.name == 'staged': (target/'update.sh').unlink()\n"
+            "sys.exit(rc)\n")
+
+    def test_verification_helpers_reject_failed_or_invalid_tool_output(self):
+        source = (ROOT / "scripts/update.sh").read_text()
+        start = source.index("file_sha256() {")
+        end = source.index("verify_installed_generation() {")
+        helpers = source[start:end]
+        sample = self.root / "sample"
+        sample.write_text("fixture")
+        cases = (
+            ("openssl", "file_sha256", "", 1),
+            ("openssl", "file_sha256", "not-a-digest", 0),
+            ("openssl", "file_sha256", "SHA2-256(file)= " + "a" * 64, 1),
+            ("ls", "file_mode", "", 1),
+            ("ls", "file_mode", "not-a-mode", 0),
+            ("ls", "file_mode", "-rwxr-xr-x 1 user group 1 Jan 1 00:00 sample", 1),
+        )
+        for command, helper, output, exit_code in cases:
+            with self.subTest(command=command, output=output, exit_code=exit_code):
+                wrapper = self.bin / command
+                wrapper.write_text(
+                    "#!/bin/sh\nprintf '%s\\n' " + repr(output) + "\nexit " + str(exit_code) + "\n"
+                )
+                wrapper.chmod(0o755)
+                result = subprocess.run(
+                    ["sh", "-c", helpers + "\n" + helper + ' "$1"', "test", str(sample)],
+                    env=dict(self.env, PATH=str(self.bin) + os.pathsep + os.environ["PATH"]),
+                    capture_output=True, text=True, timeout=3,
+                )
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def assert_mixed_generation_recovery(self, result, expected_snapshot, request_id):
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, output)
+        self.assertIn("staged/update.sh", output)
+        self.assertTrue("can't stat" in output or "No such file" in output, output)
+        status = json.loads((self.web / "update_status.js").read_text().split("=", 1)[1].strip().rstrip(";"))
+        self.assertEqual(status["status"], "ERROR")
+        self.assertIn("restored and verified", status["message"])
+        operation = json.loads((self.web / "cluster_operation.js").read_text().split("=", 1)[1].strip().rstrip(";"))
+        self.assertEqual(operation["operation_id"], request_id)
+        self.assertEqual(operation["status"], "FAILED")
+        current_snapshot = self.generation_snapshot()
+        changed = [rel for rel in expected_snapshot if current_snapshot[rel] != expected_snapshot[rel]]
+        self.assertEqual(current_snapshot, expected_snapshot, f"restored generation differs at: {changed}")
+        self.assertEqual((self.install / "config/config.json").read_text(), '{"branch":"dev"}')
+        self.assertEqual((self.install / "config/state.json").read_text(), '{"adopted":true,"identity":"preserve"}')
+        self.assertEqual((self.install / ".ssh/cluster_key").read_text(), "private identity fixture")
+        self.assertFalse((self.install / ".update-transaction").exists())
+        self.assertFalse((self.root / "update.lock").exists())
+        self.assertFalse((self.root / "mutation.lock").exists())
+        self.assertFalse((self.root / "start.lock").exists())
+
+    def test_apply_exact_missing_staged_update_script_rolls_back_mixed_prior(self):
+        self.make_main_compatibility_generation()
+        before = self.generation_snapshot()
+        self.inject_missing_staged_asset(whole_stage=False)
+        request_id = "777126"
+        result = self.run_apply(args=["apply-exact", "dev", COMMIT, request_id])
+        self.assert_mixed_generation_recovery(result, before, request_id)
+
+    def test_apply_exact_removed_stage_tree_rolls_back_mixed_prior(self):
+        self.make_main_compatibility_generation()
+        before = self.generation_snapshot()
+        self.inject_missing_staged_asset(whole_stage=True)
+        request_id = "777127"
+        result = self.run_apply(args=["apply-exact", "dev", COMMIT, request_id])
+        self.assert_mixed_generation_recovery(result, before, request_id)
+
+    def test_apply_exact_missing_staged_asset_fails_before_transaction(self):
+        self.make_main_compatibility_generation()
+        before = self.generation_snapshot()
+        self.remove_staged_update_during_extract()
+        request_id = "777128"
+        result = self.run_apply(args=["apply-exact", "dev", COMMIT, request_id])
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        status = json.loads((self.web / "update_status.js").read_text().split("=", 1)[1].strip().rstrip(";"))
+        self.assertEqual(status["status"], "ERROR")
+        self.assertIn("Extracted bundle lost a required staged asset", status["message"])
+        self.assertEqual(self.generation_snapshot(), before)
+        self.assertFalse((self.install / ".update-transaction").exists())
+        self.assertFalse((self.root / "mutation.lock").exists())
+        self.assertFalse((self.root / "start.lock").exists())
+        operation = json.loads((self.web / "cluster_operation.js").read_text().split("=", 1)[1].strip().rstrip(";"))
+        self.assertEqual(operation["operation_id"], request_id)
+        self.assertEqual(operation["status"], "FAILED")
 
     def test_missing_bundle_fails_closed(self):
         (self.assets / self.bundle_name).unlink()
@@ -332,6 +455,7 @@ class ApplyFailureTests(unittest.TestCase):
         self.assertFalse((self.install / ".update-transaction").exists())
 
     def test_enabled_candidate_requires_fresh_identity_then_commits(self):
+        self.make_main_compatibility_generation()
         self.write(self.bin / "nohup",
                    '#!/bin/sh\ntouch "$RUNNING"\ncat > "$STATUS_FILE" <<EOF\n'
                    'window.unifiBridgeStatus = {"running": true, "enabled": true, "version": "1.2.5", "commit": "' + COMMIT + '", "pid": 1234, "status_updated_at": ' + '$(date +%s)' + ', "last_successful_inform": "2026-10-25 17:20:00", "last_status": "Active (GCM)"};\nEOF\n')
@@ -346,6 +470,16 @@ class ApplyFailureTests(unittest.TestCase):
         self.assertEqual((self.install/".ssh/cluster_key").read_text(),"private identity fixture")
         installed_manifest = (self.install / "unifi-bridge.tar.gz.sha256").read_text()
         self.assertRegex(installed_manifest, r"^[0-9a-f]{64}  unifi-bridge\.tar\.gz\n$")
+        self.assertEqual((self.install / "unifi-bridge.tar.gz").read_bytes(), (self.assets / self.bundle_name).read_bytes())
+        with tarfile.open(self.install / "unifi-bridge.tar.gz", "r:gz") as archive:
+            for member, installed in (
+                ("install.sh", "install.sh"), ("start.sh", "start.sh"),
+                ("apply_config.sh", "apply_config.sh"), ("sync_nodes.sh", "sync_nodes.sh"),
+                ("unifi-bridge.sh", "unifi-bridge.sh"), ("update.sh", "update.sh"),
+                ("watchdog.sh", "watchdog.sh"), ("version.txt", "version.txt"),
+                ("unifi-bridge.asp", "webui/unifi-bridge.asp"),
+            ):
+                self.assertEqual((self.install / installed).read_bytes(), archive.extractfile(member).read(), member)
 
         # A second activation must accept the first activation as its complete,
         # checksum-verified rollback generation. Fail its first asset replacement

@@ -29,7 +29,7 @@ recover_update() {
     while IFS=' ' read -r state rel; do
         [ "$rel" = "start.sh" ] && continue
         case "$rel" in
-            unifi-bridge.tar.gz|unifi-bridge.tar.gz.sha256|apply_config.sh|sync_nodes.sh|unifi-bridge.sh|update.sh|watchdog.sh|version.txt|webui/unifi-bridge.asp) ;;
+            unifi-bridge.tar.gz|unifi-bridge.tar.gz.sha256|install.sh|apply_config.sh|sync_nodes.sh|unifi-bridge.sh|update.sh|watchdog.sh|version.txt|webui/unifi-bridge.asp) ;;
             *) failed=1; break ;;
         esac
         dest="$INSTALL_DIR/$rel"

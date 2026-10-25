@@ -17,7 +17,7 @@ class StartupTests(unittest.TestCase):
         self.install=self.root/"addon";(self.install/"config").mkdir(parents=True);(self.install/"bin").mkdir()
         self.bin=self.root/"bin";self.bin.mkdir();self.launches=self.root/"launches"
         self.env=dict(os.environ,PATH=str(self.bin)+os.pathsep+os.environ["PATH"],LAUNCHES=str(self.launches),STATUS_FILE=str(self.root/"tmp/var/wwwext/unifi-bridge/status.js"))
-        for name,body in {"killall":"exit 0","cru":"exit 0","uname":"echo armv7l","pidof":"exit 0"}.items():
+        for name,body in {"killall":"exit 0","cru":"exit 0","uname":"echo armv7l","pidof":"exit 0","sync":"exit 0"}.items():
             p=self.bin/name;p.write_text("#!/bin/sh\n"+body+"\n");p.chmod(0o755)
         daemon=self.install/"bin/unifi-bridge";daemon.write_text('#!/usr/bin/env python3\nimport json,os,sys,time\nfrom pathlib import Path\ncfg=json.loads(Path(sys.argv[sys.argv.index(\'-config\')+1]).read_text())\nif \'-is-enabled\' in sys.argv:sys.exit(0 if cfg.get(\'enabled\',True) else 3)\nif \'-once\' in sys.argv and cfg.get(\'enabled\') is False:\n    p=Path(os.environ[\'STATUS_FILE\']);p.parent.mkdir(parents=True,exist_ok=True);p.write_text(\'window.unifiBridgeStatus = {"running":false,"enabled":false,"version":"1.2.4","commit":"'+'a'*40+'","status_updated_at":\'+str(int(time.time()))+\'};\');sys.exit(0)\nwith open(os.environ[\'LAUNCHES\'],\'a\') as f:f.write(\'launched\\n\')\n');daemon.chmod(0o755)
         source=(ROOT/"scripts/start.sh").read_text().replace('/tmp/',str(self.root/"tmp")+'/').replace('/jffs/addons/unifi-bridge',str(self.install))
