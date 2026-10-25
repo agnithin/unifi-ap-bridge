@@ -2,7 +2,7 @@
 
 A high-performance, ultra-lightweight standalone daemon and WebUI addon for **Asuswrt-Merlin** and Linux routers that bridges Broadcom Wi-Fi and switch telemetry into the **Ubiquiti UniFi Inform Protocol** (`:8080/inform`).
 
-It emulates a genuine UniFi 6 Access Point—featuring native **UniFi 6 In-Wall (`U6-IW`)** switch port emulation as well as **UniFi 6 Mesh (`U6M`)**, **UniFi 6 Pro (`U6P`)**, and **UniFi 6 Lite (`U6L`)**—allowing non-UniFi access points to seamlessly report native wireless client classification, roaming, Wi-Fi 6 (`802.11ax`) connection rates, physical switch port link states, and live RSSI into the **UniFi Network Controller**.
+It emulates a genuine UniFi 6 Access Point—featuring native **UniFi 6 In-Wall (`U6-IW`)** switch port emulation as well as **UniFi 6 Mesh (`U6M`)**, **UniFi 6 Pro (`U6P`)**, and **UniFi 6 Lite (`U6L`)**—allowing non-UniFi access points to seamlessly report native wireless client classification, association telemetry, Wi-Fi 6 (`802.11ax`) connection rates, physical switch port link states, and live RSSI into the **UniFi Network Controller**.
 
 ---
 
