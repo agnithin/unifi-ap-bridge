@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 import unittest
 
 SOURCE = (Path(__file__).parent / "sync_nodes.sh").read_text()
@@ -61,15 +62,124 @@ class ClusterTests(unittest.TestCase):
         fixture = self.root / "remote.txt"
         self.env["FIXTURE"] = str(fixture)
         for epoch, live_pid, expected in [(990, "456", True), (800, "456", False), (990, "", False), (None, "456", False)]:
-            status = {"running": True, "pid": 456, "hostname": "Node", "interval_sec": 10, "total_stations": 3}
+            status = {"running": True, "enabled": True, "pid": 456, "commit": "a" * 40,
+                      "version": "1.2.2", "hostname": "Node", "interval_sec": 10,
+                      "total_stations": 3, "last_successful_inform": "2026-10-25 00:00:00",
+                      "last_status": "Active (GCM)"}
             if epoch is not None:
                 status["status_updated_at"] = epoch
-            fixture.write_text('window.unifiBridgeStatus = ' + json.dumps(status, indent=2) + ';\n---LIVE---\n1000\n' + live_pid + '\n---VER---\n1.2.2\n---TEMP---\n65000\n')
+            fixture.write_text('window.unifiBridgeStatus = ' + json.dumps(status, indent=2) + ';\n---LIVE---\n1000\n' + live_pid + '\n/tmp/unifi-bridge/unifi-bridge\n---VER---\n1.2.2\n---OP---\n---UPDATE---\n---TEMP---\n65000\n')
             subprocess.run(["sh", str(script), "status"], env=self.env, check=True, capture_output=True, timeout=3)
             raw = (self.root / "www/unifi-bridge/cluster.js").read_text()
             node = json.loads(raw.split("=", 1)[1].strip().rstrip(";"))["nodes"][1]
             self.assertEqual(node["status"] == "RUNNING", expected)
             self.assertEqual(node["sync_status"], "Version Match (Config Unverified)" if expected else "Stale or Stopped")
+
+
+    def prepare_settings_sync(self, *, status_age=10, operation_status="APPLIED", dispatch_rc=0,
+                              status_override=None, live_pid="", live_exe="", remote_unreachable=False):
+        install = self.root / "install"
+        (install / ".ssh").mkdir(parents=True)
+        (install / ".ssh/cluster_key").touch()
+        (install / "config").mkdir()
+        (install / "config/config.json").write_text('{"enabled":false,"branch":"dev","interval_sec":15,"nodes":["10.0.0.2"],"uplink_remote_port":1}')
+        web = self.root / "tmp/var/wwwext/unifi-bridge"
+        web.mkdir(parents=True)
+        commit = "a" * 40
+        now = int(time.time())
+        (web / "status.js").write_text(
+            'window.unifiBridgeStatus = ' + json.dumps({"running": False, "enabled": False,
+                "version": "1.2.5", "commit": commit, "status_updated_at": now,
+                "interval_sec": 10, "pid": 123}) + ';\n')
+        self.stub("nvram", 'case "$2" in lan_ipaddr) echo 10.0.0.1;; lan_hostname) echo Main;; esac')
+        self.stub("pidof", "echo 123")
+        query_status = {"running": False, "enabled": False, "version": "1.2.5", "commit": commit,
+                        "status_updated_at": now - status_age, "interval_sec": 10,
+                        "last_successful_inform": "2026-10-25 00:00:00", "last_status": "Active (GCM)"}
+        if status_override:
+            query_status.update(status_override)
+        query = ('window.unifiBridgeStatus = ' + json.dumps(query_status) + ';\n'
+                 '---LIVE---\n' + str(now) + '\n' + str(query_status.get("pid", "")) + '\n' + live_exe + '\n---VER---\n1.2.5\n---OP---\n'
+                 + json.dumps({"operation_id": "123456", "operation": "sync", "status": operation_status})
+                 + '\n---UPDATE---\n---TEMP---\n')
+        fixture = self.root / "remote-query.txt"
+        fixture.write_text(query)
+        dispatch = self.root / "dispatch-input.txt"
+        query_command = self.root / "remote-query-command.txt"
+        ssh_body = ('exit 255' if remote_unreachable else
+            'test ! -d "$LOCAL_MUTATION_LOCK" || exit 98\n'
+            'last=""; for arg do last="$arg"; done\n'
+            'case "$last" in *---LIVE---*) printf "%s" "$last" > "$REMOTE_QUERY_COMMAND"; cat "$REMOTE_QUERY";; *) cat > "$DISPATCH_INPUT"; exit "$DISPATCH_RC";; esac')
+        self.stub("ssh", ssh_body)
+        local_lock = self.root / "tmp/unifi-bridge-mutation.lock"
+        self.env.update({"REMOTE_QUERY": str(fixture), "DISPATCH_INPUT": str(dispatch),
+                         "REMOTE_QUERY_COMMAND": str(query_command), "DISPATCH_RC": str(dispatch_rc),
+                         "LOCAL_MUTATION_LOCK": str(local_lock)})
+        source = SOURCE.replace('INSTALL_DIR="/jffs/addons/$ADDON_NAME"', 'INSTALL_DIR="' + str(install) + '"')
+        source = source.replace('/tmp/', str(self.root / "tmp") + '/')
+        script = self.root / "sync-settings.sh"
+        script.write_text(source)
+        return script, dispatch, commit
+
+    def run_settings_sync(self, *, status_age=10, operation_status="APPLIED", dispatch_rc=0,
+                          status_override=None, live_pid="", live_exe="", remote_unreachable=False):
+        script, dispatch, commit = self.prepare_settings_sync(status_age=status_age,
+            operation_status=operation_status, dispatch_rc=dispatch_rc,
+            status_override=status_override, live_pid=live_pid, live_exe=live_exe,
+            remote_unreachable=remote_unreachable)
+        result = subprocess.run(["sh", str(script), "sync", "", "", "123456"], env=self.env,
+            capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        raw = (self.root / "tmp/var/wwwext/unifi-bridge/cluster.js").read_text()
+        try:
+            nodes = json.loads(raw.split("=", 1)[1].strip().rstrip(";"))["nodes"]
+        except Exception as exc:
+            raise AssertionError(raw) from exc
+        return nodes[1], dispatch, commit
+
+    def test_sync_operation_is_verified_even_when_ssh_reply_is_lost_and_preserves_disabled_intent(self):
+        node, dispatch, commit = self.run_settings_sync(dispatch_rc=1)
+        self.assertEqual(node["operation_id"], "123456")
+        self.assertEqual(node["dispatch_result"], "unknown")
+        self.assertEqual(node["stage"], "verified")
+        self.assertEqual(node["outcome"], "success")
+        self.assertEqual(node["commit"], commit)
+        self.assertEqual(node["last_operation_id"], "123456")
+        self.assertEqual(node["last_operation_status"], "APPLIED")
+        self.assertEqual(node["enabled"], False)
+        self.assertIn('"enabled":false', dispatch.read_text().replace(" ", ""))
+        main = json.loads((self.root / "tmp/var/wwwext/unifi-bridge/cluster.js").read_text().split("=", 1)[1].strip().rstrip(";"))["nodes"][0]
+        self.assertEqual(main["enabled"], False)
+        self.assertEqual(main["pid"], "123")
+        self.assertEqual(main["outcome"], "unknown", "disabled metadata with a live PID is not healthy")
+        query = (self.root / "remote-query-command.txt").read_text()
+        self.assertIn("awk '{print $1}'", query, "remote shell must receive an unexpanded PID field reference")
+
+    def test_sync_stale_status_remains_unknown(self):
+        node, _, _ = self.run_settings_sync(status_age=500)
+        self.assertEqual(node["freshness"], "stale")
+        self.assertEqual(node["outcome"], "unknown")
+        self.assertEqual(node["stage"], "verification_pending")
+        self.assertEqual(node["last_operation_status"], "APPLIED")  # terminal result survives stale health
+
+    def test_sync_explicit_remote_failure_is_per_node_failure(self):
+        node, _, _ = self.run_settings_sync(operation_status="FAILED", dispatch_rc=1)
+        self.assertEqual(node["outcome"], "failure")
+        self.assertEqual(node["stage"], "failed")
+
+    def test_applied_operation_with_fresh_stopped_enabled_node_is_not_success(self):
+        node, _, _ = self.run_settings_sync(status_override={"running": False, "enabled": True,
+            "pid": 123, "last_status": "Error: provider failed"}, live_exe="/tmp/unifi-bridge/unifi-bridge")
+        self.assertEqual(node["freshness"], "fresh")
+        self.assertEqual(node["stage"], "verification_pending")
+        self.assertEqual(node["outcome"], "unknown")
+
+    def test_unreachable_node_has_unknown_enabled_and_running_state(self):
+        node, _, _ = self.run_settings_sync(remote_unreachable=True)
+        self.assertEqual(node["stage"], "unreachable")
+        self.assertEqual(node["outcome"], "unknown")
+        self.assertIsNone(node["enabled"])
+        self.assertIsNone(node["running"])
 
     def test_version_cmp(self):
         update_src = (Path(__file__).parent / "update.sh").read_text()

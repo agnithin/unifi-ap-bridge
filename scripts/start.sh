@@ -112,17 +112,48 @@ finish_recovery() {
     return 0
 }
 
-# Serialize manual/boot/watchdog starts with activation. Never steal an
-# existing lock based on PID alone; an interrupted owner needs inspection.
-if [ "${UNIFI_BRIDGE_START_LOCK_HELD:-0}" != 1 ]; then
+MUTATION_LOCK="/tmp/unifi-bridge-mutation.lock"
+mutation_lock_owned=0
+start_lock_owned=0
+release_start_locks() {
+    if [ "$start_lock_owned" -eq 1 ] && [ "$(cat "$START_LOCK/pid" 2>/dev/null)" = "$$" ]; then
+        rm -f "$START_LOCK/pid"; rmdir "$START_LOCK" 2>/dev/null || true
+    fi
+    if [ "$mutation_lock_owned" -eq 1 ] && [ "$(cat "$MUTATION_LOCK/pid" 2>/dev/null)" = "$$" ]; then
+        rm -f "$MUTATION_LOCK/pid"; rmdir "$MUTATION_LOCK" 2>/dev/null || true
+    fi
+}
+trap 'release_start_locks' 0
+trap 'exit 130' INT
+trap 'exit 143' TERM
+# All persistent mutations follow mutation -> start. Inherited ownership is
+# accepted only when the supplied owner token matches the lock record.
+if [ -n "${UNIFI_BRIDGE_MUTATION_LOCK_OWNER:-}" ]; then
+    [ "$(cat "$MUTATION_LOCK/pid" 2>/dev/null)" = "$UNIFI_BRIDGE_MUTATION_LOCK_OWNER" ] || {
+        echo "Inherited mutation lock ownership is invalid" >&2; exit 1;
+    }
+else
+    tries=0
+    mutation_wait=${UNIFI_BRIDGE_MUTATION_WAIT_SECONDS:-30}
+    while ! (umask 077; mkdir "$MUTATION_LOCK") 2>/dev/null; do
+        [ "$tries" -lt "$mutation_wait" ] || { echo "Mutation lock busy; owner $(cat "$MUTATION_LOCK/pid" 2>/dev/null || echo unknown)" >&2; exit 1; }
+        tries=$((tries + 1)); sleep 1
+    done
+    echo "$$" > "$MUTATION_LOCK/pid" || { rmdir "$MUTATION_LOCK" 2>/dev/null; exit 1; }
+    mutation_lock_owned=1
+    export UNIFI_BRIDGE_MUTATION_LOCK_OWNER="$$"
+fi
+if [ -n "${UNIFI_BRIDGE_START_LOCK_OWNER:-}" ]; then
+    [ "$(cat "$START_LOCK/pid" 2>/dev/null)" = "$UNIFI_BRIDGE_START_LOCK_OWNER" ] || {
+        echo "Inherited start lock ownership is invalid" >&2; exit 1;
+    }
+else
     if ! (umask 077; mkdir "$START_LOCK") 2>/dev/null; then
         echo "Another bridge start or activation owns $START_LOCK" >&2
         exit 1
     fi
     echo "$$" > "$START_LOCK/pid" || { rmdir "$START_LOCK" 2>/dev/null; exit 1; }
-    trap 'rm -f "$START_LOCK/pid"; rmdir "$START_LOCK" 2>/dev/null || true' 0
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
+    start_lock_owned=1
 fi
 
 if [ "${1:-}" = "--recover-only" ]; then
@@ -133,7 +164,7 @@ for completed in "$INSTALL_DIR"/.update-complete-*; do
     [ -d "$completed" ] || continue
     rm -rf "$completed" || exit 1
 done
-if [ "${UNIFI_BRIDGE_START_LOCK_HELD:-0}" != 1 ]; then
+if [ -z "${UNIFI_BRIDGE_START_LOCK_OWNER:-}" ]; then
     recover_update || exit 1
 fi
 

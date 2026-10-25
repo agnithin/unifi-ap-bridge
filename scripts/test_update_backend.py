@@ -77,6 +77,7 @@ class UpdateBackendTests(unittest.TestCase):
         source = source.replace('/jffs/addons/unifi-bridge', str(self.install))
         source = source.replace('/jffs/addons/custom_settings.txt', str(settings))
         source = source.replace('/tmp/unifi-bridge-update.log', str(self.root / 'update.log'))
+        source = source.replace('/tmp/unifi-bridge-mutation.lock', str(self.root / 'mutation.lock'))
         handler = self.root / "handler.sh"
         handler.write_text(source)
         subprocess.run(["sh",str(handler),"start","unifi_bridge_check_update_main_123456"],env=self.env,check=True,timeout=5)

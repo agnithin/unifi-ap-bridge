@@ -5,12 +5,6 @@
 
 ADDON_NAME="unifi-bridge"
 INSTALL_DIR="/jffs/addons/$ADDON_NAME"
-# Protect existing cluster credentials as well as newly provisioned directories.
-mkdir -p "$INSTALL_DIR/.ssh"
-# Status runs periodically: avoid chmod writes when modes are already correct.
-[ "$(ls -ld "$INSTALL_DIR" | awk '{print $1}')" = "drwxr-xr-x" ] || chmod 755 "$INSTALL_DIR"
-[ "$(ls -ld "$INSTALL_DIR/.ssh" | awk '{print $1}')" = "drwx------" ] || chmod 700 "$INSTALL_DIR/.ssh"
-
 CONFIG_FILE="$INSTALL_DIR/config/config.json"
 CLUSTER_JS="/tmp/var/wwwext/$ADDON_NAME/cluster.js"
 CLUSTER_JSON="/tmp/$ADDON_NAME-cluster.json"
@@ -91,12 +85,79 @@ get_node_ips() {
 
 ACTION="${1:-sync}"
 NOW=$(date +"%Y-%m-%d %H:%M:%S")
+OPERATION_ID="${4:-$(date +%s)$$}"
+case "$OPERATION_ID" in ''|*[!0-9]*) OPERATION_ID=$(date +%s) ;; esac
+MUTATION_LOCK="/tmp/unifi-bridge-mutation.lock"
+mutation_lock_owned=0
+release_mutation_lock() {
+    if [ "$mutation_lock_owned" -eq 1 ] && [ "$(cat "$MUTATION_LOCK/pid" 2>/dev/null)" = "$$" ]; then
+        rm -f "$MUTATION_LOCK/pid"; rmdir "$MUTATION_LOCK" 2>/dev/null || true
+    fi
+}
+acquire_mutation_lock() {
+    tries=0
+    mutation_wait=${UNIFI_BRIDGE_MUTATION_WAIT_SECONDS:-30}
+    while ! (umask 077; mkdir "$MUTATION_LOCK") 2>/dev/null; do
+        [ "$tries" -lt "$mutation_wait" ] || { echo "Mutation lock busy; owner $(cat "$MUTATION_LOCK/pid" 2>/dev/null || echo unknown)" >&2; return 1; }
+        tries=$((tries + 1)); sleep 1
+    done
+    echo "$$" > "$MUTATION_LOCK/pid" || { rmdir "$MUTATION_LOCK" 2>/dev/null; return 1; }
+    mutation_lock_owned=1
+    trap 'release_mutation_lock; rm -rf "${sync_tmp:-}"' 0
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+}
+assert_no_update_journal() {
+    [ ! -e "$INSTALL_DIR/.update-transaction" ] || {
+        echo "Unfinished addon update journal requires recovery before cluster mutation" >&2; return 1;
+    }
+}
+json_escape() {
+    printf '%s' "$1" | tr -d '\r\n' | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+json_number_or_null() {
+    case "$1" in ''|*[!0-9]*) printf 'null' ;; *) printf '%s' "$1" ;; esac
+}
+
+
+# Snapshot local inputs while holding only this node's mutation lock. Never
+# retain it while waiting for a remote node; reciprocal syncs must not form a
+# distributed lock cycle.
+sync_tmp=""
+NODE_IPS=""
+SYNC_CONFIG=""
+REQUESTED_BRANCH="${2:-}"
+REQUESTED_COMMIT="${3:-}"
+if [ "$ACTION" = "sync" ] || [ "$ACTION" = "update" ]; then
+    acquire_mutation_lock || exit 1
+    assert_no_update_journal || exit 1
+    sync_tmp="/tmp/unifi-bridge-sync-$$"
+    (umask 077; mkdir "$sync_tmp") || exit 1
+    NODE_IPS=$(get_node_ips)
+    if [ "$ACTION" = "sync" ]; then
+        [ -f "$CONFIG_FILE" ] && cp -p "$CONFIG_FILE" "$sync_tmp/config.json" || {
+            echo "Main configuration snapshot unavailable" >&2; exit 1;
+        }
+        SYNC_CONFIG="$sync_tmp/config.json"
+    else
+        case "$REQUESTED_BRANCH" in main|dev) ;; *) echo "Invalid requested cluster release track" >&2; exit 1 ;; esac
+        case "$REQUESTED_COMMIT" in *[!0-9a-f]*|'') REQUESTED_COMMIT="" ;; esac
+        [ "${#REQUESTED_COMMIT}" -eq 40 ] || REQUESTED_COMMIT=""
+        [ -n "$REQUESTED_COMMIT" ] || { echo "Exact local source commit is unavailable" >&2; exit 1; }
+    fi
+    release_mutation_lock
+    mutation_lock_owned=0
+fi
 
 # 1. Gather Main Node Local Status
 main_status_js="/tmp/var/wwwext/$ADDON_NAME/status.js"
 main_pid=$(pidof unifi-bridge 2>/dev/null | awk '{print $1}')
 main_running="false"
-[ -n "$main_pid" ] && main_running="true"
+main_commit=""
+main_inform=""
+main_freshness="unknown"
+main_outcome="unknown"
+
 
 main_total=0
 main_2g=0
@@ -122,15 +183,32 @@ if [ -f "$main_status_js" ]; then
     [ -n "$m_hb" ] && main_heartbeat="$m_hb"
 fi
 
-main_updated=$(grep '"status_updated_at":' "$main_status_js" 2>/dev/null | head -n 1 | awk -F':' '{print $2}' | tr -d ' \t\r\n,')
+main_updated=$(grep '"status_updated_at":' "$main_status_js" 2>/dev/null | head -n 1 | sed -n 's/.*"status_updated_at":[[:space:]]*\([0-9][0-9]*\).*/\1/p')
+main_commit=$(sed -n 's/.*"commit":[[:space:]]*"\([^"]*\)".*/\1/p' "$main_status_js" 2>/dev/null | head -n 1)
+main_inform=$(sed -n 's/.*"last_successful_inform":[[:space:]]*"\([^"]*\)".*/\1/p' "$main_status_js" 2>/dev/null | head -n 1)
+case "$main_commit" in *[!0-9a-f]*|'') main_commit="" ;; esac
+[ "${#main_commit}" -eq 40 ] || main_commit=""
 main_interval=$(grep '"interval_sec":' "$main_status_js" 2>/dev/null | head -n 1 | awk -F':' '{print $2}' | tr -d ' \t\r\n,')
 case "$main_interval" in ''|*[!0-9]*) main_interval=10 ;; esac
-if ! status_is_fresh "$(date +%s)" "$main_updated" "$((main_interval * 3 + 30))"; then
-    main_running="false"
+if status_is_fresh "$(date +%s)" "$main_updated" "$((main_interval * 3 + 30))"; then
+    main_freshness="fresh"
+    if [ -n "$main_pid" ] && [ "$(grep '"pid":' "$main_status_js" 2>/dev/null | head -n 1 | awk -F':' '{print $2}' | tr -d ' \t\r\n,')" = "$main_pid" ]; then
+        main_running="true"
+    fi
+else
+    main_freshness="stale"
 fi
-
-main_version=$(grep '"version":' "$main_status_js" 2>/dev/null | head -n 1 | awk -F'"' '{print $4}')
+main_version=$(sed -n 's/.*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "$main_status_js" 2>/dev/null | head -n 1)
 [ -n "$main_version" ] || main_version=$(cat "$INSTALL_DIR/version.txt" 2>/dev/null || echo "unknown")
+main_enabled="false"
+printf '%s' "$(cat "$main_status_js" 2>/dev/null)" | grep -Eq '"enabled"[[:space:]]*:[[:space:]]*true' && main_enabled="true"
+main_last_status=$(sed -n 's/.*"last_status":[[:space:]]*"\([^"]*\)".*/\1/p' "$main_status_js" 2>/dev/null | head -n 1)
+if [ "$main_freshness" = "fresh" ] && {
+    { [ "$main_enabled" = "false" ] && [ -z "$main_pid" ]; } ||
+    { [ "$main_enabled" = "true" ] && [ "$main_running" = "true" ] && [ -n "$main_inform" ] && case "$main_last_status" in Active\ *) true ;; *) false ;; esac; }
+}; then
+    main_outcome="success"
+fi
 
 if [ -f "/sys/class/thermal/thermal_zone0/temp" ]; then
     raw_temp=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null)
@@ -138,38 +216,77 @@ if [ -f "/sys/class/thermal/thermal_zone0/temp" ]; then
 fi
 
 # Initialize JSON output
+main_version_json=$(json_escape "$main_version")
+main_commit_json=$( [ -n "$main_commit" ] && printf '"%s"' "$main_commit" || printf 'null' )
+main_updated_json=$(json_number_or_null "$main_updated")
+main_inform_json=$( [ -n "$main_inform" ] && printf '"%s"' "$(json_escape "$main_inform")" || printf 'null' )
+main_model_json=$(json_escape "$main_model")
+main_mode_json=$(json_escape "$main_mode")
+main_temp_json=$(json_escape "$main_temp")
+main_hb_json=$(json_escape "$main_heartbeat")
+main_name_json=$(json_escape "$MAIN_NAME")
+main_ip_json=$(json_escape "$MAIN_IP")
+main_pid_json=$( [ -n "$main_pid" ] && json_escape "$main_pid" | sed 's/.*/"&"/' || printf 'null' )
 nodes_json="["
 nodes_json="${nodes_json}
     {
-      \"name\": \"${MAIN_NAME}\",
-      \"ip\": \"${MAIN_IP}\",
+      \"name\": \"${main_name_json}\",
+      \"ip\": \"${main_ip_json}\",
       \"role\": \"Main Gateway\",
-      \"model\": \"${main_model}\",
-      \"version\": \"${main_version}\",
+      \"model\": \"${main_model_json}\",
+      \"version\": \"${main_version_json}\",
+      \"commit\": ${main_commit_json},
       \"status\": \"$( [ "$main_running" = "true" ] && echo "RUNNING" || echo "STOPPED" )\",
-      \"pid\": \"${main_pid:--}\",
+      \"pid\": ${main_pid_json},
+      \"enabled\": ${main_enabled},
+      \"running\": ${main_running},
+      \"status_updated_at\": ${main_updated_json},
+      \"freshness\": \"${main_freshness}\",
+      \"last_successful_inform\": ${main_inform_json},
+      \"operation_id\": \"${OPERATION_ID}\",
+      \"requested_version\": null,
+      \"requested_commit\": ${main_commit_json},
+      \"dispatch_result\": \"not_applicable\",
+      \"stage\": \"observed\",
+      \"outcome\": \"${main_outcome}\",
       \"total_clients\": ${main_total:-0},
       \"clients_2g\": ${main_2g:-0},
       \"clients_5g\": ${main_5g:-0},
       \"cu_2g\": ${main_cu_2g:-0},
       \"cu_5g\": ${main_cu_5g:-0},
-      \"mode\": \"${main_mode}\",
-      \"temp\": \"${main_temp}\",
-      \"last_heartbeat\": \"${main_heartbeat}\",
+      \"mode\": \"${main_mode_json}\",
+      \"temp\": \"${main_temp_json}\",
+      \"last_heartbeat\": \"${main_hb_json}\",
       \"sync_status\": \"Local\"
     }"
 
 # 2. Iterate Satellite Nodes
-NODE_IPS=$(get_node_ips)
+[ "$ACTION" = "sync" ] || [ "$ACTION" = "update" ] || NODE_IPS=$(get_node_ips)
 
 for node_ip in $NODE_IPS; do
     [ -z "$node_ip" ] && continue
     sync_status="Version Match (Config Unverified)"
+    [ "$ACTION" = "status" ] || sync_status="Not Verified"
     node_running="false"
     node_name="ZenWiFi_Node_${node_ip##*.}"
-    node_model="$main_model"
-    node_version="$main_version"
+    node_model="unknown"
+    node_version="unknown"
+    node_commit=""
+    node_updated=""
+    node_inform=""
+    node_freshness="unknown"
+    node_stage="not_dispatched"
+    node_outcome="unknown"
+    dispatch_result="not_attempted"
+    remote_operation_status=""
+    remote_operation_id=""
+    remote_operation_name=""
+    remote_operation_version=""
+    remote_operation_commit=""
+    node_health_verified="false"
     node_pid="-"
+    r_enabled=""
+    r_run=""
     node_total=0
     node_2g=0
     node_5g=0
@@ -182,114 +299,208 @@ for node_ip in $NODE_IPS; do
     if [ -z "$SSH_KEY" ]; then
         sync_status="No SSH Key"
     else
-        # If action is 'update', push updated scripts, webui, version and binary to remote node
         if [ "$ACTION" = "update" ]; then
-            echo "[*] Propagating update to node ${node_ip}..."
-            # Stream updated scripts and binary package (excluding node-unique state.json)
-            tar -czf - -C "$INSTALL_DIR" start.sh apply_config.sh sync_nodes.sh unifi-bridge.sh update.sh watchdog.sh version.txt webui config/config.json unifi-bridge.tar.gz 2>/dev/null | \
-                CLUSTER_SSH_TIMEOUT=120 cluster_ssh "$node_ip" "tar -xzf - -C $INSTALL_DIR 2>/dev/null; [ -f $INSTALL_DIR/config/config.json ] && sed -i 's/\"uplink_remote_port\": [0-9]*/\"uplink_remote_port\": 0/' $INSTALL_DIR/config/config.json; [ -f $INSTALL_DIR/unifi-bridge.sh ] && ln -sf $INSTALL_DIR/unifi-bridge.sh /jffs/scripts/unifi-bridge; chmod 755 $INSTALL_DIR/*.sh; mkdir -p $INSTALL_DIR/.ssh; chmod 755 $INSTALL_DIR; chmod 700 $INSTALL_DIR/.ssh; $INSTALL_DIR/start.sh" >/dev/null 2>&1
-            if [ $? -eq 0 ]; then
-                sync_status="Update Applied (Unverified)"
-            else
-                sync_status="Update Failed"
-            fi
-        # If action is 'sync', push local config to remote node
-        elif [ "$ACTION" = "sync" ] && [ -f "$CONFIG_FILE" ]; then
-            # Remote config with node-specific state path and dynamic LLDP remote port
-            sed -e 's/"uplink_remote_port": [0-9]*/"uplink_remote_port": 0/' "$CONFIG_FILE" | \
-                CLUSTER_SSH_TIMEOUT=120 cluster_ssh "$node_ip" "mkdir -p $INSTALL_DIR/config $INSTALL_DIR/.ssh; chmod 755 $INSTALL_DIR; chmod 700 $INSTALL_DIR/.ssh; umask 077; cat > $INSTALL_DIR/config/config.json && chmod 600 $INSTALL_DIR/config/config.json && $INSTALL_DIR/start.sh" >/dev/null 2>&1
-            if [ $? -eq 0 ]; then
-                sync_status="Config Synced"
-            else
-                sync_status="Sync Failed"
-            fi
+            echo "[*] Requesting exact-commit updater on node ${node_ip}..."
+            node_stage="dispatched"
+            CLUSTER_SSH_TIMEOUT=240 cluster_ssh "$node_ip" "$INSTALL_DIR/update.sh apply-exact $REQUESTED_BRANCH $REQUESTED_COMMIT $OPERATION_ID" >/dev/null 2>&1
+            [ "$?" -eq 0 ] && dispatch_result="succeeded" || dispatch_result="unknown"
+        elif [ "$ACTION" = "sync" ]; then
+            echo "[*] Synchronizing shared settings to node ${node_ip}..."
+            node_stage="dispatched"
+            remote_sync_cmd=$(cat <<'REMOTE'
+umask 077
+MUTATION_LOCK=/tmp/unifi-bridge-mutation.lock
+operation_id=@OPERATION_ID@
+operation_done=0
+write_operation() {
+    printf '{"operation_id":"%s","operation":"sync","status":"%s"}\n' "$operation_id" "$1" > /tmp/var/wwwext/unifi-bridge/cluster_operation.js.tmp && mv -f /tmp/var/wwwext/unifi-bridge/cluster_operation.js.tmp /tmp/var/wwwext/unifi-bridge/cluster_operation.js
+}
+if ! mkdir "$MUTATION_LOCK" 2>/dev/null; then exit 75; fi
+trap 'rc=$?; if [ "$operation_done" -ne 1 ]; then write_operation FAILED; fi; rm -f "$MUTATION_LOCK/pid"; rmdir "$MUTATION_LOCK" 2>/dev/null || true' 0
+printf "%s\n" "$$" > "$MUTATION_LOCK/pid" || exit 76
+[ ! -e /jffs/addons/unifi-bridge/.update-transaction ] || exit 77
+mkdir -p /jffs/addons/unifi-bridge/config /jffs/addons/unifi-bridge/.ssh /tmp/var/wwwext/unifi-bridge || exit 78
+chmod 755 /jffs/addons/unifi-bridge; chmod 700 /jffs/addons/unifi-bridge/.ssh
+BRIDGE_BIN=/tmp/unifi-bridge/unifi-bridge
+[ -x "$BRIDGE_BIN" ] || BRIDGE_BIN=/jffs/addons/unifi-bridge/bin/unifi-bridge
+[ -x "$BRIDGE_BIN" ] || exit 79
+UNIFI_BRIDGE_MUTATION_LOCK_HELD=1 UNIFI_BRIDGE_MUTATION_LOCK_OWNER="$$" "$BRIDGE_BIN" -config /jffs/addons/unifi-bridge/config/config.json -sync-settings -gateway "$(nvram get lan_gateway)" || exit 80
+UNIFI_BRIDGE_MUTATION_LOCK_OWNER="$$" /jffs/addons/unifi-bridge/start.sh || exit 81
+write_operation APPLIED || exit 82
+operation_done=1
+REMOTE
+)
+            remote_sync_cmd=$(printf '%s' "$remote_sync_cmd" | sed "s/@OPERATION_ID@/$OPERATION_ID/g")
+            cat "$SYNC_CONFIG" | CLUSTER_SSH_TIMEOUT=90 cluster_ssh "$node_ip" "$remote_sync_cmd" >/dev/null 2>&1
+            [ "$?" -eq 0 ] && dispatch_result="succeeded" || dispatch_result="unknown"
         fi
 
-        # Query remote node status
-        remote_raw=$(cluster_ssh "$node_ip" "cat /tmp/var/wwwext/$ADDON_NAME/status.js 2>/dev/null; echo '---LIVE---'; date +%s; pidof unifi-bridge; echo '---VER---'; cat $INSTALL_DIR/version.txt 2>/dev/null; echo '---TEMP---'; cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null" </dev/null 2>/dev/null)
+        # Read runtime and operation state after dispatch. A lost SSH reply is
+        # unknown until a matching operation ID and fresh runtime identity prove
+        # that the remote action completed.
+        remote_raw=$(cluster_ssh "$node_ip" "cat /tmp/var/wwwext/$ADDON_NAME/status.js 2>/dev/null; echo '---LIVE---'; date +%s; pidof unifi-bridge; p=\$(pidof unifi-bridge 2>/dev/null | awk '{print \$1}'); [ -n \"\$p\" ] && readlink /proc/\$p/exe 2>/dev/null; echo '---VER---'; cat $INSTALL_DIR/version.txt 2>/dev/null; echo '---OP---'; cat /tmp/var/wwwext/$ADDON_NAME/cluster_operation.js 2>/dev/null; echo '---UPDATE---'; cat /tmp/var/wwwext/$ADDON_NAME/update_status.js 2>/dev/null; echo '---TEMP---'; cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null" </dev/null 2>/dev/null)
         remote_result=$?
         if [ "$remote_result" -eq 0 ] && [ -n "$remote_raw" ]; then
-            r_host=$(echo "$remote_raw" | grep '"hostname":' | head -n 1 | awk -F'"' '{print $4}')
+            remote_status=$(printf '%s\n' "$remote_raw" | sed -n '1,/---LIVE---/p' | sed '$d')
+            remote_op=$(printf '%s\n' "$remote_raw" | sed -n '/---OP---/,/---UPDATE---/p' | sed '1d;$d')
+            remote_update=$(printf '%s\n' "$remote_raw" | sed -n '/---UPDATE---/,/---TEMP---/p' | sed '1d;$d')
+            r_host=$(printf '%s' "$remote_status" | grep '"hostname":' | head -n 1 | awk -F'"' '{print $4}')
             [ -n "$r_host" ] && node_name="$r_host"
-
-            r_now=$(echo "$remote_raw" | sed -n '/---LIVE---/{n;p;}')
-            r_live_pid=$(echo "$remote_raw" | sed -n '/---LIVE---/{n;n;p;}')
-            r_updated=$(echo "$remote_raw" | grep '"status_updated_at":' | head -n 1 | awk -F':' '{print $2}' | tr -d ' \t\r\n,')
-            r_interval=$(echo "$remote_raw" | grep '"interval_sec":' | head -n 1 | awk -F':' '{print $2}' | tr -d ' \t\r\n,')
+            r_now=$(printf '%s\n' "$remote_raw" | sed -n '/---LIVE---/{n;p;}')
+            r_live_pid=$(printf '%s\n' "$remote_raw" | sed -n '/---LIVE---/{n;n;p;}')
+            r_exe=$(printf '%s\n' "$remote_raw" | sed -n '/---LIVE---/{n;n;n;p;}')
+            r_updated=$(printf '%s' "$remote_status" | sed -n 's/.*"status_updated_at":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)
+            r_interval=$(printf '%s' "$remote_status" | sed -n 's/.*"interval_sec":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)
             case "$r_interval" in ''|*[!0-9]*) r_interval=10 ;; esac
             max_age=$((r_interval * 3 + 30))
-            r_run=$(echo "$remote_raw" | grep '"running":' | head -n 1 | awk -F':' '{print $2}' | tr -d ' \t\r\n,')
-            if [ "$r_run" = "true" ] && [ -n "$r_live_pid" ] && status_is_fresh "$r_now" "$r_updated" "$max_age"; then
+            r_run="false"
+            r_enabled="false"
+            printf '%s' "$remote_status" | grep -Eq '"running"[[:space:]]*:[[:space:]]*true' && r_run="true"
+            printf '%s' "$remote_status" | grep -Eq '"enabled"[[:space:]]*:[[:space:]]*true' && r_enabled="true"
+            node_version=$(printf '%s' "$remote_status" | sed -n 's/.*"version":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+            node_commit=$(printf '%s' "$remote_status" | sed -n 's/.*"commit":[[:space:]]*"\([0-9a-f]*\)".*/\1/p' | head -n 1)
+            node_pid=$(printf '%s' "$remote_status" | sed -n 's/.*"pid":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)
+            node_updated="$r_updated"
+            node_inform=$(printf '%s' "$remote_status" | sed -n 's/.*"last_successful_inform":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+            node_last_status=$(printf '%s' "$remote_status" | sed -n 's/.*"last_status":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+            [ -n "$node_version" ] || node_version="unknown"
+            if status_is_fresh "$r_now" "$r_updated" "$max_age"; then
+                node_freshness="fresh"
+            else
+                node_freshness="stale"
+                sync_status="Stale or Stopped"
+            fi
+            if [ "$r_run" = "true" ] && [ -n "$r_live_pid" ] && [ "$node_pid" = "$r_live_pid" ] &&
+               [ "$r_exe" = "/tmp/unifi-bridge/unifi-bridge" ] && [ "$node_freshness" = "fresh" ] &&
+               [ -n "$node_inform" ] && case "$node_last_status" in Active\ *) true ;; *) false ;; esac; then
                 node_running="true"
+                node_health_verified="true"
+            elif [ "$r_run" = "false" ] && [ "$r_enabled" = "false" ] && [ -z "$r_live_pid" ] && [ "$node_freshness" = "fresh" ]; then
+                node_running="false"
+                node_health_verified="true"
             else
                 sync_status="Stale or Stopped"
             fi
-
-            r_pid=$(echo "$remote_raw" | grep '"pid":' | head -n 1 | awk -F':' '{print $2}' | tr -d ' \t\r\n,')
-            [ -n "$r_pid" ] && node_pid="$r_pid"
-
-            r_tot=$(echo "$remote_raw" | grep '"total_stations":' | head -n 1 | awk -F':' '{print $2}' | tr -d ' \t\r\n,')
+            r_tot=$(printf '%s' "$remote_status" | sed -n 's/.*"total_stations":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)
             [ -n "$r_tot" ] && node_total="$r_tot"
-
-            r_2g=$(echo "$remote_raw" | grep '"stations_2g":' | head -n 1 | awk -F':' '{print $2}' | tr -d ' \t\r\n,')
+            r_2g=$(printf '%s' "$remote_status" | sed -n 's/.*"stations_2g":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)
             [ -n "$r_2g" ] && node_2g="$r_2g"
-
-            r_5g=$(echo "$remote_raw" | grep '"stations_5g":' | head -n 1 | awk -F':' '{print $2}' | tr -d ' \t\r\n,')
+            r_5g=$(printf '%s' "$remote_status" | sed -n 's/.*"stations_5g":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)
             [ -n "$r_5g" ] && node_5g="$r_5g"
-
-            r_cu_2g=$(echo "$remote_raw" | grep '"cu_total_2g":' | head -n 1 | awk -F':' '{print $2}' | tr -d ' \t\r\n,')
-            [ -n "$r_cu_2g" ] && node_cu_2g="$r_cu_2g"
-
-            r_cu_5g=$(echo "$remote_raw" | grep '"cu_total_5g":' | head -n 1 | awk -F':' '{print $2}' | tr -d ' \t\r\n,')
-            [ -n "$r_cu_5g" ] && node_cu_5g="$r_cu_5g"
-
-            r_mode=$(echo "$remote_raw" | grep '"mode":' | head -n 1 | awk -F'"' '{print $4}')
-            [ -n "$r_mode" ] && node_mode="$r_mode"
-
-            r_hb=$(echo "$remote_raw" | grep '"last_heartbeat":' | head -n 1 | awk -F'"' '{print $4}')
-            [ -n "$r_hb" ] && node_hb="$r_hb"
-
-            r_ver=$(echo "$remote_raw" | sed -n '/---VER---/,/---TEMP---/p' | grep -v -e '---' | tr -d ' \t\r\n')
-            r_ver_js=$(echo "$remote_raw" | grep '"version":' | head -n 1 | awk -F'"' '{print $4}' | tr -d ' \t\r\n')
-            if [ -n "$r_ver_js" ]; then
-                node_version="$r_ver_js"
-            elif [ -n "$r_ver" ]; then
-                node_version="$r_ver"
-            else
-                node_version="unknown"
-            fi
-
-            if [ "$sync_status" = "Version Match (Config Unverified)" ] && [ "$node_version" != "$main_version" ]; then
-                sync_status="Version Diff ($node_version)"
-            fi
-
-            r_temp_raw=$(echo "$remote_raw" | sed -n '/---TEMP---/,$p' | grep -oE '^[0-9]+$')
+            r_cu2=$(printf '%s' "$remote_status" | sed -n 's/.*"cu_total_2g":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)
+            [ -n "$r_cu2" ] && node_cu_2g="$r_cu2"
+            r_cu5=$(printf '%s' "$remote_status" | sed -n 's/.*"cu_total_5g":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)
+            [ -n "$r_cu5" ] && node_cu_5g="$r_cu5"
+            node_mode=$(printf '%s' "$remote_status" | sed -n 's/.*"mode":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+            node_hb=$(printf '%s' "$remote_status" | sed -n 's/.*"last_heartbeat":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+            r_temp_raw=$(printf '%s\n' "$remote_raw" | sed -n '/---TEMP---/,$p' | grep -oE '^[0-9]+$')
             if [ -n "$r_temp_raw" ] && [ "$r_temp_raw" -gt 0 ]; then
                 node_temp=$(awk "BEGIN {printf \"%.1f °C\", $r_temp_raw / 1000}")
             fi
+            case "$node_commit" in *[!0-9a-f]*|'') node_commit="" ;; esac
+            [ "${#node_commit}" -eq 40 ] || node_commit=""
+            remote_operation_id=$(printf '%s' "$remote_op" | sed -n 's/.*"operation_id":[[:space:]]*"\([0-9]*\)".*/\1/p' | head -n 1)
+            remote_operation_status=$(printf '%s' "$remote_op" | sed -n 's/.*"status":[[:space:]]*"\([A-Z_]*\)".*/\1/p' | head -n 1)
+            remote_operation_name=$(printf '%s' "$remote_op" | sed -n 's/.*"operation":[[:space:]]*"\([a-z_]*\)".*/\1/p' | head -n 1)
+            remote_operation_version=$(printf '%s' "$remote_op" | sed -n 's/.*"version":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+            remote_operation_commit=$(printf '%s' "$remote_op" | sed -n 's/.*"commit":[[:space:]]*"\([0-9a-f]*\)".*/\1/p' | head -n 1)
+            remote_update_id=$(printf '%s' "$remote_update" | sed -n 's/.*"request_id":[[:space:]]*"\([0-9]*\)".*/\1/p' | head -n 1)
+            remote_update_status=$(printf '%s' "$remote_update" | sed -n 's/.*"status":[[:space:]]*"\([A-Z_]*\)".*/\1/p' | head -n 1)
+            if [ "$ACTION" = "update" ]; then
+                node_stage="verification_pending"
+                if [ "$remote_operation_id" = "$OPERATION_ID" ] && [ "$remote_operation_name" = "update" ] && [ "$remote_operation_status" = "FAILED" ]; then
+                    node_stage="failed"; node_outcome="failure"; sync_status="Update Failed"
+                elif [ "$remote_operation_id" = "$OPERATION_ID" ] && [ "$remote_operation_name" = "update" ] &&
+                     [ "$remote_operation_status" = "APPLIED" ] && [ "$node_health_verified" = "true" ] &&
+                     [ "$node_commit" = "$REQUESTED_COMMIT" ]; then
+                    node_stage="verified"; node_outcome="success"; sync_status="Update Verified"
+                elif [ "$remote_update_id" = "$OPERATION_ID" ] && [ "$remote_update_status" = "ERROR" ]; then
+                    node_stage="failed"; node_outcome="failure"; sync_status="Update Failed"
+                elif [ "$remote_update_id" = "$OPERATION_ID" ] && [ "$remote_update_status" = "SUCCESS" ] &&
+                     [ "$node_health_verified" = "true" ] && [ "$node_commit" = "$REQUESTED_COMMIT" ]; then
+                    node_stage="verified"; node_outcome="success"; sync_status="Update Verified"
+                fi
+            elif [ "$ACTION" = "sync" ]; then
+                node_stage="verification_pending"
+                if [ "$remote_operation_id" = "$OPERATION_ID" ] && [ "$remote_operation_name" = "sync" ] && [ "$remote_operation_status" = "FAILED" ]; then
+                    node_stage="failed"; node_outcome="failure"; sync_status="Config Apply Failed"
+                elif [ "$remote_operation_id" = "$OPERATION_ID" ] && [ "$remote_operation_name" = "sync" ] && [ "$remote_operation_status" = "APPLIED" ] &&
+                   [ "$node_health_verified" = "true" ] && [ "$node_commit" = "$main_commit" ]; then
+                    node_stage="verified"; node_outcome="success"; sync_status="Config Applied (Runtime Verified)"
+                fi
+            else
+                node_stage="observed"
+                if [ "$node_health_verified" = "true" ] && [ "$node_commit" != "" ]; then
+                    node_outcome="success"; sync_status="Version Match (Config Unverified)"
+                else
+                    node_outcome="unknown"; sync_status="Stale or Stopped"
+                fi
+            fi
         else
+            node_stage="unreachable"
+            node_freshness="unknown"
+            node_outcome="unknown"
             sync_status="Unreachable"
         fi
     fi
 
+    node_name_json=$(json_escape "$node_name")
+    node_ip_json=$(json_escape "$node_ip")
+    node_model_json=$(json_escape "$node_model")
+    node_version_json=$(json_escape "$node_version")
+    node_commit_json=$( [ -n "$node_commit" ] && printf '"%s"' "$node_commit" || printf 'null' )
+    node_updated_json=$(json_number_or_null "$node_updated")
+    node_inform_json=$( [ -n "$node_inform" ] && printf '"%s"' "$(json_escape "$node_inform")" || printf 'null' )
+    node_pid_json=$( [ -n "$node_pid" ] && [ "$node_pid" != "-" ] && json_escape "$node_pid" | sed 's/.*/"&"/' || printf 'null' )
+    node_mode_json=$(json_escape "$node_mode")
+    node_temp_json=$(json_escape "$node_temp")
+    node_hb_json=$(json_escape "$node_hb")
+    sync_status_json=$(json_escape "$sync_status")
+    requested_commit_json=$( [ "$ACTION" = "update" ] && printf '"%s"' "$REQUESTED_COMMIT" || { [ -n "$main_commit" ] && printf '"%s"' "$main_commit" || printf 'null'; } )
+    requested_version_json=$( [ "$ACTION" = "update" ] && printf '"%s"' "$(json_escape "$main_version")" || printf 'null' )
+    node_enabled_json=$( [ -n "${r_enabled:-}" ] && printf '%s' "$r_enabled" || printf 'null' )
+    node_running_json=$( [ -n "${r_run:-}" ] && printf '%s' "$r_run" || printf 'null' )
+    dispatch_result_json=$(json_escape "$dispatch_result")
+    last_operation_id_json=$( [ -n "$remote_operation_id" ] && printf '"%s"' "$remote_operation_id" || printf 'null' )
+    last_operation_name_json=$( [ -n "$remote_operation_name" ] && printf '"%s"' "$(json_escape "$remote_operation_name")" || printf 'null' )
+    last_operation_status_json=$( [ -n "$remote_operation_status" ] && printf '"%s"' "$remote_operation_status" || printf 'null' )
+    last_operation_version_json=$( [ -n "$remote_operation_version" ] && printf '"%s"' "$(json_escape "$remote_operation_version")" || printf 'null' )
+    last_operation_commit_json=$( [ -n "$remote_operation_commit" ] && printf '"%s"' "$remote_operation_commit" || printf 'null' )
     nodes_json="${nodes_json},
     {
-      \"name\": \"${node_name}\",
-      \"ip\": \"${node_ip}\",
+      \"name\": \"${node_name_json}\",
+      \"ip\": \"${node_ip_json}\",
       \"role\": \"Satellite Node\",
-      \"model\": \"${node_model}\",
-      \"version\": \"${node_version}\",
+      \"model\": \"${node_model_json}\",
+      \"version\": \"${node_version_json}\",
+      \"commit\": ${node_commit_json},
       \"status\": \"$( [ "$node_running" = "true" ] && echo "RUNNING" || echo "STOPPED" )\",
-      \"pid\": \"${node_pid}\",
+      \"pid\": ${node_pid_json},
+      \"enabled\": ${node_enabled_json},
+      \"running\": ${node_running_json},
+      \"status_updated_at\": ${node_updated_json},
+      \"freshness\": \"${node_freshness}\",
+      \"last_successful_inform\": ${node_inform_json},
+      \"operation_id\": \"${OPERATION_ID}\",
+      \"last_operation_id\": ${last_operation_id_json},
+      \"last_operation\": ${last_operation_name_json},
+      \"last_operation_status\": ${last_operation_status_json},
+      \"last_operation_version\": ${last_operation_version_json},
+      \"last_operation_commit\": ${last_operation_commit_json},
+      \"requested_version\": ${requested_version_json},
+      \"requested_commit\": ${requested_commit_json},
+      \"dispatch_result\": \"${dispatch_result_json}\",
+      \"stage\": \"${node_stage}\",
+      \"outcome\": \"${node_outcome}\",
       \"total_clients\": ${node_total:-0},
       \"clients_2g\": ${node_2g:-0},
       \"clients_5g\": ${node_5g:-0},
       \"cu_2g\": ${node_cu_2g:-0},
       \"cu_5g\": ${node_cu_5g:-0},
-      \"mode\": \"${node_mode}\",
-      \"temp\": \"${node_temp}\",
-      \"last_heartbeat\": \"${node_hb}\",
-      \"sync_status\": \"${sync_status}\"
+      \"mode\": \"${node_mode_json}\",
+      \"temp\": \"${node_temp_json}\",
+      \"last_heartbeat\": \"${node_hb_json}\",
+      \"sync_status\": \"${sync_status_json}\"
     }"
 done
 

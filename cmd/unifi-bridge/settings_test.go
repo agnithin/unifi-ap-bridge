@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -86,5 +87,128 @@ func TestLegacyConfigEnabledByDefault(t *testing.T) {
 	cfg, e := loadConfig(path)
 	if e != nil || !cfg.Enabled {
 		t.Fatal("legacy configs must remain enabled")
+	}
+}
+
+func TestSharedSettingsPreserveNodeOwnedFields(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "addon", "config", "config.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	original := `{"enabled":true,"interval_sec":10,"branch":"main","controller_url":"http://old:8080/inform","state_path":"/node/state.json","uplink_mac":"aa:bb:cc:dd:ee:ff","uplink_remote_port":3,"nodes":["10.0.0.3"],"unknown_node_field":{"keep":true}}`
+	if err := os.WriteFile(path, []byte(original), 0600); err != nil {
+		t.Fatal(err)
+	}
+	input := `{"enabled":false,"interval_sec":30,"branch":"dev","controller_url":"http://main:8080/inform","state_path":"/main/state.json","uplink_remote_port":1,"unknown_node_field":{"replace":true}}`
+	if err := mergeSharedSettings(path, strings.NewReader(input), ""); err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]json.RawMessage
+	data, _ := os.ReadFile(path)
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]string{
+		"enabled": "false", "interval_sec": "30", "branch": `"dev"`,
+		"controller_url": `"http://main:8080/inform"`, "state_path": `"/node/state.json"`,
+		"uplink_remote_port": "3", "nodes": `["10.0.0.3"]`,
+		"unknown_node_field": `{"keep":true}`,
+	} {
+		var actualValue, expectedValue any
+		if json.Unmarshal(got[key], &actualValue) != nil || json.Unmarshal([]byte(want), &expectedValue) != nil || !reflect.DeepEqual(actualValue, expectedValue) {
+			t.Errorf("%s = %s, want %s", key, got[key], want)
+		}
+	}
+}
+
+func TestConcurrentSettingsMergeDoesNotLoseUpdates(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "addon", "config", "config.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"enabled":true,"interval_sec":10}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	lock := filepath.Join(root, "mutation.lock")
+	t.Setenv("UNIFI_BRIDGE_MUTATION_LOCK", lock)
+	var wg sync.WaitGroup
+	errCh := make(chan error, 2)
+	for _, patch := range []string{`{"enabled":false}`, `{"interval":30}`} {
+		wg.Add(1)
+		go func(patch string) {
+			defer wg.Done()
+			errCh <- mergeSettings(path, strings.NewReader(patch), "json", "")
+		}(patch)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	var got map[string]json.RawMessage
+	data, _ := os.ReadFile(path)
+	_ = json.Unmarshal(data, &got)
+	if string(got["enabled"]) != "false" || string(got["interval_sec"]) != "30" {
+		t.Fatalf("concurrent merge lost an update: %s", data)
+	}
+	if _, err := os.Stat(lock); !os.IsNotExist(err) {
+		t.Fatalf("settings lock leaked: %v", err)
+	}
+}
+
+func TestSettingsRejectUnfinishedAddonTransaction(t *testing.T) {
+	root := t.TempDir()
+	addon := filepath.Join(root, "addon")
+	path := filepath.Join(addon, "config", "config.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"enabled":true}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(addon, ".update-transaction"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := mergeSettings(path, strings.NewReader(`{"enabled":false}`), "json", ""); err == nil {
+		t.Fatal("settings mutation proceeded with unfinished update journal")
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != `{"enabled":true}` {
+		t.Fatalf("config changed despite unfinished transaction: %s", data)
+	}
+}
+
+func TestSettingsInheritedLockRequiresMatchingOwner(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "addon", "config", "config.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"enabled":true}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	lock := filepath.Join(root, "mutation.lock")
+	if err := os.Mkdir(lock, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(lock, "pid"), []byte("1234\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("UNIFI_BRIDGE_MUTATION_LOCK", lock)
+	t.Setenv("UNIFI_BRIDGE_MUTATION_LOCK_HELD", "1")
+	t.Setenv("UNIFI_BRIDGE_MUTATION_LOCK_OWNER", "9999")
+	if err := mergeSettings(path, strings.NewReader(`{"enabled":false}`), "json", ""); err == nil {
+		t.Fatal("accepted mismatched inherited lock owner")
+	}
+	t.Setenv("UNIFI_BRIDGE_MUTATION_LOCK_OWNER", "1234")
+	if err := mergeSettings(path, strings.NewReader(`{"enabled":false}`), "json", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(lock); err != nil {
+		t.Fatalf("inherited lock was released by non-owner: %v", err)
 	}
 }

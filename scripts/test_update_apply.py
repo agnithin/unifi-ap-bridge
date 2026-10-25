@@ -45,6 +45,7 @@ class ApplyFailureTests(unittest.TestCase):
         self.env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ["PATH"], ASSETS=str(self.assets), STATUS_FILE=str(self.web / "status.js"), RUNNING=str(self.running))
         self.requests = self.root / "requests.txt"
         self.env["REQUEST_LOG"] = str(self.requests)
+        self.env["UNIFI_BRIDGE_MUTATION_WAIT_SECONDS"] = "1"
         self.write(self.bin / "uname", "#!/bin/sh\necho armv7l\n")
         self.write(self.bin / "sleep", "#!/bin/sh\nexit 0\n")
         self.write(self.bin / "pidof", '#!/bin/sh\n[ -f "$RUNNING" ] && echo 1234\n')
@@ -74,6 +75,7 @@ class ApplyFailureTests(unittest.TestCase):
         source = source.replace('INSTALL_DIR="/jffs/addons/$ADDON_NAME"', f'INSTALL_DIR="{self.install}"')
         source = source.replace("/tmp/unifi-bridge-update.lock", str(self.root / "update.lock"))
         source = source.replace("/tmp/unifi-bridge-start.lock", str(self.root / "start.lock"))
+        source = source.replace("/tmp/unifi-bridge-mutation.lock", str(self.root / "mutation.lock"))
         source = source.replace("/tmp/unifi-bridge/unifi-bridge", str(self.root / "tmp/unifi-bridge/unifi-bridge"))
         source = source.replace("/tmp/var/wwwext", str(self.root / "www"))
         source = source.replace("/jffs/scripts", str(self.root / "links"))
@@ -169,11 +171,13 @@ class ApplyFailureTests(unittest.TestCase):
     def start_source(self):
         source = (ROOT / "scripts/start.sh").read_text()
         return (source.replace('/jffs/addons/unifi-bridge', str(self.install))
+                .replace('/tmp/unifi-bridge-start.lock', str(self.root / 'start.lock'))
+                .replace('/tmp/unifi-bridge-mutation.lock', str(self.root / 'mutation.lock'))
                 .replace('/tmp/', str(self.root / 'tmp') + '/'))
 
-    def run_apply(self, env=None):
+    def run_apply(self, env=None, args=None):
         return subprocess.run(
-            ["sh", str(self.script), "apply", "dev", "fixture"],
+            ["sh", str(self.script), *(args or ["apply", "dev", "fixture"])],
             env=env or self.env,
             capture_output=True,
             text=True,
@@ -239,6 +243,54 @@ class ApplyFailureTests(unittest.TestCase):
         self.assert_failure()
         self.write_bundle(members=MEMBERS, link="version.txt")
         self.assert_failure()
+
+    def test_busy_mutation_lock_is_bounded_and_never_stolen(self):
+        lock = self.root / "mutation.lock"
+        lock.mkdir()
+        (lock / "pid").write_text("424242\n")
+        original_version = (self.install / "version.txt").read_text()
+        result = self.run_apply()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Mutation lock busy", result.stdout + result.stderr)
+        self.assertEqual((lock / "pid").read_text(), "424242\n")
+        self.assertEqual((self.install / "version.txt").read_text(), original_version)
+        self.assertFalse((self.install / ".update-transaction").exists())
+
+    def test_apply_exact_uses_sha_qualified_release(self):
+        result = self.run_apply(args=["apply-exact", "dev", COMMIT, "777123"])
+        self.assertNotEqual(result.returncode, 0)  # normal fixture startup rejects the candidate
+        requests = self.requests.read_text()
+        self.assertIn(f"/download/dev-{COMMIT}/{self.bundle_name}", requests)
+        self.assertNotIn("/commits/dev", requests)
+        operation = json.loads((self.web / "cluster_operation.js").read_text().split("=", 1)[1].strip().rstrip(";"))
+        self.assertEqual(operation["operation_id"], "777123")
+        self.assertEqual(operation["operation"], "update")
+        self.assertEqual(operation["status"], "FAILED")
+        self.assertEqual((self.install / "version.txt").read_text(), "1.2.4\n")
+        self.assertFalse((self.root / "mutation.lock").exists())
+
+    def test_cluster_receiver_update_does_not_propagate_recursively(self):
+        source = (ROOT / "scripts/update.sh").read_text()
+        start = source.index("should_propagate_update() {")
+        end = source.index("\n}", start) + 2
+        function = source[start:end]
+        for operation, expected in (("cluster_update", 1), ("apply", 0)):
+            result = subprocess.run(["sh", "-c", function + '\nshould_propagate_update', "test"],
+                env=dict(self.env, operation=operation), capture_output=True, timeout=2)
+            self.assertEqual(result.returncode, expected, operation)
+
+    def test_apply_exact_main_requires_matching_stable_commit(self):
+        result = self.run_apply(args=["apply-exact", "main", COMMIT, "777124"])
+        self.assertNotEqual(result.returncode, 0)  # candidate launch fails in this fixture
+        requests = self.requests.read_text()
+        self.assertIn(f"/download/v1.2.5/{self.bundle_name}", requests)
+        self.assertFalse((self.install / ".update-transaction").exists())
+
+        self.requests.write_text("")
+        mismatch = dict(self.env, RESOLVED_COMMIT="b" * 40)
+        result = self.run_apply(env=mismatch, args=["apply-exact", "main", COMMIT, "777125"])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn(f"/download/v1.2.5/{self.bundle_name}", self.requests.read_text())
 
     def test_unsupported_resolved_commit_fails_before_asset_lookup(self):
         result = self.run_apply(dict(self.env, RESOLVED_COMMIT="b" * 40))

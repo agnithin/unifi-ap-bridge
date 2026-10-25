@@ -19,6 +19,7 @@ mkdir -p "/tmp/var/wwwext/$ADDON_NAME"
 # alone cannot prove ownership after PID reuse or a partially completed install.
 UPDATE_LOCK="/tmp/unifi-bridge-update.lock"
 START_LOCK="/tmp/unifi-bridge-start.lock"
+MUTATION_LOCK="/tmp/unifi-bridge-mutation.lock"
 acquire_update_lock() {
     if ! (umask 077; mkdir "$UPDATE_LOCK") 2>/dev/null; then
         echo "Another bridge update/check owns $UPDATE_LOCK; retry after it completes. If interrupted, inspect service and lock ownership before recovery." >&2
@@ -28,9 +29,27 @@ acquire_update_lock() {
         rmdir "$UPDATE_LOCK" 2>/dev/null || true
         return 1
     fi
-    trap 'release_update_lock' 0
+    trap 'release_mutation_lock; release_update_lock' 0
     trap 'exit 130' INT
     trap 'exit 143' TERM
+}
+
+acquire_mutation_lock() {
+    tries=0
+    mutation_wait=${UNIFI_BRIDGE_MUTATION_WAIT_SECONDS:-30}
+    while ! (umask 077; mkdir "$MUTATION_LOCK") 2>/dev/null; do
+        [ "$tries" -lt "$mutation_wait" ] || { echo "Mutation lock busy; owner $(cat "$MUTATION_LOCK/pid" 2>/dev/null || echo unknown)" >&2; return 1; }
+        tries=$((tries + 1)); sleep 1
+    done
+    echo "$$" > "$MUTATION_LOCK/pid" || { rmdir "$MUTATION_LOCK" 2>/dev/null; return 1; }
+    export UNIFI_BRIDGE_MUTATION_LOCK_OWNER="$$"
+}
+
+release_mutation_lock() {
+    if [ "$(cat "$MUTATION_LOCK/pid" 2>/dev/null)" = "$$" ]; then
+        rm -f "$MUTATION_LOCK/pid"
+        rmdir "$MUTATION_LOCK" 2>/dev/null || true
+    fi
 }
 
 acquire_activation_lock() {
@@ -39,7 +58,7 @@ acquire_activation_lock() {
         return 1
     fi
     echo "$$" > "$START_LOCK/pid" || { rmdir "$START_LOCK" 2>/dev/null; return 1; }
-    trap 'release_activation_lock; release_update_lock' 0
+    trap 'release_activation_lock; release_mutation_lock; release_update_lock' 0
 }
 
 release_activation_lock() {
@@ -156,6 +175,17 @@ window.unifiBridgeUpdate = {
 EOF
     mv -f "$UPDATE_JS.tmp" "$UPDATE_JS"
     chmod 644 "$UPDATE_JS"
+    if [ "${operation:-}" = "cluster_update" ] && { [ "$status" = "SUCCESS" ] || [ "$status" = "ERROR" ]; }; then
+        operation_status="FAILED"
+        [ "$status" = "SUCCESS" ] && operation_status="APPLIED"
+        operation_id=$(printf '%s' "${request_id:-}" | sed 's/[^0-9]//g')
+        operation_commit=$(printf '%s' "${resolved_commit:-}" | sed 's/[^0-9a-f]//g')
+        cat > "$UPDATE_JS.cluster.tmp" << EOF
+window.unifiBridgeClusterOperation = {"operation_id":"${operation_id}","operation":"update","status":"${operation_status}","version":"${rem_ver}","commit":"${operation_commit}"};
+EOF
+        mv -f "$UPDATE_JS.cluster.tmp" "/tmp/var/wwwext/$ADDON_NAME/cluster_operation.js"
+        chmod 644 "/tmp/var/wwwext/$ADDON_NAME/cluster_operation.js"
+    fi
 }
 
 managed_assets="unifi-bridge.tar.gz
@@ -290,7 +320,7 @@ atomic_install() {
 
 restore_transaction() {
     [ -f "$TXN_DIR/active" ] || return 1
-    UNIFI_BRIDGE_START_LOCK_HELD=1 "$INSTALL_DIR/start.sh" --recover-only || return 1
+    UNIFI_BRIDGE_START_LOCK_OWNER="$$" UNIFI_BRIDGE_MUTATION_LOCK_OWNER="$$" "$INSTALL_DIR/start.sh" --recover-only || return 1
     return 0
 }
 
@@ -315,7 +345,7 @@ rollback_and_verify() {
         write_update_status "ERROR" "$branch" "$local_ver" "${remote_ver:-}" "$reason; ROLLBACK FAILED: prior addon assets could not be restored; journal retained"
         return 1
     fi
-    if ! UNIFI_BRIDGE_START_LOCK_HELD=1 "$INSTALL_DIR/start.sh"; then
+    if ! UNIFI_BRIDGE_START_LOCK_OWNER="$$" UNIFI_BRIDGE_MUTATION_LOCK_OWNER="$$" "$INSTALL_DIR/start.sh"; then
         write_update_status "ERROR" "$branch" "$local_ver" "${remote_ver:-}" "$reason; ROLLBACK UNVERIFIED: prior assets restored but startup failed"
         return 1
     fi
@@ -463,6 +493,8 @@ cmd_check() {
 cmd_apply() {
     operation="apply"
     request_id="${2:-}"
+    exact_commit="${3:-}"
+    [ -z "$exact_commit" ] || operation="cluster_update"
     installed_newer=false
     branch=$(get_branch "${1:-}")
     case "$branch" in main|dev) ;; *) echo "Invalid release track" >&2; return 1 ;; esac
@@ -488,13 +520,24 @@ cmd_apply() {
            rm -rf "$tmp_dir"; return 1 ;;
     esac
 
-    # Resolve one immutable release generation. Dev uses a SHA-qualified
-    # release tag; stable resolves the official latest tag before asset fetch.
+    # Resolve one immutable release generation. A cluster exact-commit apply
+    # uses the same dev tag, or proves the current stable tag still names the
+    # requested commit before fetching its asset.
+    case "$exact_commit" in *[!0-9a-f]*|'') exact_commit="" ;; esac
+    [ -z "$exact_commit" ] || [ "${#exact_commit}" -eq 40 ] || exact_commit=""
+    if [ -n "${3:-}" ] && [ -z "$exact_commit" ]; then
+        write_update_status "ERROR" "$branch" "$local_ver" "-" "Requested exact source commit is invalid; installed files were not changed"
+        rm -rf "$tmp_dir"; return 1
+    fi
     if [ "$branch" = "dev" ]; then
-        resolved_commit=$(curl -fsSL --connect-timeout 8 --max-time 20 \
-            -H 'Accept: application/vnd.github+json' \
-            'https://api.github.com/repos/agnithin/unifi-ap-bridge/commits/dev' 2>/dev/null |
-            awk -F'"' '/"sha"[[:space:]]*:/ { print $4; exit }')
+        if [ -n "$exact_commit" ]; then
+            resolved_commit="$exact_commit"
+        else
+            resolved_commit=$(curl -fsSL --connect-timeout 8 --max-time 20 \
+                -H 'Accept: application/vnd.github+json' \
+                'https://api.github.com/repos/agnithin/unifi-ap-bridge/commits/dev' 2>/dev/null |
+                awk -F'"' '/"sha"[[:space:]]*:/ { print $4; exit }')
+        fi
         case "$resolved_commit" in *[!0-9a-f]*|'') resolved_commit="" ;; esac
         [ "${#resolved_commit}" -eq 40 ] || resolved_commit=""
         release_tag="dev-${resolved_commit}"
@@ -504,12 +547,16 @@ cmd_apply() {
         release_tag=$(curl -fsSL --connect-timeout 8 --max-time 20 \
             -H 'Accept: application/vnd.github+json' \
             'https://api.github.com/repos/agnithin/unifi-ap-bridge/releases/latest' 2>/dev/null |
-            awk -F'"' '/"tag_name"[[:space:]]*:/ { print $4; exit }')
+            sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
         resolved_commit=$(curl -fsSL --connect-timeout 8 --max-time 20 \
             -H 'Accept: application/vnd.github+json' \
             "https://api.github.com/repos/agnithin/unifi-ap-bridge/commits/${release_tag}" 2>/dev/null |
             awk -F'"' '/"sha"[[:space:]]*:/ { print $4; exit }')
         expected_version=${release_tag#v}
+        if [ -n "$exact_commit" ] && [ "$resolved_commit" != "$exact_commit" ]; then
+            write_update_status "ERROR" "$branch" "$local_ver" "-" "Stable release no longer names the requested source commit; installed files were not changed"
+            rm -rf "$tmp_dir"; return 1
+        fi
     fi
     case "$resolved_commit" in *[!0-9a-f]*|'') resolved_commit="" ;; esac
     [ "${#resolved_commit}" -eq 40 ] || resolved_commit=""
@@ -593,8 +640,16 @@ watchdog.sh"
         write_update_status "ERROR" "$branch" "$local_ver" "-" "Bundle metadata, version, architecture or source commit did not match the resolved release; installed files were not changed"
         rm -rf "$tmp_dir"; return 1
     fi
+    if ! acquire_mutation_lock; then
+        write_update_status "ERROR" "$branch" "$local_ver" "-" "Another settings, sync or addon mutation is active; installed files were not changed"
+        rm -rf "$tmp_dir"; return 1
+    fi
     if ! acquire_activation_lock; then
         write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Another bridge start or activation is active; installed files were not changed"
+        rm -rf "$tmp_dir"; return 1
+    fi
+    if [ -e "$TXN_DIR" ]; then
+        write_update_status "ERROR" "$branch" "$local_ver" "-" "Unfinished addon update journal requires recovery before mutation"
         rm -rf "$tmp_dir"; return 1
     fi
     if ! begin_transaction; then
@@ -638,7 +693,7 @@ watchdog.sh"
     # 4. Restart the local daemon and validate this exact invocation.
     echo "[*] Restarting UniFi AP Bridge daemon..."
     started_at=$(date +%s)
-    if ! UNIFI_BRIDGE_START_LOCK_HELD=1 "$INSTALL_DIR/start.sh"; then
+    if ! UNIFI_BRIDGE_START_LOCK_OWNER="$$" UNIFI_BRIDGE_MUTATION_LOCK_OWNER="$$" "$INSTALL_DIR/start.sh"; then
         rollback_and_verify "Candidate bridge startup failed"; rm -rf "$tmp_dir"; return 1
     fi
 
@@ -676,9 +731,20 @@ watchdog.sh"
 
     write_update_status "SUCCESS" "$branch" "$remote_ver" "$remote_ver" "Local addon updated to ${remote_ver} (${branch}); cluster rollout is reported separately"
 
-    echo "[*] Propagating update to cluster nodes..."
-    if [ -f "$INSTALL_DIR/sync_nodes.sh" ]; then
-        "$INSTALL_DIR/sync_nodes.sh" update "$branch" >/tmp/unifi-bridge-sync.log 2>&1 &
+    # Release every local lock before contacting nodes. The sync process takes
+    # an immutable identity snapshot, then each receiver enters its own updater.
+    release_activation_lock
+    release_mutation_lock
+    release_update_lock
+    # Only an operator-originated Main update fans out. apply-exact is the
+    # receiver-side primitive used by sync_nodes.sh; propagating from it would
+    # create reciprocal updates between AiMesh peers.
+    if should_propagate_update; then
+        echo "[*] Propagating update to cluster nodes..."
+        if [ -f "$INSTALL_DIR/sync_nodes.sh" ]; then
+            UNIFI_BRIDGE_MUTATION_LOCK_OWNER= UNIFI_BRIDGE_START_LOCK_OWNER= \
+                "$INSTALL_DIR/sync_nodes.sh" update "$branch" "$resolved_commit" "$request_id" >/tmp/unifi-bridge-sync.log 2>&1 &
+        fi
     fi
 
     rm -rf "$tmp_dir"
@@ -698,6 +764,10 @@ cmd_status() {
     fi
 }
 
+should_propagate_update() {
+    [ "${operation:-}" = "apply" ]
+}
+
 case "${1:-}" in
     check)
         acquire_update_lock || exit 1
@@ -707,11 +777,15 @@ case "${1:-}" in
         acquire_update_lock || exit 1
         cmd_apply "${2:-}" "${3:-}"
         ;;
+    apply-exact)
+        acquire_update_lock || exit 1
+        cmd_apply "${2:-}" "${4:-}" "${3:-}"
+        ;;
     status)
         cmd_status
         ;;
     *)
-        echo "Usage: $0 {check [branch]|apply [branch]|status}"
+        echo "Usage: $0 {check [branch]|apply [branch]|apply-exact [branch commit request_id]|status}"
         exit 1
         ;;
 esac

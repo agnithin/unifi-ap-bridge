@@ -11,6 +11,7 @@ WATCHDOG_LOG="/tmp/unifi-bridge-watchdog.log"
 # Startup, watchdog and activation must not race over the RAM executable or
 # daemon lifecycle. Interrupted owners/journals require inspection/recovery.
 [ -d "/tmp/unifi-bridge-start.lock" ] && exit 0
+[ -d "/tmp/unifi-bridge-mutation.lock" ] && exit 0
 [ -f "$INSTALL_DIR/.update-transaction/active" ] && exit 0
 
 # Bound the RAM log even if repeated startup failures occur.

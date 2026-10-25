@@ -29,6 +29,23 @@ class StartupTests(unittest.TestCase):
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         self.assertFalse(list(self.root.glob("**/unifi-bridge-start.lock")),"a nested start lock leaked")
         self.assertFalse(lock.exists(),"start lock leaked: "+str(list(lock.iterdir()) if lock.exists() else "missing"))
+        self.assertFalse((self.root/"tmp/unifi-bridge-mutation.lock").exists(),"mutation lock leaked")
+    def test_start_refuses_busy_mutation_lock_without_stealing(self):
+        lock=self.root/"tmp/unifi-bridge-mutation.lock";lock.mkdir();(lock/"pid").write_text("424242\n")
+        self.env["UNIFI_BRIDGE_MUTATION_WAIT_SECONDS"]="0"
+        result=subprocess.run(["sh",str(self.script)],env=self.env,capture_output=True,text=True,timeout=3)
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn("Mutation lock busy",result.stderr)
+        self.assertEqual((lock/"pid").read_text(),"424242\n")
+        self.assertFalse(self.launches.exists())
+    def test_busy_start_lock_releases_new_mutation_lock(self):
+        lock=self.root/"tmp/unifi-bridge-start.lock";lock.mkdir();(lock/"pid").write_text("424242\n")
+        result=subprocess.run(["sh",str(self.script)],env=self.env,capture_output=True,text=True,timeout=3)
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn("Another bridge start",result.stderr)
+        self.assertEqual((lock/"pid").read_text(),"424242\n")
+        self.assertFalse((self.root/"tmp/unifi-bridge-mutation.lock").exists(),"mutation lock leaked after busy start lock")
+
     def test_disabled_survives_all_start_invocations(self):
         for raw in ['{"enabled":false}', '{\n "enabled" : false\n}']:
             (self.install/"config/config.json").write_text(raw)

@@ -175,6 +175,7 @@ func updateWebUIStatus(host *providers.HostInfo, modelProfile models.ModelProfil
 func main() {
 	enabledStatusFlag := flag.Bool("is-enabled", false, "Exit 0 when enabled, 3 when disabled; no hardware access")
 	applySettingsFlag := flag.Bool("apply-settings", false, "Merge settings from stdin without starting telemetry")
+	syncSettingsFlag := flag.Bool("sync-settings", false, "Merge shared settings from stdin while preserving node-local configuration")
 	settingsFormat := flag.String("settings-format", "json", "Settings input: json or custom")
 	gatewayFlag := flag.String("gateway", "", "Gateway IP for automatic controller discovery")
 	configPath := flag.String("config", "", "Path to configuration file")
@@ -195,11 +196,20 @@ func main() {
 		return
 	}
 
-	if *applySettingsFlag {
+	if *applySettingsFlag || *syncSettingsFlag {
 		if *configPath == "" {
 			log.Fatal("-config is required for settings")
 		}
-		if err := mergeSettings(*configPath, os.Stdin, *settingsFormat, *gatewayFlag); err != nil {
+		if *applySettingsFlag && *syncSettingsFlag {
+			log.Fatal("-apply-settings and -sync-settings cannot be combined")
+		}
+		var err error
+		if *syncSettingsFlag {
+			err = mergeSharedSettings(*configPath, os.Stdin, *gatewayFlag)
+		} else {
+			err = mergeSettings(*configPath, os.Stdin, *settingsFormat, *gatewayFlag)
+		}
+		if err != nil {
 			log.Fatal(err)
 		}
 		return

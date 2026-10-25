@@ -11,9 +11,56 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/agnithin/unifi-ap-bridge/pkg/models"
 )
+
+const defaultMutationLock = "/tmp/unifi-bridge-mutation.lock"
+
+func settingsMutationLockPath() string {
+	if p := os.Getenv("UNIFI_BRIDGE_MUTATION_LOCK"); p != "" {
+		return p
+	}
+	return defaultMutationLock
+}
+
+// acquireSettingsMutation serializes direct helper invocations with shell
+// settings, sync and updater transactions. Inherited ownership is accepted only
+// when its token matches the live owner record; stale locks are never stolen.
+func acquireSettingsMutation() (func(), error) {
+	lockPath := settingsMutationLockPath()
+	if os.Getenv("UNIFI_BRIDGE_MUTATION_LOCK_HELD") == "1" {
+		owner := os.Getenv("UNIFI_BRIDGE_MUTATION_LOCK_OWNER")
+		actual, err := os.ReadFile(filepath.Join(lockPath, "pid"))
+		if err != nil || owner == "" || strings.TrimSpace(string(actual)) != owner {
+			return nil, fmt.Errorf("inherited mutation lock ownership is invalid")
+		}
+		return func() {}, nil
+	}
+	for attempt := 0; attempt < 300; attempt++ {
+		err := os.Mkdir(lockPath, 0700)
+		if err == nil {
+			owner := strconv.Itoa(os.Getpid())
+			if err = os.WriteFile(filepath.Join(lockPath, "pid"), []byte(owner+"\n"), 0600); err != nil {
+				_ = os.RemoveAll(lockPath)
+				return nil, err
+			}
+			return func() {
+				actual, e := os.ReadFile(filepath.Join(lockPath, "pid"))
+				if e == nil && strings.TrimSpace(string(actual)) == owner {
+					_ = os.Remove(filepath.Join(lockPath, "pid"))
+					_ = os.Remove(lockPath)
+				}
+			}, nil
+		}
+		if !os.IsExist(err) {
+			return nil, err
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return nil, fmt.Errorf("timed out waiting for mutation lock %s", lockPath)
+}
 
 // mergeSettings preserves fields owned by other components (including WLAN IDs,
 // node lists and per-node topology) instead of reconstructing the configuration.
@@ -54,6 +101,17 @@ func mergeSettings(path string, input io.Reader, format, gateway string) error {
 		}
 	} else {
 		return fmt.Errorf("unknown settings format")
+	}
+	releaseMutation, err := acquireSettingsMutation()
+	if err != nil {
+		return err
+	}
+	defer releaseMutation()
+	addonDir := filepath.Dir(filepath.Dir(path))
+	if _, err := os.Stat(filepath.Join(addonDir, ".update-transaction")); err == nil {
+		return fmt.Errorf("unfinished addon update transaction requires recovery before settings changes")
+	} else if !os.IsNotExist(err) {
+		return err
 	}
 	current := map[string]json.RawMessage{}
 	data, err := os.ReadFile(path)
@@ -170,4 +228,32 @@ func mergeSettings(path string, input io.Reader, format, gateway string) error {
 		return closeErr
 	}
 	return os.Rename(temp, path)
+}
+
+// mergeSharedSettings imports only daemon-owned cluster settings from Main.
+// Satellite state, topology, adoption identity and unknown local fields remain
+// under the target node's ownership.
+func mergeSharedSettings(path string, input io.Reader, gateway string) error {
+	raw, err := io.ReadAll(io.LimitReader(input, 65537))
+	if err != nil || len(raw) > 65536 {
+		return fmt.Errorf("settings input exceeds limit")
+	}
+	var source map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &source); err != nil || source == nil {
+		return fmt.Errorf("shared settings must be a JSON object")
+	}
+	shared := map[string]json.RawMessage{}
+	for _, key := range []string{"enabled", "auto_gateway", "controller_url", "model", "branch"} {
+		if value, ok := source[key]; ok {
+			shared[key] = value
+		}
+	}
+	if value, ok := source["interval_sec"]; ok {
+		shared["interval"] = value
+	}
+	patch, err := json.Marshal(shared)
+	if err != nil {
+		return err
+	}
+	return mergeSettings(path, bytes.NewReader(patch), "json", gateway)
 }
