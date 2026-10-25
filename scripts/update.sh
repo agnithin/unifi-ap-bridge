@@ -5,11 +5,6 @@
 
 ADDON_NAME="unifi-bridge"
 INSTALL_DIR="/jffs/addons/$ADDON_NAME"
-# Protect existing cluster credentials as well as newly provisioned directories.
-mkdir -p "$INSTALL_DIR/.ssh"
-chmod 755 "$INSTALL_DIR"
-chmod 700 "$INSTALL_DIR/.ssh"
-
 CONFIG_FILE="$INSTALL_DIR/config/config.json"
 VERSION_FILE="$INSTALL_DIR/version.txt"
 STATUS_JS="/tmp/var/wwwext/$ADDON_NAME/status.js"
@@ -219,106 +214,124 @@ cmd_apply() {
     mkdir -p "$tmp_dir"
     rm -rf "${tmp_dir:?}"/*
 
-    # Detect hardware architecture
+    # Detect only architectures produced by CI; never substitute another build.
     ARCH=$(uname -m)
     case "$ARCH" in
         armv7l) ARCH_SUFFIX="armv7" ;;
         aarch64) ARCH_SUFFIX="arm64" ;;
-        *) ARCH_SUFFIX="armv7" ;;
+        *) write_update_status "ERROR" "$branch" "$local_ver" "-" "Unsupported device architecture; installed files were not changed"
+           rm -rf "$tmp_dir"; return 1 ;;
     esac
 
-    # 1. Download updated scripts, webui, and version.txt from raw GitHub
-    echo "[*] Downloading scripts from branch '${branch}'..."
-    failed=0
-    cb=$(date +%s)
-    for f in start.sh apply_config.sh sync_nodes.sh unifi-bridge.sh update.sh watchdog.sh; do
-        if ! curl -fsSL --connect-timeout 8 --max-time 20 "${REPO_RAW}/${branch}/scripts/${f}?_=${cb}" -o "${tmp_dir}/${f}"; then
-            echo "[!] Failed downloading scripts/${f}"
-            failed=1
-        fi
-    done
-
-    if ! curl -fsSL --connect-timeout 8 --max-time 20 "${REPO_RAW}/${branch}/webui/unifi-bridge.asp?_=${cb}" -o "${tmp_dir}/unifi-bridge.asp"; then
-        echo "[!] Failed downloading webui/unifi-bridge.asp"
-        failed=1
-    fi
-
-    if ! curl -fsSL --connect-timeout 8 --max-time 20 "${REPO_RAW}/${branch}/version.txt?_=${cb}" -o "${tmp_dir}/version.txt"; then
-        echo "[!] Failed downloading version.txt"
-        failed=1
-    fi
-
-    if [ "$failed" -eq 1 ]; then
-        echo "Error: Failed to download repository files."
-        write_update_status "ERROR" "$branch" "$local_ver" "-" "Download failed for repository scripts"
-        rm -rf "$tmp_dir"
-        return 1
-    fi
-
-    remote_ver=$(cat "${tmp_dir}/version.txt" 2>/dev/null | tr -d ' \t\r\n')
-    [ -z "$remote_ver" ] && remote_ver="$branch"
-
-    # 2. Download binary tarball if release exists
-    bin_tarball="${tmp_dir}/unifi-bridge-${ARCH_SUFFIX}.tar.gz"
-    echo "[*] Downloading binary for architecture ${ARCH_SUFFIX}..."
-
-    bin_url=""
-    if [ "$branch" = "main" ]; then
-        bin_url="${REPO_RELEASES}/latest/download/unifi-bridge-${ARCH_SUFFIX}.tar.gz"
+    # Resolve one immutable release generation. Dev uses a SHA-qualified
+    # release tag; stable resolves the official latest tag before asset fetch.
+    if [ "$branch" = "dev" ]; then
+        resolved_commit=$(curl -fsSL --connect-timeout 8 --max-time 20 \
+            -H 'Accept: application/vnd.github+json' \
+            'https://api.github.com/repos/agnithin/unifi-ap-bridge/commits/dev' 2>/dev/null |
+            awk -F'"' '/"sha"[[:space:]]*:/ { print $4; exit }')
+        case "$resolved_commit" in *[!0-9a-f]*|'') resolved_commit="" ;; esac
+        [ "${#resolved_commit}" -eq 40 ] || resolved_commit=""
+        release_tag="dev-${resolved_commit}"
+        expected_version=$(curl -fsSL --connect-timeout 8 --max-time 20 \
+            "${REPO_RAW}/${resolved_commit}/version.txt" 2>/dev/null | tr -d ' \t\r\n')
     else
-        bin_url="${REPO_RELEASES}/download/dev/unifi-bridge-${ARCH_SUFFIX}.tar.gz"
+        release_tag=$(curl -fsSL --connect-timeout 8 --max-time 20 \
+            -H 'Accept: application/vnd.github+json' \
+            'https://api.github.com/repos/agnithin/unifi-ap-bridge/releases/latest' 2>/dev/null |
+            awk -F'"' '/"tag_name"[[:space:]]*:/ { print $4; exit }')
+        resolved_commit=$(curl -fsSL --connect-timeout 8 --max-time 20 \
+            -H 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/agnithin/unifi-ap-bridge/commits/${release_tag}" 2>/dev/null |
+            awk -F'"' '/"sha"[[:space:]]*:/ { print $4; exit }')
+        expected_version=${release_tag#v}
     fi
-
-    if curl -fsSL --connect-timeout 10 --max-time 60 "$bin_url" -o "$bin_tarball" 2>/dev/null; then
-        echo "[*] Downloaded binary package from releases; validating next."
-        : # Validate the complete staged archive before touching installed files.
-    elif curl -fsSL --connect-timeout 10 --max-time 60 "${REPO_RAW}/${branch}/bin/unifi-bridge-${ARCH_SUFFIX}.tar.gz?_=${cb}" -o "$bin_tarball" 2>/dev/null; then
-        echo "[*] Downloaded binary package from branch repository; validating next."
-        : # Validate the complete staged archive before touching installed files.
-    else
-        write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Binary download failed; installed files were not changed"
-        rm -rf "$tmp_dir"
-        return 1
-    fi
-
-    # The existing bridge-addon updater must fail closed. This is not router
-    # firmware support or a UniFi-triggered firmware update implementation.
-    manifest="${tmp_dir}/sha256sums.txt"
-    if ! curl -fsSL --connect-timeout 8 --max-time 20 "${bin_url%/*}/sha256sums.txt" -o "$manifest"; then
-        write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Checksum manifest unavailable; installed files were not changed"
+    case "$resolved_commit" in *[!0-9a-f]*|'') resolved_commit="" ;; esac
+    [ "${#resolved_commit}" -eq 40 ] || resolved_commit=""
+    case "$release_tag" in ''|*[!A-Za-z0-9._-]*)
+        write_update_status "ERROR" "$branch" "$local_ver" "-" "Could not resolve a valid immutable release; installed files were not changed"
+        rm -rf "$tmp_dir"; return 1 ;;
+    esac
+    release_url="${REPO_RELEASES}/download/${release_tag}"
+    bundle_name="unifi-bridge-addon-${resolved_commit}-${ARCH_SUFFIX}.tar.gz"
+    bundle_archive="${tmp_dir}/${bundle_name}"
+    checksum_file="${tmp_dir}/${bundle_name}.sha256"
+    if ! curl -fsSL --connect-timeout 10 --max-time 60 "${release_url}/${bundle_name}" -o "$bundle_archive" 2>/dev/null ||
+       ! curl -fsSL --connect-timeout 8 --max-time 20 "${release_url}/${bundle_name}.sha256" -o "$checksum_file" 2>/dev/null; then
+        write_update_status "ERROR" "$branch" "$local_ver" "-" "Complete addon bundle unavailable for resolved release; installed files were not changed"
         rm -rf "$tmp_dir"; return 1
     fi
-    expected=$(awk -v name="unifi-bridge-${ARCH_SUFFIX}.tar.gz" '$2==name {print $1}' "$manifest")
-    actual=$(openssl dgst -sha256 "$bin_tarball" 2>/dev/null | awk '{print $NF}')
-    if [ "${#expected}" -ne 64 ] || [ "$expected" != "$actual" ]; then
-        write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Binary checksum mismatch; installed files were not changed"
+    checksum_rows=$(awk 'NF { n++ } END { print n+0 }' "$checksum_file")
+    expected=$(awk -v name="$bundle_name" 'NF==2 && $2==name {print $1}' "$checksum_file")
+    actual=$(openssl dgst -sha256 "$bundle_archive" 2>/dev/null | awk '{print $NF}')
+    case "$expected" in *[!0-9a-f]*|'') expected="" ;; esac
+    if [ "$checksum_rows" -ne 1 ] || [ "${#expected}" -ne 64 ] || [ "$expected" != "$actual" ]; then
+        write_update_status "ERROR" "$branch" "$local_ver" "-" "Bundle checksum mismatch; installed files were not changed"
         rm -rf "$tmp_dir"; return 1
     fi
-    contents=$(tar -tzf "$bin_tarball" 2>/dev/null)
-    if [ "$contents" != "unifi-bridge-${ARCH_SUFFIX}" ]; then
-        write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Unexpected binary archive contents; installed files were not changed"
+    binary_member="unifi-bridge-${ARCH_SUFFIX}"
+    expected_members="apply_config.sh
+bundle.json
+install.sh
+start.sh
+sync_nodes.sh
+${binary_member}
+unifi-bridge.asp
+unifi-bridge.sh
+update.sh
+version.txt
+watchdog.sh"
+    if ! tar -tzf "$bundle_archive" > "$tmp_dir/members" 2>/dev/null ||
+       ! tar -tvzf "$bundle_archive" > "$tmp_dir/member_types" 2>/dev/null; then
+        write_update_status "ERROR" "$branch" "$local_ver" "-" "Bundle archive listing failed; installed files were not changed"
+        rm -rf "$tmp_dir"; return 1
+    fi
+    contents=$(LC_ALL=C sort "$tmp_dir/members")
+    if [ "$contents" != "$expected_members" ]; then
+        write_update_status "ERROR" "$branch" "$local_ver" "-" "Unexpected bundle paths or members; installed files were not changed"
+        rm -rf "$tmp_dir"; return 1
+    fi
+    types=$(awk 'substr($0,1,1)!="-" || substr($0,6,1)=="w" || substr($0,9,1)=="w" || substr($0,4,1) ~ /[sS]/ || substr($0,7,1) ~ /[sS]/ || substr($0,10,1) ~ /[tT]/ { print "invalid"; exit } END { if (!NR) print "invalid" }' "$tmp_dir/member_types")
+    if [ -n "$types" ]; then
+        write_update_status "ERROR" "$branch" "$local_ver" "-" "Bundle contains a non-regular member; installed files were not changed"
         rm -rf "$tmp_dir"; return 1
     fi
     mkdir -p "$tmp_dir/staged"
-    if ! tar -xzf "$bin_tarball" -C "$tmp_dir/staged"; then
-        write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Binary extraction failed"
+    if ! tar -xzf "$bundle_archive" -C "$tmp_dir/staged"; then
+        write_update_status "ERROR" "$branch" "$local_ver" "-" "Bundle extraction failed; installed files were not changed"
         rm -rf "$tmp_dir"; return 1
     fi
-    staged_version=$("$tmp_dir/staged/unifi-bridge-${ARCH_SUFFIX}" -version 2>/dev/null)
+    remote_ver=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$tmp_dir/staged/bundle.json")
+    staged_commit=$(sed -n 's/^[[:space:]]*"commit"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$tmp_dir/staged/bundle.json")
+    staged_arch=$(sed -n 's/^[[:space:]]*"architecture"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$tmp_dir/staged/bundle.json")
+    staged_version=$("$tmp_dir/staged/$binary_member" -version 2>/dev/null)
+    staged_version_status=$?
+    case "$staged_commit" in *[!0-9a-f]*|'') staged_commit="" ;; esac
+    [ "${#staged_commit}" -eq 40 ] || staged_commit=""
+    expected_binary_prefix="unifi-bridge ${remote_ver} (commit: ${staged_commit},"
     case "$staged_version" in
-        "unifi-bridge ${remote_ver} (commit: "*) ;;
-        *) write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Binary and source versions differ; installed files were not changed"
-           rm -rf "$tmp_dir"; return 1 ;;
+        "$expected_binary_prefix"*) ;;
+        *) staged_commit="" ;;
     esac
-    cp -f "$bin_tarball" "$INSTALL_DIR/unifi-bridge.tar.gz" || {
-        write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Could not install binary archive"
+    if [ "$staged_version_status" -ne 0 ] || [ -z "$remote_ver" ] || [ "$remote_ver" != "$expected_version" ] || [ -z "$staged_commit" ] || [ "$staged_arch" != "$ARCH_SUFFIX" ] ||
+       [ "$(cat "$tmp_dir/staged/version.txt" 2>/dev/null | tr -d ' \t\r\n')" != "$remote_ver" ] ||
+       [ "$staged_commit" != "$resolved_commit" ] ||
+       { [ "$branch" = "main" ] && [ "v${remote_ver}" != "$release_tag" ]; }; then
+        write_update_status "ERROR" "$branch" "$local_ver" "-" "Bundle metadata, version, architecture or source commit did not match the resolved release; installed files were not changed"
+        rm -rf "$tmp_dir"; return 1
+    fi
+    mkdir -p "$INSTALL_DIR/.ssh"
+    chmod 755 "$INSTALL_DIR"
+    chmod 700 "$INSTALL_DIR/.ssh"
+    cp -f "$bundle_archive" "$INSTALL_DIR/unifi-bridge.tar.gz" || {
+        write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Could not stage verified addon bundle"
         rm -rf "$tmp_dir"; return 1
     }
 
     # 3. Apply updated scripts & WebUI
     echo "[*] Installing updated scripts to ${INSTALL_DIR}..."
     for f in start.sh apply_config.sh sync_nodes.sh unifi-bridge.sh update.sh watchdog.sh; do
-        if ! cp -fp "${tmp_dir}/$f" "$INSTALL_DIR/$f" || ! chmod 755 "$INSTALL_DIR/$f"; then
+        if ! cp -fp "${tmp_dir}/staged/$f" "$INSTALL_DIR/$f" || ! chmod 755 "$INSTALL_DIR/$f"; then
             write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Script installation failed; inspect service status before retrying"
             rm -rf "$tmp_dir"; return 1
         fi
@@ -328,9 +341,9 @@ cmd_apply() {
     slot="user3"
     [ -f "$INSTALL_DIR/.user_slot" ] && slot=$(cat "$INSTALL_DIR/.user_slot" 2>/dev/null | tr -d ' \t\r\n')
     [ -z "$slot" ] && slot="user3"
-    if ! cp -fp "${tmp_dir}/version.txt" "$INSTALL_DIR/version.txt" ||
-       ! cp -fp "${tmp_dir}/unifi-bridge.asp" "$INSTALL_DIR/webui/unifi-bridge.asp" ||
-       ! cp -fp "${tmp_dir}/unifi-bridge.asp" "/tmp/var/wwwext/${slot}.asp"; then
+    if ! cp -fp "${tmp_dir}/staged/version.txt" "$INSTALL_DIR/version.txt" ||
+       ! cp -fp "${tmp_dir}/staged/unifi-bridge.asp" "$INSTALL_DIR/webui/unifi-bridge.asp" ||
+       ! cp -fp "${tmp_dir}/staged/unifi-bridge.asp" "/tmp/var/wwwext/${slot}.asp"; then
         write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "UI installation failed; inspect service status before retrying"
         rm -rf "$tmp_dir"; return 1
     fi
