@@ -22,7 +22,7 @@ import (
 )
 
 var (
-	version   = "1.2.2"
+	version   = "1.2.3"
 	commit    = "none"
 	buildDate = "unknown"
 )
@@ -321,6 +321,10 @@ func main() {
 		mode := stateMgr.GetMode()
 		adopted := stateMgr.IsAdopted()
 
+		uplinkName := ""
+		if uplink != nil {
+			uplinkName = uplink.Name
+		}
 		payload := telemetry.InformPayload{
 			MAC:             host.MAC,
 			IP:              host.IP,
@@ -339,12 +343,17 @@ func main() {
 			RadioTableStats: radioStats,
 			VAPTable:        vaps,
 			EthernetTable:   ethTable,
+			InterfaceTable:  telemetry.BuildInterfaceTable(ports, ethTable, uplink),
 			PortTable:       ports,
 			SwPortTable:     ports,
-			Uplink:          uplink,
+			Uplink:          uplinkName,
 			LLDPTable:       lldpEntries,
 			SysStats:        sysStatsLegacy,
 			SystemStats:     systemStats,
+		}
+
+		if modelProfile.ModelCode == "U6IW" {
+			payload.FirmwareCaps = telemetry.FirmwareCapSwitchPorts
 		}
 
 		if uplink != nil && uplink.UplinkMAC != "" {

@@ -2,7 +2,7 @@
 
 `unifi-ap-bridge` is a standalone, dependency-free daemon and WebUI extension engineered for Asuswrt-Merlin and Broadcom-based routers. It translates raw Linux and Broadcom wireless and switch telemetry into the Ubiquiti UniFi Inform protocol (`:8080/inform`).
 
-**Deployed baseline:** v1.2.2 on `dev`, code commit `1b6ce07`, verified on both APs on 2026-10-24. See [current audit and release status](AUDIT_STATE.md) for dated observations and remaining work.
+**Release baseline:** v1.2.3 fixes the raw AP inform schema and Port Manager capability advertisement. Node canary verified in the browser; see the audit ledger for final deployed build provenance. See [current audit and release status](AUDIT_STATE.md) for dated observations and remaining work.
 
 ---
 
@@ -65,7 +65,7 @@ graph TD
   * Wire counters parsed from `/proc/net/dev`.
 * **UniFi Port Manager Emulation (`U6-IW`) & Switch Forwarding Table (`mac_table`):**
   * Emulates UniFi 6 In-Wall, enabling multi-port switch capabilities in the UniFi controller.
-  * Emits `port_table` and `sw_port_table` with `op_mode: "switch"`, `forward: "all"`, `autoneg: true`, `enabled: true`, and spanning tree states (`stp_state: "forwarding"` when active, `"disabled"` when link down).
+  * Emits raw `port_table` telemetry with `op_mode: "switch"`, `forward: "all"`, `autoneg: true`, `enabled: true`, and spanning tree states (`stp_state: "forwarding"` when active, `"disabled"` when link down).
   * **Bridge FDB Inspection:** Inspects Linux bridge ports (`/sys/class/net/br0/brif/<iface>/port_no`) and queries `brctl showmacs br0` mapped against `/proc/net/arp`. External wired clients learned on LAN interfaces (`eth1` &rarr; Port 2, `eth2` &rarr; Port 3, `eth3` &rarr; Port 4) are populated into that port's `mac_table` and `last_connection`.
   * Allows UniFi Port Manager to associate downstream wired devices (such as smart home hubs or Ethernet clients) directly to their physical AP switch ports rather than dumping them onto the upstream gateway.
 
@@ -80,7 +80,10 @@ graph TD
     * `port.id.value` &rarr; Upstream physical port MAC (`6c:63:f8:30:9a:05` for Port 1, `6c:63:f8:30:9a:07` for Port 3).
     * `port.descr` &rarr; Remote port mapping (`eth0` &rarr; Port 1, `eth2` &rarr; Port 3).
   * Preserves dynamically discovered remote ports so cluster configuration synchronization does not overwrite satellite nodes with Main's uplink port, preventing port collisions on the upstream gateway switch.
-  * Emits `uplink_mac`, `last_uplink`, and `lldp_table` entries matching gateway `downlink_table` topology.
+  * Raw AP informs must send `uplink` as the interface name string (`"eth0"`) and provide live `if_table` rows. UniFi derives the normalized REST uplink object from these and LLDP. Sending the REST-shaped uplink object in an inform fails to populate the parent/speed fields.
+  * XT8 interfaces share one hardware MAC. The wire interface builder groups that MAC under the management interface with `num_port: 4`, keeping per-port counters and clients in `port_table`.
+  * U6IW informs advertise `fw_caps: 16` (switch-port capability). Network 10.6.109 only merges AP `port_stats` into the UI's `port_table` when that bit is set. Without it, live stats and learned clients can exist while ports still render grey. `sw_port_table` or REST-shaped `ethernet_table` alone does not fix this.
+  * Node canary verification established the displayed gateway parent (Port 3), 2.5 GbE uplink, and HomeBase on active GbE Port 4.
 
 ---
 
@@ -170,4 +173,4 @@ CI tests the Go packages, cluster SSH/freshness behavior, and shell syntax befor
 
 For API-key diagnostics, use `/proxy/network/integration/v1` and the controller's version-specific API documentation. The earlier `X-API-KEY` request to legacy `/proxy/network/api/s/default/stat/device` returned 401, while the same key authenticated successfully to the official Integration API. A locally exported environment variable is not automatically forwarded through SSH and `pct exec`.
 
-Keep credentials out of repository files, command output, and WebUI status. The earlier exposed key remains active and requires coordinated rotation. Read-only device details/statistics establish online state, recent heartbeats, and port links; the observed `uplink: null` values do not establish parent-port topology.
+Keep credentials out of repository files, command output, and WebUI status. The earlier exposed key remains active and requires coordinated rotation. Read-only device details/statistics establish online state, recent heartbeats, and port links; the prior `uplink: null` values were traced to the malformed raw AP interface/uplink schema. Verify the normalized parent/speed fields and actual UI after applying v1.2.3.

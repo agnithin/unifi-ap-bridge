@@ -10,9 +10,13 @@ It emulates a genuine UniFi 6 Access Point—featuring native **UniFi 6 In-Wall 
 
 Last verified **2026-10-24, approximately 22:23 PDT**: both XT8 APs run **v1.2.2 on `dev`**, build commit `1b6ce07affb18f30ef86a822e5939b9217b3648f`. Both are adopted, online, and sending GCM heartbeats, with 60 associated stations in the sampled state (28 Main / 32 Node). This is a dated observation, not a continuous availability guarantee.
 
-The latest fixes improve heartbeat accuracy, adoption recovery, cluster timeouts and stale-status detection, key permissions, build metadata, and log bounds. Gateway parent-port topology remains unconfirmed because the official API returns `uplink: null` for both APs. Credential rotation and controlled outage/recovery checks remain open. Work stays on `dev`; no merge to `main` is approved.
+The latest fixes improve heartbeat accuracy, adoption recovery, cluster timeouts and stale-status detection, key permissions, build metadata, and log bounds. v1.2.3 corrects the raw inform interface/uplink schema and advertises the U6IW switch-port capability. Node canary now visibly shows Cloud Gateway Max / Port 3 and HomeBase on active GbE Port 4; see the audit ledger for rollout status. Credential rotation and controlled outage/recovery checks remain open. Work stays on `dev`; no merge to `main` is approved.
 
 See [audit state and action items](docs/AUDIT_STATE.md) and the [architecture reference](docs/ARCHITECTURE.md).
+
+### v1.2.3 UI compatibility fix
+
+The prior bridge sent an uplink object shaped like a REST response and omitted the raw `if_table` required by AP informs. It also advertised no firmware capabilities, so UniFi did not merge live port stats into Port Manager. The fix sends the uplink interface name, reports the shared Ethernet interface correctly, and advertises the implemented switch-port capability. Regression tests cover the wire field types, physical link/counter mapping, shared MAC handling, and capability flag.
 
 ## Key Features
 
@@ -235,7 +239,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="$BUILD_FLAGS"
 
 ### Current follow-up
 
-Credential rotation, gateway parent-port topology, controlled failure/recovery checks, and watchdog logging/write-path review are tracked in [AUDIT_STATE.md](docs/AUDIT_STATE.md). These are separate from the feature backlog below.
+Credential rotation, controlled failure/recovery checks, and watchdog logging/write-path review are tracked in [AUDIT_STATE.md](docs/AUDIT_STATE.md). These are separate from the feature backlog below.
 
 ### Pending Roadmap Items
 1. **Dynamic WLAN Mapping UI / Auto-Discovery:**

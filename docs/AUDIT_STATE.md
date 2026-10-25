@@ -2,7 +2,7 @@
 
 **Last live verification:** 2026-10-24, approximately 23:05 PDT. This document records dated evidence; it does not imply a new live check on each documentation edit.
 
-**Status:** Both APs and controller heartbeats healthy. Port Manager client discovery (`mac_table`) verified live. Topology parent-port collision resolved (Main on Port 1, Node on Port 3). Credential rotation and additional failure-path review remain open.
+**Status:** AP heartbeats healthy. Later screenshots disproved the earlier UI-closure claim. v1.2.3 candidate fixes both issues on Node in the actual browser; published rollout and Main verification follow below. Credential rotation and wider failure-path review remain open.
 
 **Release track:** `dev`, daemon `1.2.2`, deployed code commit `1d0160e` + switch FDB telemetry. Documentation commits may be newer without changing the deployed code. Do not merge to `main` without explicit operator approval.
 
@@ -139,3 +139,23 @@ for site in get("/sites")["data"]:
             print({k: device.get(k) for k in ("name", "model", "state")})
 PYTHON
 ```
+
+
+## 5. UI Regression Follow-Up — 2026-10-24, after 23:12 PDT
+
+The operator supplied screenshots showing `Connected To –` and grey AP ports. Earlier verification of gateway downlinks and HomeBase's `sw_port` assignment did not prove either UI issue was resolved.
+
+**Confirmed causes and source fixes:**
+
+- Raw AP `uplink` was an object, and `if_table` was absent. The controller kept counters but lacked the AP's normalized uplink identity, link speed, and parent. Send the interface-name string plus live interface telemetry.
+- Every XT8 Ethernet interface uses the same MAC. UniFi deduplicates interface rows by MAC; represent that shared management interface once with four ports instead of inventing MAC addresses or retaining the last LAN row.
+- U6IW informs advertised `fw_caps: 0`. Read-only inspection of the official Network 10.6.109 package confirmed its AP serializer only merges `port_stats` into the UI-facing `port_table` when capability bit `16` is present. Advertise that implemented switch-port capability for U6IW.
+- Keep learned FDB MAC entries and per-port counters, and include physical `ifname` mappings. Do not patch controller database records to fabricate UI state.
+
+**Node canary evidence:** The normalized API uplink now contains the gateway MAC, remote Port 3, `up: true`, and `speed: 2500`. The UI-facing Node port table now contains active Port 1 at 2500 Mbps and active Port 4 at 1000 Mbps, with HomeBase's MAC and connected state. Browser inspection confirms `2.5 GbE / Cloud Gateway Max / Port 3` on the devices page, and HomeBase on Node Port 4 at `GbE` in Port Manager. Main remained on the old build during this comparison.
+
+Three bounded Node candidates isolated uplink schema, shared-interface identity, and capability behavior. The original addon was backed up privately at `/tmp/unifi-ui-before-candidate/addon.tar.gz`; only the telemetry bridge was restarted. Temporary candidates identify themselves as `4b6a7da-ui-fix*`, not a clean committed artifact. Final published deployment must replace that identity on both APs.
+
+**Verification:** Added raw-wire serialization and shared-MAC regression tests; Go race tests, vet, and cluster tests passed. Release version bumped to `1.2.3` so the version checker can detect this patch. Final rollout evidence will supersede the older deployment/provenance and Ready for Review claims above.
+
+**Reference:** Official controller package inspected read-only: https://dl.ui.com/unifi/10.6.109/unifi_sysvinit_all.deb. Downloaded tools and extracted implementation remain in the OS temporary directory, outside Git. No controller configuration/database edits were made.

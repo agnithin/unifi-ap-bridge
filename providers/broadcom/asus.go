@@ -796,6 +796,7 @@ func (p *AsusProvider) GetPortTable() ([]telemetry.Port, []telemetry.EthernetPor
 		}
 
 		ports = append(ports, telemetry.Port{
+			IfName:         spec.dev,
 			PortIdx:        spec.idx,
 			Name:           spec.name,
 			Media:          media,

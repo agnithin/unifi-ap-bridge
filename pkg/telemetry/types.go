@@ -1,5 +1,8 @@
 package telemetry
 
+// FirmwareCapSwitchPorts enables the controller's AP port-statistics merge.
+const FirmwareCapSwitchPorts = 1 << 4
+
 type Station struct {
 	MAC        string `json:"mac"`
 	Radio      string `json:"radio"`                 // "ng" or "na"
@@ -17,13 +20,13 @@ type Station struct {
 	Is11ac     bool   `json:"is_11ac,omitempty"`
 	Is11n      bool   `json:"is_11n,omitempty"`
 	// Traffic & Airtime Telemetry
-	TxBytes   int64 `json:"tx_bytes"`
-	RxBytes   int64 `json:"rx_bytes"`
-	TxPackets int64 `json:"tx_packets"`
-	RxPackets int64 `json:"rx_packets"`
-	TxRetries int64 `json:"tx_retries,omitempty"`
-	TxRate    int   `json:"tx_rate,omitempty"` // in kbps (e.g. 58500)
-	RxRate    int   `json:"rx_rate,omitempty"` // in kbps (e.g. 54000)
+	TxBytes      int64 `json:"tx_bytes"`
+	RxBytes      int64 `json:"rx_bytes"`
+	TxPackets    int64 `json:"tx_packets"`
+	RxPackets    int64 `json:"rx_packets"`
+	TxRetries    int64 `json:"tx_retries,omitempty"`
+	TxRate       int   `json:"tx_rate,omitempty"`      // in kbps (e.g. 58500)
+	RxRate       int   `json:"rx_rate,omitempty"`      // in kbps (e.g. 54000)
 	Uptime       int64 `json:"uptime,omitempty"`       // seconds connected
 	IdleTime     int64 `json:"idletime,omitempty"`     // seconds idle
 	Satisfaction int   `json:"satisfaction,omitempty"` // WiFi Experience score (0-100)
@@ -93,6 +96,7 @@ type PortLastConnection struct {
 }
 
 type Port struct {
+	IfName         string              `json:"ifname"`
 	PortIdx        int                 `json:"port_idx"`
 	Name           string              `json:"name"`
 	Media          string              `json:"media"`
@@ -121,6 +125,17 @@ type Port struct {
 }
 
 type EthernetPort struct {
+	Up         bool   `json:"up"`
+	IP         string `json:"ip,omitempty"`
+	Netmask    string `json:"netmask,omitempty"`
+	RxBytes    int64  `json:"rx_bytes"`
+	TxBytes    int64  `json:"tx_bytes"`
+	RxPackets  int64  `json:"rx_packets"`
+	TxPackets  int64  `json:"tx_packets"`
+	RxErrors   int64  `json:"rx_errors"`
+	TxErrors   int64  `json:"tx_errors"`
+	RxDropped  int64  `json:"rx_dropped"`
+	TxDropped  int64  `json:"tx_dropped"`
 	Name       string `json:"name"`
 	MAC        string `json:"mac"`
 	PortIdx    int    `json:"port_idx,omitempty"`
@@ -185,6 +200,7 @@ type SystemStats struct {
 }
 
 type InformPayload struct {
+	FirmwareCaps    int            `json:"fw_caps"`
 	MAC             string         `json:"mac"`
 	IP              string         `json:"ip"`
 	Hostname        string         `json:"hostname"`
@@ -202,9 +218,10 @@ type InformPayload struct {
 	RadioTableStats []RadioStat    `json:"radio_table_stats"`
 	VAPTable        []VAP          `json:"vap_table"`
 	EthernetTable   []EthernetPort `json:"ethernet_table,omitempty"`
+	InterfaceTable  []EthernetPort `json:"if_table,omitempty"`
 	PortTable       []Port         `json:"port_table,omitempty"`
 	SwPortTable     []Port         `json:"sw_port_table,omitempty"`
-	Uplink          *Uplink        `json:"uplink,omitempty"`
+	Uplink          string         `json:"uplink,omitempty"`
 	UplinkMAC       string         `json:"uplink_mac,omitempty"`
 	LastUplink      *LastUplink    `json:"last_uplink,omitempty"`
 	LLDPTable       []LLDPEntry    `json:"lldp_table,omitempty"`
