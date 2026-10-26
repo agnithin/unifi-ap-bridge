@@ -191,9 +191,41 @@ mv -f /tmp/unifi-bridge/unifi-bridge.new /tmp/unifi-bridge/unifi-bridge || exit 
 # Keep the management page available even when telemetry collection is
 # intentionally disabled.
 SLOT_FILE="$INSTALL_DIR/.user_slot"
-USER_SLOT="user3"
-[ -f "$SLOT_FILE" ] && USER_SLOT=$(cat "$SLOT_FILE" 2>/dev/null | tr -d ' \t\r\n')
-[ -z "$USER_SLOT" ] && USER_SLOT="user3"
+USER_SLOT=
+slot_owned() {
+    candidate=$1
+    page="/tmp/var/wwwext/$candidate.asp"
+    title="/tmp/var/wwwext/$candidate.title"
+    [ -f "$page" ] && [ ! -L "$page" ] && grep -q 'unifi-ap-bridge-webui' "$page" 2>/dev/null &&
+        [ -f "$title" ] && [ ! -L "$title" ] && grep -Fxq 'UniFi AP Bridge' "$title" 2>/dev/null
+}
+if [ -f "$SLOT_FILE" ]; then
+    USER_SLOT=$(cat "$SLOT_FILE" 2>/dev/null | tr -d ' \t\r\n')
+    case "$USER_SLOT" in user[1-9]|user1[0-9]|user20) ;; *) echo "Invalid saved WebUI slot" >&2; exit 1;; esac
+    slot_page="/tmp/var/wwwext/$USER_SLOT.asp"
+    slot_title="/tmp/var/wwwext/$USER_SLOT.title"
+    if [ -e "$slot_page" ] || [ -L "$slot_page" ] || [ -e "$slot_title" ] || [ -L "$slot_title" ]; then
+        slot_owned "$USER_SLOT" || { echo "Saved WebUI slot is now owned by another addon" >&2; exit 1; }
+    fi
+else
+    slot_i=1
+    while [ "$slot_i" -le 20 ]; do
+        candidate="user$slot_i"
+        if slot_owned "$candidate"; then USER_SLOT="$candidate"; break; fi
+        slot_i=$((slot_i + 1))
+    done
+    slot_i=1
+    while [ -z "$USER_SLOT" ] && [ "$slot_i" -le 20 ]; do
+        if [ ! -e "/tmp/var/wwwext/user${slot_i}.asp" ] && [ ! -L "/tmp/var/wwwext/user${slot_i}.asp" ] &&
+           [ ! -e "/tmp/var/wwwext/user${slot_i}.title" ] && [ ! -L "/tmp/var/wwwext/user${slot_i}.title" ]; then
+            USER_SLOT="user$slot_i"; break
+        fi
+        slot_i=$((slot_i + 1))
+    done
+    [ -n "$USER_SLOT" ] || { echo "No free WebUI user slot" >&2; exit 1; }
+    printf '%s\n' "$USER_SLOT" > "$SLOT_FILE.new.$$" || exit 1
+    chmod 600 "$SLOT_FILE.new.$$" && mv -f "$SLOT_FILE.new.$$" "$SLOT_FILE" || exit 1
+fi
 mkdir -p /tmp/var/wwwext/unifi-bridge
 if [ -f "$INSTALL_DIR/webui/unifi-bridge.asp" ]; then
     cp -fp "$INSTALL_DIR/webui/unifi-bridge.asp" "/tmp/var/wwwext/${USER_SLOT}.asp" || exit 1
@@ -246,9 +278,7 @@ if [ -f /www/require/modules/menuTree.js ]; then
 
     # Only insert if not already present
     if ! grep -q "${USER_SLOT}.asp" /tmp/menuTree.js; then
-        sed -i '/tabName: "UniFi AP Bridge"/d' /tmp/menuTree.js
-        sed -i "/${USER_SLOT}\.asp/d" /tmp/menuTree.js
-        sed -i "/ur[0-9]\+\.asp/d" /tmp/menuTree.js
+        awk '{ gsub(/\{url: "user[0-9][0-9]*\.asp", tabName: "UniFi AP Bridge"\},?/, "", $0); print }' /tmp/menuTree.js > /tmp/menuTree.clean && mv -f /tmp/menuTree.clean /tmp/menuTree.js
 
         awk -v slot="${USER_SLOT}.asp" '
         /index: "menu_Wireless"/ { in_w = 1 }

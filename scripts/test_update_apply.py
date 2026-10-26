@@ -101,7 +101,7 @@ class ApplyFailureTests(unittest.TestCase):
         for name in ("apply_config.sh", "sync_nodes.sh", "unifi-bridge.sh", "update.sh", "watchdog.sh"):
             self.write(self.install / name, "#!/bin/sh\nexit 0\n")
         (self.install / "webui").mkdir()
-        (self.install / "webui/unifi-bridge.asp").write_text("old-ui")
+        (self.install / "webui/unifi-bridge.asp").write_text("<!-- unifi-ap-bridge-webui old-generation -->")
         self.make_prior_bundle()
         runtime=self.root/"tmp/unifi-bridge";runtime.mkdir(parents=True)
         shutil.copyfile(prior_binary,runtime/"unifi-bridge")
@@ -128,7 +128,7 @@ class ApplyFailureTests(unittest.TestCase):
             "unifi-bridge-armv7": (
                 f'#!/bin/sh\necho "unifi-bridge {version} (commit: {binary_commit or commit}, built: fixture)"\nexit {binary_exit}\n'
             ).encode(),
-            "unifi-bridge.asp": b"candidate",
+            "unifi-bridge.asp": b"<!-- unifi-ap-bridge-webui candidate -->",
             "unifi-bridge.sh": b"#!/bin/sh\nexit 0\n",
             "update.sh": b"#!/bin/sh\nexit 0\n",
             "version.txt": (version + "\n").encode(),

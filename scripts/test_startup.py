@@ -17,10 +17,10 @@ class StartupTests(unittest.TestCase):
         self.install=self.root/"addon";(self.install/"config").mkdir(parents=True);(self.install/"bin").mkdir()
         self.bin=self.root/"bin";self.bin.mkdir();self.launches=self.root/"launches"
         self.env=dict(os.environ,PATH=str(self.bin)+os.pathsep+os.environ["PATH"],LAUNCHES=str(self.launches),STATUS_FILE=str(self.root/"tmp/var/wwwext/unifi-bridge/status.js"))
-        for name,body in {"killall":"exit 0","cru":"exit 0","uname":"echo armv7l","pidof":"exit 0","sync":"exit 0"}.items():
+        for name,body in {"killall":"exit 0","cru":"exit 0","uname":"echo armv7l","pidof":"exit 0","sync":"exit 0","mount":"exit 0","umount":"exit 0"}.items():
             p=self.bin/name;p.write_text("#!/bin/sh\n"+body+"\n");p.chmod(0o755)
         daemon=self.install/"bin/unifi-bridge";daemon.write_text('#!/usr/bin/env python3\nimport json,os,sys,time\nfrom pathlib import Path\ncfg=json.loads(Path(sys.argv[sys.argv.index(\'-config\')+1]).read_text())\nif \'-is-enabled\' in sys.argv:sys.exit(0 if cfg.get(\'enabled\',True) else 3)\nif \'-once\' in sys.argv and cfg.get(\'enabled\') is False:\n    p=Path(os.environ[\'STATUS_FILE\']);p.parent.mkdir(parents=True,exist_ok=True);p.write_text(\'window.unifiBridgeStatus = {"running":false,"enabled":false,"version":"1.2.4","commit":"'+'a'*40+'","status_updated_at":\'+str(int(time.time()))+\'};\');sys.exit(0)\nwith open(os.environ[\'LAUNCHES\'],\'a\') as f:f.write(\'launched\\n\')\n');daemon.chmod(0o755)
-        source=(ROOT/"scripts/start.sh").read_text().replace('/tmp/',str(self.root/"tmp")+'/').replace('/jffs/addons/unifi-bridge',str(self.install))
+        source=(ROOT/"scripts/start.sh").read_text().replace('/tmp/',str(self.root/"tmp")+'/').replace('/jffs/addons/unifi-bridge',str(self.install)).replace('/www/require/modules/menuTree.js',str(self.root/"www/require/modules/menuTree.js"))
         self.script=self.root/"start.sh";self.script.write_text(source)
     def run_start(self):
         lock=self.root/"tmp/unifi-bridge-start.lock"
@@ -60,6 +60,37 @@ class StartupTests(unittest.TestCase):
             if self.launches.exists():break
             time.sleep(.01)
         self.assertEqual(self.launches.read_text().splitlines(),['launched'])
+    def test_menu_allocation_preserves_other_addon_entries(self):
+        (self.install/"webui").mkdir()
+        (self.install/"webui/unifi-bridge.asp").write_text("<!-- unifi-ap-bridge-webui -->")
+        (self.install/"config/config.json").write_text('{"enabled":true}')
+        module=self.root/"www/require/modules/menuTree.js";module.parent.mkdir(parents=True)
+        module.write_text('index: "menu_Wireless",\n{url: "user9.asp", tabName: "Other Addon"},\n{url: "NULL"}\n')
+        self.run_start()
+        menu=(self.root/"tmp/menuTree.js").read_text()
+        self.assertIn('user9.asp", tabName: "Other Addon"',menu)
+        self.assertIn('user1.asp", tabName: "UniFi AP Bridge"',menu)
+        self.assertTrue((self.root/"tmp/var/wwwext/user1.asp").is_file())
+    def test_saved_slot_collision_is_not_overwritten(self):
+        (self.install/"webui").mkdir()
+        (self.install/"webui/unifi-bridge.asp").write_text("<!-- unifi-ap-bridge-webui -->")
+        (self.install/"config/config.json").write_text('{"enabled":true}')
+        (self.install/".user_slot").write_text("user2\n")
+        page=self.root/"tmp/var/wwwext/user2.asp";page.parent.mkdir(parents=True);page.write_text("other addon page")
+        result=subprocess.run(["sh",str(self.script)],env=self.env,capture_output=True,text=True,timeout=5)
+        self.assertNotEqual(result.returncode,0)
+        self.assertEqual(page.read_text(),"other addon page")
+        self.assertFalse(self.launches.exists())
+    def test_missing_slot_recovers_existing_owned_page_before_allocating_free(self):
+        (self.install/"webui").mkdir()
+        (self.install/"webui/unifi-bridge.asp").write_text("<!-- unifi-ap-bridge-webui -->")
+        (self.install/"config/config.json").write_text('{"enabled":true}')
+        web=self.root/"tmp/var/wwwext";web.mkdir(parents=True)
+        (web/"user3.asp").write_text("<!-- unifi-ap-bridge-webui old -->")
+        (web/"user3.title").write_text("UniFi AP Bridge")
+        self.run_start()
+        self.assertEqual((self.install/".user_slot").read_text(),"user3\n")
+        self.assertTrue((web/"user3.asp").is_file())
     def test_accepted_journal_cleanup_preserves_candidate_generation(self):
         txn=self.install/".update-transaction";txn.mkdir()
         (txn/"manifest").write_text("present version.txt\n")
@@ -83,7 +114,7 @@ class StartupTests(unittest.TestCase):
         );prior_binary.chmod(0o755)
         (snapshot/"start.sh").write_text("#!/bin/sh\necho prior\n")
         (snapshot/"version.txt").write_text("1.2.4\n")
-        (snapshot/"webui/unifi-bridge.asp").write_text("prior-ui")
+        (snapshot/"webui/unifi-bridge.asp").write_text("<!-- unifi-ap-bridge-webui prior -->")
         bundle_files={"apply_config.sh":b"#!/bin/sh\n", "bundle.json":('{"version":"1.2.4","commit":"'+'a'*40+'","architecture":"armv7"}\n').encode(),
             "install.sh":b"#!/bin/sh\n", "start.sh":(snapshot/"start.sh").read_bytes(), "sync_nodes.sh":b"#!/bin/sh\n",
             "unifi-bridge-armv7":prior_binary.read_bytes(), "unifi-bridge.asp":b"prior-ui", "unifi-bridge.sh":b"#!/bin/sh\n",
@@ -107,7 +138,7 @@ class StartupTests(unittest.TestCase):
         self.run_start()
         self.assertFalse(txn.exists())
         self.assertEqual((self.install/"version.txt").read_text(),"1.2.4\n")
-        self.assertEqual((self.install/"webui/unifi-bridge.asp").read_text(),"prior-ui")
+        self.assertEqual((self.install/"webui/unifi-bridge.asp").read_text(),"<!-- unifi-ap-bridge-webui prior -->")
         self.assertIn("prior",(self.install/"start.sh").read_text())
         self.assertEqual((self.install/"config/config.json").read_text(),'{"enabled":false,"unknown":"preserve"}')
         self.run_start() # recovery and disabled publication are idempotent

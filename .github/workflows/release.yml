@@ -31,6 +31,7 @@ jobs:
           python3 scripts/test_update_backend.py
           python3 scripts/test_update_apply.py
           python3 scripts/test_startup.py
+          python3 scripts/test_install.py
           python3 scripts/test_secret_guard.py
           python3 scripts/check_secrets.py
           node scripts/test_update_ui.js
@@ -75,7 +76,17 @@ jobs:
             done
             cp webui/unifi-bridge.asp "$staging/unifi-bridge.asp"
             cp version.txt "$staging/version.txt"
-            printf '{\n  "version": "%s",\n  "commit": "%s",\n  "architecture": "%s"\n}\n' "$VER" "${GITHUB_SHA}" "$arch" > "$staging/bundle.json"
+            {
+              printf '{\n  "version": "%s",\n  "commit": "%s",\n  "architecture": "%s",\n' "$VER" "${GITHUB_SHA}" "$arch"
+              first=1
+              for file in "$binary" install.sh start.sh apply_config.sh sync_nodes.sh unifi-bridge.sh update.sh watchdog.sh unifi-bridge.asp version.txt; do
+                digest=$(sha256sum "$staging/$file" | awk '{print $1}')
+                if [[ "$first" == 0 ]]; then printf ',\n'; fi
+                printf '  "sha256_%s": "%s"' "$file" "$digest"
+                first=0
+              done
+              printf '\n}\n'
+            } > "$staging/bundle.json"
             name="unifi-bridge-addon-${GITHUB_SHA}-${arch}.tar.gz"
             tar -czf "dist/$name" -C "$staging" "$binary" install.sh start.sh apply_config.sh sync_nodes.sh unifi-bridge.sh update.sh watchdog.sh unifi-bridge.asp version.txt bundle.json
             (cd dist && sha256sum "$name" > "$name.sha256")

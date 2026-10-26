@@ -1,70 +1,77 @@
 #!/bin/sh
 set -eu
 
-# ==============================================================================
-# unifi-ap-bridge Uninstaller for Asuswrt-Merlin
-# ==============================================================================
-
-ADDON_NAME="unifi-bridge"
+ADDON_NAME=unifi-bridge
 INSTALL_DIR="/jffs/addons/$ADDON_NAME"
-SCRIPTS_DIR="/jffs/scripts"
+SCRIPTS_DIR=/jffs/scripts
+WWW_DIR=/tmp/var/wwwext
 
-echo "====================================================="
-echo "   Uninstalling UniFi AP Bridge                      "
-echo "====================================================="
+slot=
+if [ -f "$INSTALL_DIR/.user_slot" ]; then slot=$(tr -d ' \t\r\n' < "$INSTALL_DIR/.user_slot"); fi
+case "$slot" in user[1-9]|user1[0-9]|user20|'') ;;
+    *) echo "Uninstaller: refusing invalid saved WebUI slot" >&2; exit 1 ;;
+esac
 
-# 1. Disarm watchdog cron
-if type cru >/dev/null 2>&1; then
-    cru d unifi_bridge_watchdog 2>/dev/null || true
-fi
+remove_owned_hook_lines() {
+    file=$1; tmp="$file.uninstall.$$"
+    [ -f "$file" ] || return 0
+    start_line="$INSTALL_DIR/start.sh </dev/null >/dev/null 2>&1 &"
+    stop_line='killall unifi-bridge 2>/dev/null || true'
+    event_line='if echo "$2" | /bin/grep -q "unifi_bridge"; then { /jffs/addons/unifi-bridge/apply_config.sh "$@" & }; fi'
+    awk -v start="$start_line" -v stop="$stop_line" -v event="$event_line" '
+      $0 == "# BEGIN unifi-ap-bridge" { skip=1; next }
+      $0 == "# END unifi-ap-bridge" { skip=0; next }
+      skip { next }
+      $0 == "# UniFi AP Bridge Addon" || $0 == start || $0 == stop || $0 == event { next }
+      { print }
+    ' "$file" > "$tmp"
+    chmod 755 "$tmp"
+    mv -f "$tmp" "$file"
+}
 
-# 2. Stop running daemon
+if type cru >/dev/null 2>&1; then cru d unifi_bridge_watchdog 2>/dev/null || true; fi
 killall unifi-bridge 2>/dev/null || true
+for hook in services-start services-stop service-event; do
+    remove_owned_hook_lines "$SCRIPTS_DIR/$hook"
+done
 
-# 3. Clean up services-start
-if [ -f "$SCRIPTS_DIR/services-start" ]; then
-    sed -i '/# UniFi AP Bridge Addon/d' "$SCRIPTS_DIR/services-start"
-    sed -i '/unifi-bridge/d' "$SCRIPTS_DIR/services-start"
+# Remove the CLI link only when it still points into this addon's directory.
+if [ -L "$SCRIPTS_DIR/unifi-bridge" ] &&
+   [ "$(readlink "$SCRIPTS_DIR/unifi-bridge" 2>/dev/null || true)" = "$INSTALL_DIR/unifi-bridge.sh" ]; then
+    rm -f "$SCRIPTS_DIR/unifi-bridge"
+fi
+if [ -L /opt/bin/unifi-bridge ] &&
+   [ "$(readlink /opt/bin/unifi-bridge 2>/dev/null || true)" = "$SCRIPTS_DIR/unifi-bridge" ]; then
+    rm -f /opt/bin/unifi-bridge
 fi
 
-# 4. Clean up services-stop
-if [ -f "$SCRIPTS_DIR/services-stop" ]; then
-    sed -i '/# UniFi AP Bridge Addon/d' "$SCRIPTS_DIR/services-stop"
-    sed -i '/unifi-bridge/d' "$SCRIPTS_DIR/services-stop"
+remove_owned_slot() {
+    slot_name=$1
+    page="$WWW_DIR/$slot_name.asp"
+    title="$WWW_DIR/$slot_name.title"
+    if [ -f "$page" ] && [ ! -L "$page" ] && grep -q 'unifi-ap-bridge-webui' "$page" 2>/dev/null &&
+       [ -f "$title" ] && [ ! -L "$title" ] && grep -Fxq 'UniFi AP Bridge' "$title" 2>/dev/null; then
+        rm -f "$page" "$title"
+    fi
+}
+if [ -n "$slot" ]; then
+    remove_owned_slot "$slot"
+else
+    # Older installs may lack the saved slot file. Recover only pages bearing
+    # this addon's embedded marker, never by assuming user3 or a fixed index.
+    i=1
+    while [ "$i" -le 20 ]; do remove_owned_slot "user$i"; i=$((i + 1)); done
 fi
+rm -rf "$WWW_DIR/unifi-bridge"
 
-# 5. Clean up service-event
-if [ -f "$SCRIPTS_DIR/service-event" ]; then
-    sed -i '/unifi_bridge/d' "$SCRIPTS_DIR/service-event"
-fi
-
-# 6. Remove CLI management companion
-rm -f "$SCRIPTS_DIR/unifi-bridge"
-rm -f "/opt/bin/unifi-bridge"
-
-# 7. Remove WebUI files and menuTree entries
-USER_SLOT="user3"
-if [ -f "$INSTALL_DIR/.user_slot" ]; then
-    USER_SLOT=$(cat "$INSTALL_DIR/.user_slot" 2>/dev/null | tr -d ' \t\r\n')
-fi
-
-rm -f "/tmp/var/wwwext/${USER_SLOT}.asp"
-rm -f "/tmp/var/wwwext/${USER_SLOT}.title"
-rm -rf "/tmp/var/wwwext/unifi-bridge"
-
-if [ -f /tmp/menuTree.js ]; then
-    sed -i "/\${USER_SLOT}\.asp/d" /tmp/menuTree.js
-    sed -i "/UniFi AP Bridge/d" /tmp/menuTree.js
+# Remove only our own menu object, retaining every other menuTree entry.
+if [ -f /tmp/menuTree.js ] && grep -q 'tabName: "UniFi AP Bridge"' /tmp/menuTree.js; then
+    awk '{ gsub(/\{url: "user[0-9][0-9]*\.asp", tabName: "UniFi AP Bridge"\},?/, "", $0); print }' /tmp/menuTree.js > /tmp/menuTree.js.uninstall.$$
+    mv -f /tmp/menuTree.js.uninstall.$$ /tmp/menuTree.js
     umount /www/require/modules/menuTree.js 2>/dev/null || true
     mount -o bind /tmp/menuTree.js /www/require/modules/menuTree.js 2>/dev/null || true
 fi
 
-# 8. Remove installation files
-rm -rf "$INSTALL_DIR"
-rm -rf "/tmp/$ADDON_NAME"
-rm -f "/tmp/unifi-bridge.log"
-rm -f "/tmp/unifi-bridge-watchdog.log"
-
-echo "====================================================="
-echo "   UniFi AP Bridge uninstalled cleanly.              "
-echo "====================================================="
+rm -rf "$INSTALL_DIR" "/tmp/$ADDON_NAME"
+rm -f /tmp/unifi-bridge.log /tmp/unifi-bridge-watchdog.log
+echo "UniFi AP Bridge uninstalled."

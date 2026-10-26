@@ -124,7 +124,7 @@ All communication with `:8080/inform` utilizes the UniFi binary wire packet form
 ## 4. WebUI Architecture & Lifecycle
 
 ### 4.1 Dynamic User Slot Allocation
-The installer scans `/tmp/var/wwwext/user1.asp` through `user20.asp` and their title/addon markers, records the slot in `.user_slot`, and serves it as `/userN.asp`. Startup binds `/tmp/menuTree.js` over `/www/require/modules/menuTree.js` to register navigation. Status assets are served under `/ext/unifi-bridge/`.
+The installer accepts the extracted flat release bundle and verifies its exact metadata schema, per-member SHA-256 values, architecture, and daemon version/commit before changing persistent files or stopping a running daemon. It assembles the updater's managed archive from those verified members so first install and reinstall start the same generation. It recovers only a page/title pair carrying this addon's marker, otherwise allocates a free `/tmp/var/wwwext/user1.asp` through `user20.asp` slot and records it in `.user_slot`. Startup binds `/tmp/menuTree.js` over `/www/require/modules/menuTree.js` to register navigation; uninstall removes only the addon's owned menu entry, hooks, and slot. Status assets are served under `/ext/unifi-bridge/`.
 
 ### 4.2 Background updates and form isolation
 Update check/install actions use bounded background XHR with request matching. Settings and sync still use the native hidden iframe; bounded background transport for those forms remains pending. Standard Asuswrt forms submit to `/start_apply.htm` in a hidden iframe, which triggers `top_delay_redirect()` or `parent.refreshpage()`, causing the browser to reload the entire page and lose form state.
