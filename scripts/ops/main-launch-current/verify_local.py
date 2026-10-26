@@ -53,20 +53,36 @@ launch_template = (root / 'launch.remote.template.sh').read_text()
 assert f"SCRIPT_SHA='{updater_sha}'" in launch_template and archive_sha in launch_template
 launch_command = subprocess.check_output(['python3', str(root/'build_command.py'), str(root/'launch.remote.template.sh'), str(source)], text=True)
 recovery_command = subprocess.check_output(['python3', str(root/'build_command.py'), str(root/'recover.remote.template.sh'), str(root/'recover.remote.sh')], text=True)
-assert len(launch_command) < 110000 and len(recovery_command) < 110000
+launch_payload = launch_command.rstrip('\n')  # POSIX command substitution removes trailing newlines.
+recovery_payload = recovery_command.rstrip('\n')
+launch_handoff = subprocess.check_output(['python3', str(root/'build_command.py'), '--handoff', '/tmp/launch-handoff-test', hashlib.sha256(launch_payload.encode()).hexdigest()], text=True)
+recovery_handoff = subprocess.check_output(['python3', str(root/'build_command.py'), '--handoff', '/tmp/recovery-handoff-test', hashlib.sha256(recovery_payload.encode()).hexdigest()], text=True)
+assert len(launch_handoff) < 1000 and len(recovery_handoff) < 1000
+for wrapper in ['launch_main.sh', 'recover_main.sh']:
+    wrapper_text = (root/wrapper).read_text()
+    assert "printf '%s' \"$REMOTE_COMMAND\" | rtk proxy ssh" in wrapper_text
+    assert '--handoff "$HANDOFF_DIR" "$REMOTE_SHA"' in wrapper_text
 with tempfile.TemporaryDirectory(prefix='main-current-packet-') as td:
     td = pathlib.Path(td)
-    for name, command in [('launch.command', launch_command), ('recovery.command', recovery_command)]:
+    for name, command in [('launch.payload', launch_payload), ('recovery.payload', recovery_payload),
+                          ('launch.receiver', launch_handoff), ('recovery.receiver', recovery_handoff)]:
         path = td / name
         path.write_text(command)
         subprocess.run(['sh', '-n', str(path)], check=True)
-    # Exercise the exact POSIX single-quote transport shape with a harmless sentinel.
+    # Exercise the verified stdin receiver locally with a harmless sentinel.
     sentinel = b"#!/bin/sh\nprintf '%s\\n' 'safe quote: a'\\''b' > sentinel.result\n"
-    quoted = "'" + sentinel.decode().replace("'", "'\\''") + "'"
-    remote = f"printf '%s' {quoted} > {td}/sentinel.sh && chmod 700 {td}/sentinel.sh && openssl dgst -sha256 {td}/sentinel.sh && sh -n {td}/sentinel.sh && /bin/sh {td}/sentinel.sh"
-    subprocess.run(['sh', '-c', remote], cwd=td, check=True, stdout=subprocess.DEVNULL)
-    assert (td/'sentinel.sh').read_bytes() == sentinel
+    sentinel_sha = hashlib.sha256(sentinel).hexdigest()
+    sentinel_dir = td/'sentinel-handoff'
+    sentinel_receiver = subprocess.check_output(['python3', str(root/'build_command.py'), '--handoff', str(sentinel_dir), sentinel_sha], text=True)
+    subprocess.run(['sh', '-c', sentinel_receiver], cwd=td, input=sentinel, check=True, stdout=subprocess.DEVNULL)
+    assert not sentinel_dir.exists()
     assert (td/'sentinel.result').read_text() == "safe quote: a'b\n"
+    (td/'sentinel.result').unlink()
+    truncated_dir = td/'truncated-handoff'
+    truncated_receiver = subprocess.check_output(['python3', str(root/'build_command.py'), '--handoff', str(truncated_dir), sentinel_sha], text=True)
+    truncated = subprocess.run(['sh', '-c', truncated_receiver], cwd=td, input=sentinel[:-1], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    assert truncated.returncode != 0 and b'handoff checksum mismatch' in truncated.stderr
+    assert (truncated_dir/'script.sh').exists() and not (td/'sentinel.result').exists()
 
 # Exercise actual preservation helpers with synthetic non-secret data.
 compare_fn = re.search(r'(?ms)^compare\(\) \{\n.*?^\}', launch_template).group(0)
@@ -113,5 +129,5 @@ with tempfile.TemporaryDirectory(prefix='main-current-preservation-') as td:
     subprocess.run(['sh', '-eu', '-c', probe], check=True)
 print(f'candidate={commit}; armv7_archive_sha256={archive_sha}; sidecar_sha256={sidecar_sha}; updater_sha256={updater_sha}')
 print('release manifest, all member hashes, architecture, exact member set and sidecar: PASS')
-print(f'launch_command_bytes={len(launch_command)}; recovery_command_bytes={len(recovery_command)}; shell_syntax=PASS')
-print('same-session sentinel, preservation comparators, state identity, lock cleanup, UTC/local-boundary and stale-heartbeat regressions: PASS')
+print(f'launch_stream_bytes={len(launch_command)}; recovery_stream_bytes={len(recovery_command)}; receiver_command_bytes={len(launch_handoff)}/{len(recovery_handoff)}; shell_syntax=PASS')
+print('verified same-session stdin handoff, truncated-stream rejection, preservation comparators, state identity, lock cleanup, UTC/local-boundary and stale-heartbeat regressions: PASS')
