@@ -59,7 +59,7 @@ cmd_status() {
         model=$(grep '"model"' "$CONFIG_FILE" | head -n 1 | awk -F'"' '{print $4}')
         interval=$(grep '"interval_sec"' "$CONFIG_FILE" | head -n 1 | awk -F':' '{print $2}' | tr -d ', ')
         printf "Emulated AP Model: %s\n" "${model:-U6M}"
-        printf "Inform Endpoint  : %s\n" "${ctrl_url:-http://10.100.1.1:8080/inform}"
+        printf "Inform Endpoint  : %s\n" "${ctrl_url:-Unknown}"
         printf "Report Interval  : %s seconds\n" "${interval:-10}"
     fi
 
@@ -244,10 +244,15 @@ cmd_logs() {
 
 cmd_test() {
     show_header
-    ctrl_url="http://10.100.1.1:8080/inform"
+    ctrl_url=""
     if [ -f "$CONFIG_FILE" ]; then
         extracted=$(grep '"controller_url"' "$CONFIG_FILE" | head -n 1 | awk -F'"' '{print $4}')
         [ -n "$extracted" ] && ctrl_url="$extracted"
+    fi
+
+    if [ -z "$ctrl_url" ]; then
+        printf "No controller URL is configured; set an explicit gateway or controller URL first.\n"
+        return 1
     fi
 
     printf "Testing controller reachability: %s\n" "$ctrl_url"

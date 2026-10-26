@@ -227,15 +227,30 @@ class InstallLifecycleTests(unittest.TestCase):
         self.run_install(expected=1)
         self.assert_preflight_untouched()
 
-    def test_unsupported_architecture_and_invalid_gateway_are_safe(self):
+    def test_unsupported_architecture_and_invalid_gateway_preserve_unknown(self):
         self.env["ARCH"] = "mips"
         self.run_install(expected=1); self.assert_preflight_untouched()
         self.env.pop("ARCH")
         self.env["GATEWAY"] = '1.2.3.4";touch /tmp/injected;#'
         self.run_install()
         config = json.loads((self.addon / "config/config.json").read_text())
-        self.assertEqual(config["controller_url"], "http://10.100.1.1:8080/inform")
+        self.assertEqual(config["controller_url"], "")
         self.assertFalse((self.root / "injected").exists())
+
+    def test_empty_gateway_does_not_invent_controller_address(self):
+        self.env["GATEWAY"] = ""
+        self.run_install()
+        config = json.loads((self.addon / "config/config.json").read_text())
+        self.assertEqual(config["controller_url"], "")
+
+    def test_non_unicast_gateway_does_not_become_controller(self):
+        for gateway in ("0.0.0.0", "127.0.0.1", "224.0.0.1", "255.255.255.255"):
+            with self.subTest(gateway=gateway):
+                self.env["GATEWAY"] = gateway
+                self.run_install()
+                config = json.loads((self.addon / "config/config.json").read_text())
+                self.assertEqual(config["controller_url"], "")
+                shutil.rmtree(self.addon)
 
     def test_disposable_uninstall_removes_only_owned_slot_menu_and_hooks(self):
         self.run_install()

@@ -96,8 +96,25 @@ func TestCustomSettingsAndGateway(t *testing.T) {
 	if c.Enabled || c.ControllerURL != "http://10.0.0.1:8080/inform" || c.IntervalSec != 15 {
 		t.Fatalf("unexpected settings: %+v", c)
 	}
-	if e := mergeSettings(path, strings.NewReader(`{"auto_gateway":true}`), "json", "not an IP"); e == nil {
-		t.Fatal("accepted invalid gateway")
+	if e := mergeSettings(path, strings.NewReader(`{"auto_gateway":true,"controller_url":""}`), "json", "not an IP"); e != nil {
+		t.Fatalf("unknown auto-detected gateway should be preserved: %v", e)
+	}
+	c, e = loadConfig(path)
+	if e != nil || c.ControllerURL != "" {
+		t.Fatalf("invalid gateway should remain unknown, config=%+v err=%v", c, e)
+	}
+}
+
+func TestConfiguredGatewayURLRejectsNonUnicastAddresses(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"10.0.0.1", "http://10.0.0.1:8080/inform"},
+		{"", ""}, {"not an IP", ""}, {"0.0.0.0", ""}, {"127.0.0.1", ""},
+		{"0.1.2.3", ""}, {"224.0.0.1", ""}, {"240.0.0.1", ""},
+		{"255.255.255.255", ""}, {"2001:db8::1", ""},
+	} {
+		if got := configuredGatewayURL(tc.in); got != tc.want {
+			t.Errorf("configuredGatewayURL(%q) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }
 func TestLegacyConfigEnabledByDefault(t *testing.T) {
@@ -131,7 +148,7 @@ func TestSharedSettingsPreserveNodeOwnedFields(t *testing.T) {
 	for key, want := range map[string]string{
 		"enabled": "false", "interval_sec": "30", "branch": `"dev"`,
 		"controller_url": `"http://main:8080/inform"`, "state_path": `"/node/state.json"`,
-		"uplink_remote_port": "3", "nodes": `["10.0.0.3"]`,
+		"uplink_mac": `"aa:bb:cc:dd:ee:ff"`, "uplink_remote_port": "3", "nodes": `["10.0.0.3"]`,
 		"unknown_node_field": `{"keep":true}`,
 	} {
 		var actualValue, expectedValue any

@@ -468,6 +468,80 @@ func TestConfirmedUplinkLossClearsParentAndFDBAttachments(t *testing.T) {
 	}
 }
 
+func TestGatewayIdentityRequiresLLDPOrExplicitConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mac  string
+	}{
+		{"globally administered ARP neighbor", "00:11:22:33:44:55"},
+		{"locally administered ARP neighbor", "6e:63:f8:30:9a:05"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := func(ctx context.Context, name string, args ...string) (string, error) {
+				if name == "nvram" {
+					switch strings.Join(args, " ") {
+					case "get lan_hwaddr":
+						return "00:11:22:33:44:66", nil
+					case "get lan_gateway":
+						return "10.0.0.1", nil
+					case "get lan_ipaddr":
+						return "10.0.0.2", nil
+					}
+				}
+				if name == "lldpcli" {
+					return `{"lldp":{"interface":{}}}`, nil
+				}
+				return "", nil
+			}
+			p := NewAsusProvider(runner)
+			p.readDir = func(string) ([]os.DirEntry, error) { return nil, errors.New("fixture bridge inventory unavailable") }
+			p.readFile = func(path string) ([]byte, error) {
+				switch {
+				case strings.HasSuffix(path, "/carrier"):
+					return []byte("1"), nil
+				case strings.HasSuffix(path, "/speed"):
+					return []byte("1000"), nil
+				case strings.HasSuffix(path, "/duplex"):
+					return []byte("full"), nil
+				case path == "/proc/net/dev":
+					return []byte(""), nil
+				case path == "/proc/net/arp":
+					return []byte("IP address HW type Flags HW address Mask Device\n10.0.0.1 0x1 0x2 " + tc.mac + " * br0\n"), nil
+				default:
+					return nil, errors.New("not in fixture")
+				}
+			}
+			_, _, uplink, err := p.GetPortTableContext(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if uplink.UplinkMAC != "" || uplink.UplinkSource != "" {
+				t.Fatalf("ARP-only gateway was presented as verified neighbor identity: %+v", uplink)
+			}
+			if uplink.IP != "10.0.0.2" {
+				t.Fatalf("uplink local IP unexpectedly changed: %q", uplink.IP)
+			}
+		})
+	}
+}
+
+func TestConfiguredGatewayIPPreservesOnlyValidIPv4(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"10.0.0.1", "10.0.0.1"},
+		{"", ""},
+		{"not an IP", ""},
+		{"0.0.0.0", ""},
+		{"127.0.0.1", ""},
+		{"224.0.0.1", ""},
+		{"255.255.255.255", ""},
+		{"2001:db8::1", ""},
+	} {
+		if got := configuredGatewayIP(tc.in); got != tc.want {
+			t.Errorf("configuredGatewayIP(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestPerSampleProcSnapshotIsReadOnce(t *testing.T) {
 	var calls atomic.Int32
 	p := NewAsusProvider(nil)

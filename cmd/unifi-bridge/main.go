@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"sync"
@@ -41,7 +42,7 @@ type Config struct {
 func loadConfig(path string) (*Config, error) {
 	cfg := &Config{
 		Enabled:       true,
-		ControllerURL: "http://10.100.1.1:8080/inform",
+		ControllerURL: "",
 		IntervalSec:   10,
 		Model:         "U6M",
 		StatePath:     "/jffs/addons/unifi-bridge/state.json",
@@ -481,10 +482,18 @@ func applyConfiguredUplinkFallback(uplink *telemetry.Uplink, cfg *Config) {
 		return
 	}
 	if cfg.UplinkMAC != "" && uplink.UplinkMAC == "" {
-		uplink.UplinkMAC = cfg.UplinkMAC
+		if mac, err := net.ParseMAC(cfg.UplinkMAC); err == nil && len(mac) == 6 && mac[0]&1 == 0 && (mac[0]|mac[1]|mac[2]|mac[3]|mac[4]|mac[5]) != 0 {
+			uplink.UplinkMAC = mac.String()
+			if uplink.UplinkSource == "" {
+				uplink.UplinkSource = "configured_topology"
+			}
+		}
 	}
 	verifiedLLDP := uplink.UplinkSource == "lldp_uplink" || uplink.UplinkSource == "lldp_uplink_cached"
 	if !verifiedLLDP && uplink.UplinkRemotePort <= 0 && cfg.UplinkRemotePort > 0 {
 		uplink.UplinkRemotePort = cfg.UplinkRemotePort
+		if uplink.UplinkSource == "" {
+			uplink.UplinkSource = "configured_topology"
+		}
 	}
 }

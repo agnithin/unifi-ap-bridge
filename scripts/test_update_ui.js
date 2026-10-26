@@ -136,6 +136,25 @@ context.updateUI({running:true,pid:123,status_updated_at:1000,sample_fresh:true,
 assert.equal(node('ports_val').children[0].children[0].textContent,'eth0: Speed unknown FDX','malformed numeric speeds must be explicit and safe');
 console.log('Port UI regression passed: labels use text nodes and malformed speeds are rejected.');
 
+context.detectedGatewayIP='';
+context.updateUI({running:true,pid:123,status_updated_at:1000,sample_fresh:true,enabled:true,branch:'dev',model_code:'U6IW',interval_sec:10,controller_url:''});
+assert.equal(node('controller_val').textContent,'Unknown','missing gateway must remain unknown in status');
+for (const invalidGateway of ['not-an-ip','0.0.0.0','127.0.0.1','224.0.0.1','255.255.255.255','2001:db8::1']) {
+  context.detectedGatewayIP=invalidGateway;
+  assert.equal(context.detectedGatewayURL(),'','non-unicast gateway must not be used as a controller URL');
+}
+context.detectedGatewayIP='';
+node('unifibridge_auto_1').checked=true;
+context.toggleControllerInput();
+assert.equal(node('input_controller_url').value,'','auto mode must not synthesize a controller URL without a gateway');
+console.log('Gateway fallback regression passed: missing gateway stays unknown.');
+
+context.applySettings();
+assert.equal(form.unifibridge_controller_url.value,'','saving auto mode without a detected gateway must preserve unknown');
+assert.equal(JSON.parse(node('amng_custom').value).controller_url,'');
+context.finishActionRequest();
+console.log('Gateway settings regression passed: auto mode does not invent an endpoint.');
+
 clock=70000;context.applySettings();
 const settingsRequest=context.activeActionRequest;
 assert.ok(settingsRequest);

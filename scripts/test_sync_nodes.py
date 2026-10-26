@@ -37,6 +37,50 @@ class ClusterTests(unittest.TestCase):
                                 capture_output=True, text=True, env=self.env, timeout=3)
         self.assertNotEqual(result.returncode, 0)
 
+    def test_dropbear_first_contact_accepts_unknown_but_rejects_key_mismatch(self):
+        functions = SOURCE[SOURCE.index("cluster_ssh() ("):SOURCE.index("# Discover configured")]
+        known_hosts = self.root / "known_hosts.fixture"
+        args_file = self.root / "ssh-args.fixture"
+        self.env.update(KNOWN_HOSTS_FIXTURE=str(known_hosts), SSH_ARGS_FIXTURE=str(args_file), PEER_HOST_KEY="key-one")
+        self.stub("ssh", r'''
+count_y=0
+last=
+for arg do
+  [ "$arg" = "-y" ] && count_y=$((count_y + 1))
+  case "$arg" in StrictHostKeyChecking=*|UserKnownHostsFile=*|GlobalKnownHostsFile=*) exit 90;; esac
+  last=$arg
+  printf '%s\n' "$arg" >> "$SSH_ARGS_FIXTURE"
+done
+[ "$count_y" -eq 1 ] || exit 91
+host=$last
+key=$PEER_HOST_KEY
+if [ -f "$KNOWN_HOSTS_FIXTURE" ]; then
+  old=$(awk -v h="$host" '$1 == h { print $2; exit }' "$KNOWN_HOSTS_FIXTURE")
+  if [ -n "$old" ]; then [ "$old" = "$key" ] || exit 92; exit 0; fi
+fi
+printf '%s %s\n' "$host" "$key" >> "$KNOWN_HOSTS_FIXTURE"
+''')
+        invoke = functions + '\nSSH_KEY=fixture-identity; export SSH_KEY; cluster_ssh node'
+        first = subprocess.run(["sh", "-c", invoke], capture_output=True, text=True,
+                               env=self.env, timeout=3)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertEqual(known_hosts.read_text(), "node key-one\n")
+        known_hosts_before = known_hosts.read_text()
+        args_file.unlink(missing_ok=True)
+        matching = subprocess.run(["sh", "-c", invoke], capture_output=True, text=True,
+                                  env=self.env, timeout=3)
+        self.assertEqual(matching.returncode, 0, matching.stderr)
+        self.assertEqual(known_hosts.read_text(), known_hosts_before)
+        self.env["PEER_HOST_KEY"] = "key-two"
+        mismatch = subprocess.run(["sh", "-c", invoke], capture_output=True, text=True,
+                                  env=self.env, timeout=3)
+        self.assertNotEqual(mismatch.returncode, 0, "known-host mismatch must fail")
+        self.assertEqual(known_hosts.read_text(), known_hosts_before, "mismatch must not replace trusted key")
+        args = args_file.read_text().splitlines()
+        self.assertIn("-y", args)
+        self.assertNotIn("StrictHostKeyChecking=no", args)
+        self.assertNotIn("-y\n-y", args_file.read_text())
+
     def test_freshness(self):
         functions = SOURCE[SOURCE.index("status_is_fresh() {"):SOURCE.index("# Discover configured")]
         for now, updated, limit, expected in [

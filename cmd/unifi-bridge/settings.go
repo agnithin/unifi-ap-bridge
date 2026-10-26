@@ -25,6 +25,18 @@ func settingsMutationLockPath() string {
 	return defaultMutationLock
 }
 
+func configuredGatewayURL(gateway string) string {
+	ip := net.ParseIP(strings.TrimSpace(gateway))
+	if ip == nil {
+		return ""
+	}
+	ipv4 := ip.To4()
+	if ipv4 == nil || ipv4[0] < 1 || ipv4[0] >= 224 || ip.IsLoopback() || ip.IsMulticast() || ipv4.Equal(net.IPv4bcast) {
+		return ""
+	}
+	return "http://" + ipv4.String() + ":8080/inform"
+}
+
 // acquireSettingsMutation serializes direct helper invocations with shell
 // settings, sync and updater transactions. Inherited ownership is accepted only
 // when its token matches the live owner record; stale locks are never stolen.
@@ -165,9 +177,11 @@ func mergeSettings(path string, input io.Reader, format, gateway string, expecte
 			if json.Unmarshal(value, &v) != nil {
 				return fmt.Errorf("invalid controller URL")
 			}
-			u, e := url.Parse(v)
-			if e != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || u.Fragment != "" {
-				return fmt.Errorf("invalid controller URL")
+			if v != "" {
+				u, e := url.Parse(v)
+				if e != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || u.Fragment != "" {
+					return fmt.Errorf("invalid controller URL")
+				}
 			}
 		default:
 			return fmt.Errorf("unsupported settings field")
@@ -181,10 +195,7 @@ func mergeSettings(path string, input io.Reader, format, gateway string, expecte
 		}
 	}
 	if auto {
-		if net.ParseIP(gateway) == nil || gateway == "0.0.0.0" {
-			return fmt.Errorf("invalid gateway address")
-		}
-		value, _ := json.Marshal("http://" + net.JoinHostPort(gateway, "8080") + "/inform")
+		value, _ := json.Marshal(configuredGatewayURL(gateway))
 		current["controller_url"] = value
 	}
 	// Validate known daemon fields without dropping unknown fields.

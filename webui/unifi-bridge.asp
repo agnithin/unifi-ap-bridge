@@ -135,7 +135,24 @@ thead.collapsible-jquery {
 var autoRefreshTimer = null;
 var formInitialized = false;
 var lastClusterHtml = "";
-var detectedGatewayIP = "<% nvram_get("lan_gateway"); %>" || "10.100.1.1";
+var detectedGatewayIP = "<% nvram_get("lan_gateway"); %>";
+
+function validGatewayIP(value) {
+  var parts = String(value || "").split(".");
+  if (parts.length !== 4) return false;
+  var octets = [];
+  for (var i = 0; i < parts.length; i++) {
+    if (!/^\d{1,3}$/.test(parts[i]) || (parts[i].length > 1 && parts[i].charAt(0) === "0")) return false;
+    var octet = parseInt(parts[i], 10);
+    if (octet > 255) return false;
+    octets.push(octet);
+  }
+  return octets[0] >= 1 && octets[0] < 224 && octets[0] !== 127 && !(octets[0] === 255 && octets[1] === 255 && octets[2] === 255 && octets[3] === 255);
+}
+
+function detectedGatewayURL() {
+  return validGatewayIP(detectedGatewayIP) ? "http://" + detectedGatewayIP + ":8080/inform" : "";
+}
 
 var updatePollingTimer = null;
 var currentBranch = "main";
@@ -449,7 +466,7 @@ function updateUI(st) {
   }
 
   document.getElementById("model_val").textContent = (st.model || "UniFi 6 Mesh") + " (Firmware " + (st.firmware || "6.8.2") + ")";
-  document.getElementById("controller_val").textContent = st.controller_url || ("http://" + detectedGatewayIP + ":8080/inform");
+  document.getElementById("controller_val").textContent = st.controller_url || detectedGatewayURL() || "Unknown";
   document.getElementById("heartbeat_val").textContent = (st.last_successful_inform || st.last_heartbeat || "-") + " [" + (st.mode || "GCM") + "]";
 
   document.getElementById("stat_total").textContent = st.total_stations !== undefined ? st.total_stations : "-";
@@ -789,7 +806,7 @@ function toggleControllerInput() {
   var customDiv = document.getElementById("custom_url_div");
   if (isAuto) {
     customDiv.style.display = "none";
-    document.getElementById("input_controller_url").value = "http://" + detectedGatewayIP + ":8080/inform";
+    document.getElementById("input_controller_url").value = detectedGatewayURL();
   } else {
     customDiv.style.display = "block";
   }
@@ -816,7 +833,7 @@ function applySettings() {
   var branch = currentBranch;
 
   if (isAutoGw === "1") {
-    ctrlUrl = "http://" + detectedGatewayIP + ":8080/inform";
+    ctrlUrl = detectedGatewayURL();
   }
 
   document.form.current_page.value = "";
@@ -852,7 +869,7 @@ function initial(){
   if (typeof show_menu === "function") {
     show_menu();
   }
-  document.getElementById("detected_gw_text").textContent = detectedGatewayIP;
+  document.getElementById("detected_gw_text").textContent = validGatewayIP(detectedGatewayIP) ? detectedGatewayIP : "not detected";
   loadStatus();
   loadUpdateStatus();
   // Auto-refresh is disabled by default to ensure seamless form editing and scrolling without layout thrashing
@@ -882,7 +899,7 @@ function initial(){
 <input type="hidden" name="amng_custom" id="amng_custom" value="">
 <input type="hidden" name="unifibridge_enabled" value="1">
 <input type="hidden" name="unifibridge_auto_gateway" value="1">
-<input type="hidden" name="unifibridge_controller_url" value="http://10.100.1.1:8080/inform">
+<input type="hidden" name="unifibridge_controller_url" value="">
 <input type="hidden" name="unifibridge_model" value="U6M">
 <input type="hidden" name="unifibridge_interval" value="10">
 <input type="hidden" name="unifibridge_branch" value="main">
@@ -1043,7 +1060,7 @@ function initial(){
                       </tr>
                       <tr>
                         <td class="settingname">UniFi Controller Inform URL</td>
-                        <td class="settingvalue"><code id="controller_val">http://10.100.1.1:8080/inform</code></td>
+                        <td class="settingvalue"><code id="controller_val">Unknown</code></td>
                       </tr>
                       <tr>
                         <td class="settingname">Last Heartbeat Exchange</td>
@@ -1084,13 +1101,13 @@ function initial(){
                         </td>
                         <td class="settingvalue">
                           <div>
-                            <label><input type="radio" name="radio_auto" id="unifibridge_auto_1" value="1" checked onchange="toggleControllerInput();"> Auto-detect Gateway (<code>http://<span id="detected_gw_text">10.100.1.1</span>:8080/inform</code>)</label>
+                            <label><input type="radio" name="radio_auto" id="unifibridge_auto_1" value="1" checked onchange="toggleControllerInput();"> Auto-detect Gateway (<code>http://<span id="detected_gw_text">not detected</span>:8080/inform</code>)</label>
                           </div>
                           <div style="margin-top:6px;">
                             <label><input type="radio" name="radio_auto" id="unifibridge_auto_0" value="0" onchange="toggleControllerInput();"> Custom Inform URL</label>
                           </div>
                           <div id="custom_url_div" style="display:none;margin-top:6px;padding-left:22px;">
-                            <input type="text" class="input_32_table" id="input_controller_url" value="http://10.100.1.1:8080/inform" maxlength="128" placeholder="http://ip-or-host:8080/inform">
+                            <input type="text" class="input_32_table" id="input_controller_url" value="" maxlength="128" placeholder="http://ip-or-host:8080/inform">
                           </div>
                         </td>
                       </tr>

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"math/bits"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -865,41 +866,16 @@ func parseNetDev(content string) map[string]netDevCounters {
 	return res
 }
 
-func normalizeGatewayMAC(mac string) string {
-	mac = strings.ToLower(strings.TrimSpace(mac))
-	if len(mac) == 17 && strings.HasPrefix(mac, "6e:") {
-		// Cloud Gateway Max hardware device MAC is 6c:63:f8:30:9a:05
-		if strings.HasPrefix(mac, "6e:63:f8:30:9a:") {
-			return "6c:63:f8:30:9a:05"
-		}
-		b0, err := strconv.ParseUint(mac[:2], 16, 8)
-		if err == nil && (b0&0x02) != 0 {
-			b0 &^= 0x02
-			return fmt.Sprintf("%02x%s", b0, mac[2:])
-		}
-	}
-	return mac
-}
-
-func parseArpGatewayMAC(gwIP string) string {
-	if gwIP == "" {
+func configuredGatewayIP(value string) string {
+	ip := net.ParseIP(strings.TrimSpace(value))
+	if ip == nil {
 		return ""
 	}
-	data, err := os.ReadFile("/proc/net/arp")
-	if err != nil {
+	ipv4 := ip.To4()
+	if ipv4 == nil || ip.IsUnspecified() || ip.IsMulticast() || ip.IsLoopback() || ipv4.Equal(net.IPv4bcast) {
 		return ""
 	}
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines[1:] {
-		fields := strings.Fields(line)
-		if len(fields) >= 4 && fields[0] == gwIP {
-			mac := strings.ToLower(strings.TrimSpace(fields[3]))
-			if mac != "00:00:00:00:00:00" && len(mac) == 17 {
-				return normalizeGatewayMAC(mac)
-			}
-		}
-	}
-	return ""
+	return ipv4.String()
 }
 
 type lldpCliOutput struct {
@@ -1570,21 +1546,13 @@ func (p *AsusProvider) GetPortTableContext(ctx context.Context) ([]telemetry.Por
 		uplinkSource = "lldp_uplink"
 	}
 	if gwMAC == "" && !(carrierState.known && carrierState.value == 0) {
-		gwIP, err := p.nvramGetContext(ctx, "lan_gateway")
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		if gwIP == "" {
-			gwIP = "10.100.1.1"
-		}
-		gwMAC = parseArpGatewayMAC(gwIP)
 		remotePort = 0
-		uplinkSource = "arp_gateway"
 	}
 	lanGateway, err := p.nvramGetContext(ctx, "lan_gateway")
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	lanGateway = configuredGatewayIP(lanGateway)
 	lanIP, err := p.nvramGetContext(ctx, "lan_ipaddr")
 	if err != nil {
 		return nil, nil, nil, err

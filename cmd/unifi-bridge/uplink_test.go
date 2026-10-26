@@ -23,4 +23,19 @@ func TestConfiguredUplinkFallbackRespectsVerifiedAndDownStates(t *testing.T) {
 	if unknown.UplinkMAC != cfg.UplinkMAC || unknown.UplinkRemotePort != cfg.UplinkRemotePort {
 		t.Fatalf("configuration fallback was not used for unknown link: %+v", unknown)
 	}
+	if unknown.UplinkSource != "configured_topology" {
+		t.Fatalf("configured topology source is not identified: %+v", unknown)
+	}
+	for _, invalid := range []string{"", "not-a-mac", "01:00:5e:00:00:01", "00:00:00:00:00:00"} {
+		got := &telemetry.Uplink{}
+		applyConfiguredUplinkFallback(got, &Config{UplinkMAC: invalid})
+		if got.UplinkMAC != "" {
+			t.Errorf("invalid configured gateway identity %q accepted as %q", invalid, got.UplinkMAC)
+		}
+	}
+	localAdmin := &telemetry.Uplink{}
+	applyConfiguredUplinkFallback(localAdmin, &Config{UplinkMAC: "6e:63:f8:30:9a:05"})
+	if localAdmin.UplinkMAC != "6e:63:f8:30:9a:05" {
+		t.Fatalf("explicit locally administered topology was rewritten: %+v", localAdmin)
+	}
 }

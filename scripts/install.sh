@@ -132,8 +132,12 @@ valid_ipv4() {
         [ "${#octet}" -eq 1 ] || [ "${octet#0}" = "$octet" ] || return 1
         [ "$octet" -le 255 ] || return 1
     done
+    [ "$1" -ge 1 ] && [ "$1" -lt 224 ] && [ "$1" -ne 127 ] &&
+        [ "$1.$2.$3.$4" != "255.255.255.255" ]
 }
-if ! valid_ipv4 "$GW_IP" || [ "$GW_IP" = "0.0.0.0" ]; then GW_IP=10.100.1.1; fi
+if ! valid_ipv4 "$GW_IP" || [ "$GW_IP" = "0.0.0.0" ]; then GW_IP=; fi
+CONTROLLER_URL=
+[ -z "$GW_IP" ] || CONTROLLER_URL="http://$GW_IP:8080/inform"
 
 # Build the exact archive consumed by start.sh from the already verified flat
 # candidate. This prevents a previous installed tarball from winning over the
@@ -159,7 +163,7 @@ chmod 700 "$INSTALL_DIR/.ssh"
 CONFIG_FILE="$INSTALL_DIR/config/config.json"
 CONFIG_TMP="$CONFIG_FILE.new.$$"
 if [ ! -f "$CONFIG_FILE" ]; then
-    printf '{\n  "enabled": true,\n  "controller_url": "http://%s:8080/inform",\n  "interval_sec": 10,\n  "model": "U6M",\n  "state_path": "%s/state.json",\n  "wlan_mapping": {}\n}\n' "$GW_IP" "$INSTALL_DIR" > "$CONFIG_TMP" || fail "cannot write initial configuration"
+    printf '{\n  "enabled": true,\n  "controller_url": "%s",\n  "interval_sec": 10,\n  "model": "U6M",\n  "state_path": "%s/state.json",\n  "wlan_mapping": {}\n}\n' "$CONTROLLER_URL" "$INSTALL_DIR" > "$CONFIG_TMP" || fail "cannot write initial configuration"
     chmod 600 "$CONFIG_TMP"
     mv -f "$CONFIG_TMP" "$CONFIG_FILE"
 fi
