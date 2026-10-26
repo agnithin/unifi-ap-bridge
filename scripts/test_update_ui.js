@@ -10,7 +10,12 @@ const timers = new Map();
 const timeouts = [];
 const scripts=[];
 const nodes = {};
-function node(id) { return nodes[id] ||= {value:'', textContent:'', style:{}, disabled:false}; }
+function makeNode() {
+ const n={value:'', _textContent:'', style:{}, disabled:false, children:[], appendChild(child){this.children.push(child);}};
+ Object.defineProperty(n,'textContent',{get(){return this._textContent;},set(value){this._textContent=String(value);this.children=[];}});
+ return n;
+}
+function node(id) { return nodes[id] ||= makeNode(); }
 const form = {action:'/start_apply.htm', elements:[], submit() {throw new Error('native iframe submit is forbidden for update checks');}};
 for (const name of ['action_script','action_mode','action_wait','current_page','next_page','unifibridge_branch','amng_custom']) {
  const field = {name, value:'', type:'hidden'}; form[name]=field; form.elements.push(field);
@@ -22,7 +27,7 @@ XHR.prototype.open=function(method,url,async){this.method=method;this.url=url;th
 XHR.prototype.setRequestHeader=function(){};
 XHR.prototype.send=function(body){this.body=body;};
 const context = {
- document:{form, getElementById:node, createElement(){return {};}, head:{appendChild(s){scripts.push(s);if(s.onload)s.onload();},removeChild(){}}}, XMLHttpRequest:XHR,
+ document:{form, getElementById:node, createElement(){return makeNode();}, head:{appendChild(s){scripts.push(s);if(s.onload)s.onload();},removeChild(){}}}, XMLHttpRequest:XHR,
  window:{parent:{},location:{reload(){reloads++;}}},
  Date:{now:()=>clock},
  setInterval(fn){const id=timers.size+1;timers.set(id,fn);return id;},
@@ -120,6 +125,16 @@ assert.match(node('bridge_status_text').textContent,/Telemetry sample stale \(12
 context.updateUI({running:true,pid:123,status_updated_at:1000,sample_fresh:true,sample_stage_errors:{ports:'unavailable'},enabled:true,branch:'dev',model_code:'U6IW',interval_sec:10});
 assert.match(node('bridge_status_text').textContent,/Partial telemetry/);
 console.log('Sampling status regression passed: stale and partial telemetry remain explicit.');
+
+context.updateUI({running:true,pid:123,status_updated_at:1000,sample_fresh:true,enabled:true,branch:'dev',model_code:'U6IW',interval_sec:10,
+ ports:[{name:'<img src=x onerror=1>',up:true,speed:'1000<script>',is_uplink:true},{name:'eth0',up:true,speed:2500,is_uplink:false},{name:'eth1',up:false,speed:1000}]});
+const renderedPorts=node('ports_val').children[0].children.map(b=>b.textContent);
+assert.deepEqual(renderedPorts,['<img src=x onerror=1>: Speed unknown UPLINK','eth0: 2500M FDX','eth1: DOWN']);
+assert.equal(node('ports_val').children[0].children[0].innerHTML,undefined,'port names must be assigned as text, never markup');
+context.updateUI({running:true,pid:123,status_updated_at:1000,sample_fresh:true,enabled:true,branch:'dev',model_code:'U6IW',interval_sec:10,
+ ports:[{name:'eth0',up:true,speed:Infinity,is_uplink:false}]});
+assert.equal(node('ports_val').children[0].children[0].textContent,'eth0: Speed unknown FDX','malformed numeric speeds must be explicit and safe');
+console.log('Port UI regression passed: labels use text nodes and malformed speeds are rejected.');
 
 clock=70000;context.applySettings();
 const settingsRequest=context.activeActionRequest;

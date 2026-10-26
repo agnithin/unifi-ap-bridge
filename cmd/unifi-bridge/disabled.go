@@ -3,8 +3,6 @@ package main
 import (
 	"encoding/json"
 	"github.com/agnithin/unifi-ap-bridge/pkg/models"
-	"os"
-	"path/filepath"
 	"time"
 )
 
@@ -17,12 +15,5 @@ func publishDisabledStatus(dir string, cfg *Config) error {
 	if err != nil {
 		return err
 	}
-	if err = os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
-	temp := filepath.Join(dir, "status.js.tmp")
-	if err = os.WriteFile(temp, append(append([]byte("window.unifiBridgeStatus = "), raw...), ';', '\n'), 0644); err != nil {
-		return err
-	}
-	return os.Rename(temp, filepath.Join(dir, "status.js"))
+	return writeStatusFile(dir, append(append([]byte("window.unifiBridgeStatus = "), raw...), ';', '\n'), osStatusFileOps)
 }

@@ -8,7 +8,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -94,9 +93,6 @@ func logEvent(format string, v ...any) string {
 
 func updateWebUIStatus(host *providers.HostInfo, modelProfile models.ModelProfile, cfg *Config, stateMgr *inform.StateManager, totalStations int, radioStats []telemetry.RadioStat, ports []telemetry.Port, sysStats *telemetry.SystemStats, health *exchangeHealth, exchangeErr error, sampleFresh bool, sampleCompletedAt time.Time, sampleErrors map[string]string) {
 	statusDir := "/tmp/var/wwwext/unifi-bridge"
-	if err := os.MkdirAll(statusDir, 0755); err != nil {
-		return
-	}
 
 	sta2G := 0
 	sta5G := 0
@@ -170,14 +166,13 @@ func updateWebUIStatus(host *providers.HostInfo, modelProfile models.ModelProfil
 
 	raw, err := json.MarshalIndent(statusObj, "", "  ")
 	if err != nil {
+		reportStatusWriteFailure("marshal status", err)
 		return
 	}
 
 	jsContent := fmt.Sprintf("window.unifiBridgeStatus = %s;\n", string(raw))
-	tmpPath := filepath.Join(statusDir, "status.js.tmp")
-	finalPath := filepath.Join(statusDir, "status.js")
-	if err := os.WriteFile(tmpPath, []byte(jsContent), 0644); err == nil {
-		_ = os.Rename(tmpPath, finalPath)
+	if err := writeStatusFile(statusDir, []byte(jsContent), osStatusFileOps); err != nil {
+		reportStatusWriteFailure("publish status", err)
 	}
 }
 
@@ -240,7 +235,7 @@ func main() {
 	}
 	if !cfg.Enabled {
 		if err := publishDisabledStatus("/tmp/var/wwwext/unifi-bridge", cfg); err != nil {
-			log.Printf("Could not publish disabled status: %v", err)
+			reportStatusWriteFailure("publish disabled status", err)
 		}
 		log.Print("Bridge disabled in configuration")
 		return

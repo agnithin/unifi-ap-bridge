@@ -468,21 +468,36 @@ function updateUI(st) {
     }
   }
 
-  if (st.ports && st.ports.length > 0) {
-    var portsEl = document.getElementById("ports_val");
-    if (portsEl) {
-      var pHtml = '<div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:2px;">';
+  var portsEl = document.getElementById("ports_val");
+  if (portsEl && st.ports && st.ports.length > 0) {
+    var portSignature = JSON.stringify(st.ports);
+    if (portsEl._unifiBridgePorts !== portSignature) {
+      var portWrap = document.createElement("div");
+      portWrap.style.display = "flex";
+      portWrap.style.flexWrap = "wrap";
+      portWrap.style.gap = "6px";
+      portWrap.style.marginTop = "2px";
       for (var p = 0; p < st.ports.length; p++) {
-        var pt = st.ports[p];
-        var isUp = pt.up;
-        var bg = isUp ? "#27ae60" : "#576574";
-        var label = pt.name + ": " + (isUp ? (pt.speed + "M " + (pt.is_uplink ? "UPLINK" : "FDX")) : "DOWN");
-        pHtml += '<span style="background:' + bg + '; color:#fff; font-size:10px; font-weight:bold; padding:2px 7px; border-radius:3px;">' + label + '</span>';
+        var pt = st.ports[p] || {};
+        var isUp = pt.up === true;
+        var portName = typeof pt.name === "string" ? pt.name : "";
+        if (!portName || portName.length > 64 || /[\u0000-\u001f\u007f]/.test(portName)) portName = "Port";
+        var speed = pt.speed;
+        var speedValid = typeof speed === "number" && isFinite(speed) && Math.floor(speed) === speed && speed > 0 && speed <= 100000;
+        var state = isUp ? (speedValid ? String(speed) + "M " : "Speed unknown ") + (pt.is_uplink === true ? "UPLINK" : "FDX") : "DOWN";
+        var badge = document.createElement("span");
+        badge.style.background = isUp ? "#27ae60" : "#576574";
+        badge.style.color = "#fff";
+        badge.style.fontSize = "10px";
+        badge.style.fontWeight = "bold";
+        badge.style.padding = "2px 7px";
+        badge.style.borderRadius = "3px";
+        badge.textContent = portName + ": " + state;
+        portWrap.appendChild(badge);
       }
-      pHtml += '</div>';
-      if (portsEl.innerHTML !== pHtml) {
-        portsEl.innerHTML = pHtml;
-      }
+      portsEl.textContent = "";
+      portsEl.appendChild(portWrap);
+      portsEl._unifiBridgePorts = portSignature;
     }
   }
 
