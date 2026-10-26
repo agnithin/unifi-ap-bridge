@@ -55,3 +55,41 @@ A successful packet run still needs the independent acceptance checks in Section
 - Both guarded wrappers were invoked without their guards and refused execution before SSH.
 - A bounded `gpt-6.1-sol` review initially identified recovery precondition races, retry-hostile temp paths, incomplete protected-file mode checks, ambiguous state comparison, PID concatenation, and a recovery inform check that was not restart-local. The packet was updated to address these findings, use explicit permission-preserving tar extraction, and require a fresh inform associated with the prior runtime's single live PID. Final bounded re-review returned PASS with no remaining P1/P2 findings.
 - This packet does not reconstruct the historical missing-stage actor or resolve the historical `state_unchanged=no` baseline/comparator. Section 15 remains authoritative for those limits.
+
+
+## Separate current-fix rollout packet (not a retarget of W7)
+
+**Disposition: locally verified and published, production held, not deployed.** The original reviewed W7 packet and its exact `a25bb6b272e6dcbe938b61fbca8d17044c6ff07d` candidate remain unchanged. This separate packet prepares one later Main-only rollout to the current source candidate after the production hold is lifted. It avoids doing an `a25bb6b` migration and then a second Main restart solely to deploy follow-up fixes. The current candidate contains the reviewed migration/recovery source plus the subsequent W9–W12 fixes, CI maintenance, the published operating-bandwidth field from `02454dfec818031cdf406753398366f49adbe1ed`, and the small settings-reader diagnostic fix. The updater bytes are unchanged across both packets (`2f2dc19723cf442a2ff5ea7ebd9e8b10b56b6a0c24ab2441eca602c14407547a`).
+
+The exact candidate is dev commit [`1f22343206c80bda01d576dfdb813e4a911e4568`](https://github.com/agnithin/unifi-ap-bridge/commit/1f22343206c80bda01d576dfdb813e4a911e4568), version `1.2.5`, architecture `armv7`. Hosted run [40275750890](https://github.com/agnithin/unifi-ap-bridge/actions/runs/40275750890) passed and published release [`dev-1f22343206c80bda01d576dfdb813e4a911e4568`](https://github.com/agnithin/unifi-ap-bridge/releases/tag/dev-1f22343206c80bda01d576dfdb813e4a911e4568).
+
+- Main bundle: `unifi-bridge-addon-1f22343206c80bda01d576dfdb813e4a911e4568-armv7.tar.gz`; SHA-256 `16300c4bc0f08f6d5bfadae8427a7928f01de1470eaf7d000c317be6d27657f1`.
+- Release sidecar asset SHA-256: `113a1ffc283a5a27ba1594736d827088aacab9e7936478234e0c775677eaf48f`; its contents name the archive and repeat the archive checksum.
+- Embedded ARMv7 executable SHA-256: `adf321be93d70c24c680a8bdad3b66eae95e32a883110928ab09bb706157c1d6`.
+- The packet verifier checks the published sidecar and archive checksums, candidate/version/architecture, exact archive members and every manifest member hash, including the binary and updater. It also checks the source commit's updater hash.
+
+The separate guarded scripts and verifier are in [`scripts/ops/main-launch-current`](../scripts/ops/main-launch-current/). The launch entry point is `launch_main.sh`; its local `ALLOW_MAIN_PRODUCTION_LAUNCH=YES` guard is intentionally still required. The actual command, after a separate hold-lift decision, is:
+
+```sh
+rtk proxy env ALLOW_MAIN_PRODUCTION_LAUNCH=YES sh scripts/ops/main-launch-current/launch_main.sh
+```
+
+The packet uses a unique stage/request ID `20261026054615`. One SSH command writes the updater with POSIX-quoted `printf` to that absolute Main path, applies mode `0700`, checks OpenSSL SHA-256 and `sh -n`, and invokes that same absolute path in the foreground within the same SSH session. It calls receiver-side `apply-exact` with dev and the full immutable commit, so it does not propagate an update to Node or create an unmanaged background transfer. The local verifier repeats command generation, checks command size and syntax, and exercises the same quote-containing transfer shape with a harmless local sentinel. Apply and recovery scripts remain foreground in their SSH command; a lost SSH result is ambiguous and must be reconciled read-only before any further action.
+
+At the actual launch, Main must still pass exact hostname, daemon PID/runtime, fresh status and GCM health, no `-state` override, config-selected effective state path `/jffs/addons/unifi-bridge/state.json`, expected known-good mixed assets/runtime, watchdog cron, permissions, and no journal or update/mutation/start lock. Before invoking the updater, it creates a fresh mode-0700 same-device evidence directory and mode-0600 copies of config, effective state, cluster key, state identity fields and file metadata, prior managed assets and runtime. It hashes the recovery archives. This uses a fresh on-Main baseline; the old temporary CT107 backup is neither required nor presumed available. It never prints config/key/state values or secret fingerprints and never restores those protected files.
+
+After update, the remote gate verifies the exact archive checksum/sidecar, architecture and member set, installed managed file contents/modes, binary/runtime commit/version, a successful GCM inform later than the updater start and associated with the sole live PID, watchdog cron, config bytes/mode, effective-state identity/mode (full state bytes are reported separately because controller metadata may change), cluster-key bytes/mode, transaction-journal absence, and absence of all three locks. It retains logs and snapshots in the stage. The post-deployment operator acceptance must separately recheck Main's gateway Port 1 at 2.5 GbE, exactly the three physical radios at 6/20, 36/40 and 161/80 MHz, fresh GCM informs and status, watchdog, cleanup, and Node health/runtime unchanged. The UI's upper-band 80 MHz rendering and three-radio view are not accepted until verified live; no channel, width, SSID, power, VLAN or other radio/network setting is changed by this packet.
+
+The recovery entry point is independently guarded:
+
+```sh
+rtk proxy env ALLOW_MAIN_RECOVERY=YES sh scripts/ops/main-launch-current/recover_main.sh
+```
+
+Use it only after a failed acceptance and a read-only reconnect confirms the exact Main identity, stage snapshots/checksums, no journal, no lock, and unchanged config/key/state identity and permissions. It atomically restores only the known-good managed addon assets and `be106ec` runtime under update/mutation/start locks, then starts that prior daemon and requires a fresh GCM inform, watchdog and clean journal/locks. If a journal/lock is present, the remote stage is missing/ambiguous, protected preservation differs, or recovery cannot verify its postconditions, it stops and preserves all evidence; no cleanup, blind retry, reboot, Node action or generic recovery is authorized.
+
+### Local packet verification
+
+`python3 scripts/ops/main-launch-current/verify_local.py <armv7-bundle> <sidecar>` passed against the downloaded exact release assets. It verified the archive (`16300c4…d27657f1`), sidecar (`113a1f…7eaf48f`), all manifest member hashes and the exact 11-member ARMv7 package. Generated launch/recovery commands were 67,286 and 16,131 bytes and passed shell syntax. Same-session sentinel, state-identity, preservation comparator, lock-cleanup and fresh-inform regressions passed. The original W7 `verify_local.py` also passed unchanged. The verifier does not contact or modify either AP.
+
+**Consolidated production decision recommended for the later hold-lift step:** if authorizing a Main migration, approve this single exact `1f223432…` packet as the replacement *deployment choice* for the still-undeployed W7 `a25bb6b` packet, leaving the original W7 packet intact as its historical reviewed candidate. Do not deploy `a25bb6b` first and then repeat the migration for `1f223432`. This is a prepared recommendation only: the current production hold remains active, and no launch or recovery script has been run against an AP. Node remains unchanged.
