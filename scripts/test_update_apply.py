@@ -29,8 +29,12 @@ class ApplyFailureTests(unittest.TestCase):
         (self.root / "tmp").mkdir()
         self.install = self.root / "addon"
         (self.install / "config").mkdir(parents=True)
-        (self.install / "config/config.json").write_text('{"branch":"dev"}')
-        (self.install / "config/state.json").write_text('{"adopted":true,"identity":"preserve"}')
+        self.state_file = self.install / "state.json"
+        self.config_json = json.dumps({"branch": "dev", "state_path": str(self.state_file)})
+        self.state_json = '{"adopted":true,"identity":"preserve"}'
+        (self.install / "config/config.json").write_text(self.config_json)
+        self.state_file.write_text(self.state_json)
+        self.state_file.chmod(0o600)
         (self.install / ".ssh").mkdir()
         (self.install / ".ssh/cluster_key").write_text("private identity fixture")
         (self.install / "version.txt").write_text("1.2.4\n")
@@ -105,6 +109,13 @@ class ApplyFailureTests(unittest.TestCase):
     def write(self, path, text):
         path.write_text(text)
         path.chmod(0o755)
+
+    def test_preservation_fixture_uses_daemon_effective_state_path(self):
+        config = json.loads((self.install / "config/config.json").read_text())
+        self.assertEqual(Path(config["state_path"]), self.state_file)
+        self.assertTrue(self.state_file.is_file())
+        self.assertFalse((self.install / "config/state.json").exists())
+        self.assertEqual(self.state_file.stat().st_mode & 0o777, 0o600)
 
     def write_bundle(self, *, version="1.2.5", commit=COMMIT, architecture="armv7", members=None, link=None, binary_commit=None, binary_exit=0):
         bundle_name = f"unifi-bridge-addon-{COMMIT}-armv7.tar.gz"
@@ -228,7 +239,7 @@ class ApplyFailureTests(unittest.TestCase):
             "unifi-bridge.tar.gz", "unifi-bridge.tar.gz.sha256", "install.sh", "start.sh",
             "apply_config.sh", "sync_nodes.sh", "unifi-bridge.sh", "update.sh",
             "watchdog.sh", "version.txt", "webui/unifi-bridge.asp",
-            "config/config.json", "config/state.json", ".ssh/cluster_key",
+            "config/config.json", "state.json", ".ssh/cluster_key",
         ]
         result = {}
         for rel in paths:
@@ -297,8 +308,8 @@ class ApplyFailureTests(unittest.TestCase):
         current_snapshot = self.generation_snapshot()
         changed = [rel for rel in expected_snapshot if current_snapshot[rel] != expected_snapshot[rel]]
         self.assertEqual(current_snapshot, expected_snapshot, f"restored generation differs at: {changed}")
-        self.assertEqual((self.install / "config/config.json").read_text(), '{"branch":"dev"}')
-        self.assertEqual((self.install / "config/state.json").read_text(), '{"adopted":true,"identity":"preserve"}')
+        self.assertEqual((self.install / "config/config.json").read_text(), self.config_json)
+        self.assertEqual(self.state_file.read_text(), self.state_json)
         self.assertEqual((self.install / ".ssh/cluster_key").read_text(), "private identity fixture")
         self.assertFalse((self.install / ".update-transaction").exists())
         self.assertFalse((self.root / "update.lock").exists())
@@ -648,8 +659,8 @@ class ApplyFailureTests(unittest.TestCase):
         update_status = json.loads((self.web / "update_status.js").read_text().split("=", 1)[1].strip().rstrip(";"))
         self.assertFalse((self.install / ".update-transaction").exists(), update_status["message"])
         self.assertIn("restored and verified", update_status["message"])
-        self.assertEqual((self.install / "config/config.json").read_text(), '{"branch":"dev"}')
-        self.assertEqual((self.install / "config/state.json").read_text(), '{"adopted":true,"identity":"preserve"}')
+        self.assertEqual((self.install / "config/config.json").read_text(), self.config_json)
+        self.assertEqual(self.state_file.read_text(), self.state_json)
         self.assertEqual((self.install / ".ssh/cluster_key").read_text(), "private identity fixture")
 
     def test_active_asset_copy_failure_rolls_back_prior_generation(self):
@@ -676,8 +687,8 @@ class ApplyFailureTests(unittest.TestCase):
         self.assertEqual(status["status"],"SUCCESS")
         self.assertEqual((self.install/"version.txt").read_text(),"1.2.5\n")
         self.assertFalse((self.install/".update-transaction").exists())
-        self.assertEqual((self.install/"config/config.json").read_text(),'{"branch":"dev"}')
-        self.assertEqual((self.install/"config/state.json").read_text(),'{"adopted":true,"identity":"preserve"}')
+        self.assertEqual((self.install/"config/config.json").read_text(),self.config_json)
+        self.assertEqual(self.state_file.read_text(),self.state_json)
         self.assertEqual((self.install/".ssh/cluster_key").read_text(),"private identity fixture")
         installed_manifest = (self.install / "unifi-bridge.tar.gz.sha256").read_text()
         self.assertRegex(installed_manifest, r"^[0-9a-f]{64}  unifi-bridge\.tar\.gz\n$")
