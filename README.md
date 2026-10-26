@@ -1,6 +1,6 @@
 # unifi-ap-bridge
 
-> **Current delivery status — 2026-10-25, 20:40–20:42 UTC:** Node is verified on v1.2.5 dev candidate `6224430`. Main is reachable again on prior daemon `be106ec` with fresh GCM after a recent system restart of unknown cause. Main retains a compatibility bootstrap bundle containing the old daemon/scripts and candidate updater; its candidate rollout is incomplete. Do not retry until the missing-stage failure and migration provenance are reviewed. See [recovery evidence](docs/AUDIT_STATE.md#13-independent-main-recovery-observations--2026-10-25-20382042-utc). Stable publication and Asus browser/recovery acceptance remain pending.
+> **Current delivery status — 2026-10-25, 20:40–20:42 UTC:** Node is verified on v1.2.5 dev candidate `6224430`. Main is reachable again on prior daemon `be106ec` with fresh GCM after a recent system restart of unknown cause. Main retains a compatibility bootstrap bundle containing the old daemon/scripts and candidate updater; its candidate rollout is incomplete. Do not retry until the missing-stage failure and migration provenance are reviewed. See [recovery evidence](docs/AUDIT_STATE.md#13-independent-main-recovery-observations--2026-10-25-20382108-utc). Stable publication and Asus browser/recovery acceptance remain pending.
 
 A high-performance, ultra-lightweight standalone daemon and WebUI addon for **Asuswrt-Merlin** and Linux routers that bridges Broadcom Wi-Fi and switch telemetry into the **Ubiquiti UniFi Inform Protocol** (`:8080/inform`).
 
@@ -250,7 +250,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="$BUILD_FLAGS"
 
 ### Prioritized backlog and operator decisions
 
-For the ordered work packets, acceptance tests, Luna/Sol escalation rules and worker launch prompt, start at [the autonomous worker plan](docs/AUDIT_STATE.md#11-autonomous-worker-plan--2026-10-25).
+For the ordered work packets, acceptance tests, Luna/Sol escalation rules and worker launch prompt, start at [the autonomous worker plan](docs/AUDIT_STATE.md#11-autonomous-worker-plan--2026-10-25). The [current audit follow-up queue](docs/AUDIT_STATE.md#17-audit-reconciliation-and-accepted-follow-up-tasks) adds W9–W12 source work and preserves the W7 production hold.
 
 The detailed evidence and acceptance criteria are in [the project audit/backlog](docs/AUDIT_STATE.md#8-approved-backlog-and-fix-batch--2026-10-25). The current batch passed local tests, ARM builds and [hosted validation](https://github.com/agnithin/unifi-ap-bridge/actions/runs/40210104250); it is now deployed on both APs. Runtime/three-radio/topology acceptance passed; settings UI and controlled recovery/persistence checks remain pending. See [rollout evidence](docs/AUDIT_STATE.md#9-v125-sequential-rollout-and-live-acceptance--2026-10-25).
 
