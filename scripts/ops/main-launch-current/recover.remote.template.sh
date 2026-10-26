@@ -2,23 +2,29 @@
 set -eu
 HOST_EXPECTED='ZenWiFi_XT8-7B10'
 STAGE='/tmp/unifi-main-launch-1f22343206c80bda01d576dfdb813e4a911e4568-20261026070142'
-SCRIPT_SHA='d3ad344c4f186cb2f30d9add0179d76b4a1f61f75a40ba051608bf5e5dc64f63'
+SCRIPT_SHA='15d34f02673b99d7fc5e8431aefc59088dd90b449874c78ec6701927fe642640'
 [ "$(hostname)" = "$HOST_EXPECTED" ] || { echo 'recovery handoff refused: wrong host' >&2; exit 70; }
 [ -d "$STAGE" ] || { echo 'recovery handoff refused: launch evidence directory missing' >&2; exit 71; }
-[ ! -e "$STAGE/recover.sh" ] || { echo 'recovery handoff refused: prior recovery handoff file exists; preserve evidence' >&2; exit 72; }
+RECOVERY_SCRIPT="$STAGE/recover-attempt-2.sh"
+for evidence in "$RECOVERY_SCRIPT" "$STAGE/recovery-attempt-2.log" "$STAGE/recovery-attempt-2-launcher.status"; do
+  [ ! -e "$evidence" ] || { echo 'recovery handoff refused: second recovery evidence already exists; preserve it' >&2; exit 72; }
+done
 umask 077
-printf '%s' @SCRIPT_BODY@ > "$STAGE/recover.sh"
-chmod 700 "$STAGE/recover.sh"
-actual=$(openssl dgst -sha256 "$STAGE/recover.sh" | awk '{print $NF}')
+printf '%s' @SCRIPT_BODY@ > "$RECOVERY_SCRIPT"
+chmod 700 "$RECOVERY_SCRIPT"
+actual=$(openssl dgst -sha256 "$RECOVERY_SCRIPT" | awk '{print $NF}')
 [ "$actual" = "$SCRIPT_SHA" ] || { echo 'recovery script checksum mismatch; retained for diagnosis' >&2; exit 73; }
-sh -n "$STAGE/recover.sh" || { echo 'recovery script syntax failure; retained for diagnosis' >&2; exit 74; }
-if /bin/sh "$STAGE/recover.sh" > "$STAGE/recovery-apply.log" 2>&1; then
+sh -n "$RECOVERY_SCRIPT" || { echo 'recovery script syntax failure; retained for diagnosis' >&2; exit 74; }
+if /bin/sh "$RECOVERY_SCRIPT" > "$STAGE/recovery-attempt-2.log" 2>&1; then
   recovery_rc=0
 else
   recovery_rc=$?
 fi
-printf 'recovery_launcher_exit=%s\nremote_script=%s/recover.sh\nscript_sha256=%s\nlogs_and_snapshots=retained\n' "$recovery_rc" "$STAGE" "$actual" > "$STAGE/recovery-launcher.status"
-chmod 600 "$STAGE/recovery-launcher.status"
+printf 'recovery_launcher_exit=%s\nremote_script=%s/recover-attempt-2.sh\nscript_sha256=%s\nlogs_and_snapshots=retained\n' "$recovery_rc" "$STAGE" "$actual" > "$STAGE/recovery-attempt-2-launcher.status"
+chmod 600 "$STAGE/recovery-attempt-2-launcher.status"
 [ ! -f "$STAGE/recovery.status" ] || cat "$STAGE/recovery.status"
-cat "$STAGE/recovery-launcher.status"
+if [ "$recovery_rc" -ne 0 ]; then
+  grep -E '^recovery=STOP reason=' "$STAGE/recovery-attempt-2.log" || true
+fi
+cat "$STAGE/recovery-attempt-2-launcher.status"
 exit "$recovery_rc"

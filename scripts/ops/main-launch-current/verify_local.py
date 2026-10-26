@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import hashlib
+import io
 import json
 import pathlib
 import re
@@ -14,7 +15,7 @@ commit = '1f22343206c80bda01d576dfdb813e4a911e4568'
 archive_sha = '16300c4bc0f08f6d5bfadae8427a7928f01de1470eaf7d000c317be6d27657f1'
 sidecar_sha = '113a1ffc283a5a27ba1594736d827088aacab9e7936478234e0c775677eaf48f'
 updater_sha = '2f2dc19723cf442a2ff5ea7ebd9e8b10b56b6a0c24ab2441eca602c14407547a'
-recovery_sha = 'd3ad344c4f186cb2f30d9add0179d76b4a1f61f75a40ba051608bf5e5dc64f63'
+recovery_sha = '15d34f02673b99d7fc5e8431aefc59088dd90b449874c78ec6701927fe642640'
 request_id = '20261026070142'
 archive = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else pathlib.Path('/private/tmp/unifi-main-1f223-current-armv7.tar.gz')
 sidecar = pathlib.Path(sys.argv[2]) if len(sys.argv) > 2 else pathlib.Path(str(archive) + '.sha256')
@@ -123,6 +124,21 @@ with tempfile.TemporaryDirectory(prefix='main-current-preservation-') as td:
     n1, n2, n3, nb = td/'n1', td/'n2', td/'n3', td/'nb'
     probe = f'''{identity_fn}\nstate_identity {state_a} {n1}\nstate_identity {state_b} {n2}\ncmp -s {n1} {n2} || exit 34\nstate_identity {state_true} {n3}\nif cmp -s {n1} {n3}; then exit 35; fi\nif state_identity {state_bad} {nb}; then exit 36; fi\n'''
     subprocess.run(['sh', '-eu', '-c', probe], check=True)
+    recovery_assets = ['unifi-bridge.tar.gz', 'unifi-bridge.tar.gz.sha256', 'install.sh', 'start.sh',
+                       'apply_config.sh', 'sync_nodes.sh', 'unifi-bridge.sh', 'update.sh', 'watchdog.sh',
+                       'version.txt', 'webui/unifi-bridge.asp']
+    snapshot = td/'recovery-snapshot.tar.gz'
+    with tarfile.open(snapshot, 'w:gz') as tf:
+        for name in recovery_assets:
+            info = tarfile.TarInfo(name); info.size = 1
+            tf.addfile(info, io.BytesIO(b'x'))
+    listed = subprocess.check_output(['tar', '-tzf', str(snapshot)], text=True).splitlines()
+    assert sorted(listed) == sorted(recovery_assets)
+    recovery_source = recovery_template
+    recovery_wrapper_template = (root/'recover.remote.template.sh').read_text()
+    assert 'tar -tzf "$STAGE/prelaunch-addon.tar.gz" | LC_ALL=C sort > "$RESTORE_DIR/addon.actual"' in recovery_source
+    assert 'find "$RESTORE_DIR/addon" -type f' not in recovery_source
+    assert 'recover-attempt-2.sh' in recovery_wrapper_template and 'recover.sh' not in recovery_wrapper_template
     lock_a, lock_b = td/'lock-a', td/'lock-b'
     (lock_a).mkdir()
     probe = f'''{locks_fn}\nlocks_absent {td}/nope {td}/also-nope || exit 36\nif locks_absent {lock_a}; then exit 37; fi\n'''

@@ -104,7 +104,7 @@ mkdir -m 700 "$RESTORE_DIR" "$RESTORE_DIR/addon" "$RESTORE_DIR/runtime"
 tar -xzpf "$STAGE/prelaunch-addon.tar.gz" -C "$RESTORE_DIR/addon"
 tar -xzpf "$STAGE/prelaunch-runtime.tar.gz" -C "$RESTORE_DIR/runtime"
 printf '%s\n' $ASSETS | LC_ALL=C sort > "$RESTORE_DIR/addon.expected"
-find "$RESTORE_DIR/addon" -type f | sed "s#^$RESTORE_DIR/addon/##" | LC_ALL=C sort > "$RESTORE_DIR/addon.actual"
+tar -tzf "$STAGE/prelaunch-addon.tar.gz" | LC_ALL=C sort > "$RESTORE_DIR/addon.actual"
 cmp -s "$RESTORE_DIR/addon.expected" "$RESTORE_DIR/addon.actual" || fail addon_snapshot_member_mismatch
 [ -f "$RESTORE_DIR/runtime/unifi-bridge" ] || fail runtime_snapshot_member_missing
 verify_hash() { [ "$(openssl dgst -sha256 "$1" | awk '{print $NF}')" = "$2" ]; }
