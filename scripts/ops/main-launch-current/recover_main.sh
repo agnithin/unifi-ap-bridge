@@ -8,7 +8,7 @@ PACKET_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 LOCAL_SCRIPT="$PACKET_DIR/recover.remote.sh"
 TEMPLATE="$PACKET_DIR/recover.remote.template.sh"
 BUILDER="$PACKET_DIR/build_command.py"
-EXPECTED='f3b4c00e5ea578a2f0da8fe8144dab5000f694b247b7ac0a321876fd4572ebef'
+EXPECTED='33c26d45a8cc05df015625e3aab42c29857cf09459a3dd4d3e7548ca31f70f9c'
 actual=$(rtk proxy openssl dgst -sha256 "$LOCAL_SCRIPT" | rtk proxy awk '{print $NF}')
 [ "$actual" = "$EXPECTED" ] || { echo 'Recovery script checksum mismatch.' >&2; exit 65; }
 rtk sh -n "$LOCAL_SCRIPT"

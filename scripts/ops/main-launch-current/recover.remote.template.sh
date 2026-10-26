@@ -2,7 +2,7 @@
 set -eu
 HOST_EXPECTED='ZenWiFi_XT8-7B10'
 STAGE='/tmp/unifi-main-launch-1f22343206c80bda01d576dfdb813e4a911e4568-20261026054615'
-SCRIPT_SHA='f3b4c00e5ea578a2f0da8fe8144dab5000f694b247b7ac0a321876fd4572ebef'
+SCRIPT_SHA='33c26d45a8cc05df015625e3aab42c29857cf09459a3dd4d3e7548ca31f70f9c'
 [ "$(hostname)" = "$HOST_EXPECTED" ] || { echo 'recovery handoff refused: wrong host' >&2; exit 70; }
 [ -d "$STAGE" ] || { echo 'recovery handoff refused: launch evidence directory missing' >&2; exit 71; }
 [ ! -e "$STAGE/recover.sh" ] || { echo 'recovery handoff refused: prior recovery handoff file exists; preserve evidence' >&2; exit 72; }

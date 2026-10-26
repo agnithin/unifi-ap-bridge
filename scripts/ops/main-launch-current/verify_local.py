@@ -14,7 +14,7 @@ commit = '1f22343206c80bda01d576dfdb813e4a911e4568'
 archive_sha = '16300c4bc0f08f6d5bfadae8427a7928f01de1470eaf7d000c317be6d27657f1'
 sidecar_sha = '113a1ffc283a5a27ba1594736d827088aacab9e7936478234e0c775677eaf48f'
 updater_sha = '2f2dc19723cf442a2ff5ea7ebd9e8b10b56b6a0c24ab2441eca602c14407547a'
-recovery_sha = 'f3b4c00e5ea578a2f0da8fe8144dab5000f694b247b7ac0a321876fd4572ebef'
+recovery_sha = '33c26d45a8cc05df015625e3aab42c29857cf09459a3dd4d3e7548ca31f70f9c'
 archive = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else pathlib.Path('/private/tmp/unifi-main-1f223-current-armv7.tar.gz')
 sidecar = pathlib.Path(sys.argv[2]) if len(sys.argv) > 2 else pathlib.Path(str(archive) + '.sha256')
 
@@ -72,7 +72,13 @@ with tempfile.TemporaryDirectory(prefix='main-current-packet-') as td:
 compare_fn = re.search(r'(?ms)^compare\(\) \{\n.*?^\}', launch_template).group(0)
 identity_fn = re.search(r'(?ms)^state_identity\(\) \{\n.*?^\}', launch_template).group(0)
 locks_fn = re.search(r'(?ms)^locks_absent\(\) \{\n.*?^\}', launch_template).group(0)
-fresh_fn = re.search(r'(?ms)^inform_is_fresh\(\) \{\n.*?^\}', launch_template).group(0)
+uint_fn = re.search(r'(?ms)^uint\(\) \{\n.*?^\}', launch_template).group(0)
+status_fresh_fn = re.search(r'(?ms)^status_is_fresh\(\) \{\n.*?^\}', launch_template).group(0)
+restart_fresh_fn = re.search(r'(?ms)^fresh_inform_after_restart\(\) \{\n.*?^\}', launch_template).group(0)
+recovery_template = (root/'recover.remote.sh').read_text()
+assert uint_fn == re.search(r'(?ms)^uint\(\) \{\n.*?^\}', recovery_template).group(0)
+assert status_fresh_fn == re.search(r'(?ms)^status_is_fresh\(\) \{\n.*?^\}', recovery_template).group(0)
+assert restart_fresh_fn == re.search(r'(?ms)^fresh_inform_after_restart\(\) \{\n.*?^\}', recovery_template).group(0)
 with tempfile.TemporaryDirectory(prefix='main-current-preservation-') as td:
     td = pathlib.Path(td)
     same, changed, absent = td/'same', td/'changed', td/'absent'
@@ -90,9 +96,22 @@ with tempfile.TemporaryDirectory(prefix='main-current-preservation-') as td:
     (lock_a).mkdir()
     probe = f'''{locks_fn}\nlocks_absent {td}/nope {td}/also-nope || exit 36\nif locks_absent {lock_a}; then exit 37; fi\n'''
     subprocess.run(['sh', '-eu', '-c', probe], check=True)
-    probe = f'''{fresh_fn}\ninform_is_fresh '2026-10-26 05:47:00' '2026-10-26 05:46:00' '2026-10-26 05:46:30' || exit 38\nif inform_is_fresh '2026-10-26 05:46:00' '2026-10-26 05:46:00' '2026-10-26 05:45:00'; then exit 39; fi\nif inform_is_fresh '2026-10-26 05:46:00' '2026-10-26 05:45:00' '2026-10-26 05:46:30'; then exit 40; fi\n'''
+    # Epoch values are UTC-independent. The daemon's zone-less heartbeat text
+    # is deliberately never compared with the shell's local wall-clock text.
+    start = 1792994494  # 2026-10-26 06:01:34 UTC; local shell was 2026-10-25 23:01:34 -0700.
+    probe = f'''{uint_fn}\n{status_fresh_fn}\n{restart_fresh_fn}\nstatus_is_fresh 1792994499 1792994494 45 || exit 38\nif status_is_fresh 1792998094 1792994494 45; then exit 39; fi\nif status_is_fresh 1792994499 1792994500 45; then exit 40; fi\nif status_is_fresh invalid 1792994494 45; then exit 41; fi\n'''
+    probe += f'''fresh_inform_after_restart {start+2} {start} {start+5} 45 812 812 '2026-10-26 06:00:00' '{commit}' '{commit}' 'Active (GCM)' || exit 42\n'''
+    # Regression for the reviewed timezone bug: a pre-start UTC heartbeat
+    # looks later than the prior-day local start string, but its daemon status
+    # epoch is before launch and must fail closed.
+    probe += f'''if fresh_inform_after_restart {start-10} {start} {start+5} 45 812 812 '2026-10-26 06:01:24' '{commit}' '{commit}' 'Active (GCM)'; then exit 43; fi\n'''
+    probe += f'''if fresh_inform_after_restart {start} {start} {start+5} 45 812 812 '2026-10-26 06:01:34' '{commit}' '{commit}' 'Active (GCM)'; then exit 44; fi\n'''
+    probe += f'''if fresh_inform_after_restart {start+2} {start} {start+5} 45 812 811 '2026-10-26 06:01:36' '{commit}' '{commit}' 'Active (GCM)'; then exit 45; fi\n'''
+    probe += f'''if fresh_inform_after_restart {start+2} {start} {start+5} 45 812 812 '' '{commit}' '{commit}' 'Active (GCM)'; then exit 46; fi\n'''
+    probe += f'''if fresh_inform_after_restart {start+2} {start} {start+60} 45 812 812 '2026-10-26 06:01:36' '{commit}' '{commit}' 'Active (GCM)'; then exit 47; fi\n'''
+    probe += f'''if fresh_inform_after_restart {start+2} {start} {start+5} 45 812 812 '2026-10-26 06:01:36' '{commit}' '{commit}' 'Error: timeout'; then exit 48; fi\n'''
     subprocess.run(['sh', '-eu', '-c', probe], check=True)
 print(f'candidate={commit}; armv7_archive_sha256={archive_sha}; sidecar_sha256={sidecar_sha}; updater_sha256={updater_sha}')
 print('release manifest, all member hashes, architecture, exact member set and sidecar: PASS')
 print(f'launch_command_bytes={len(launch_command)}; recovery_command_bytes={len(recovery_command)}; shell_syntax=PASS')
-print('same-session sentinel, preservation comparators, state identity, lock cleanup and fresh-inform regressions: PASS')
+print('same-session sentinel, preservation comparators, state identity, lock cleanup, UTC/local-boundary and stale-heartbeat regressions: PASS')

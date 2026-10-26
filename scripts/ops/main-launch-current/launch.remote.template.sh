@@ -33,8 +33,25 @@ locks_absent() {
     [ ! -e "$lock_path" ] || return 1
   done
 }
-inform_is_fresh() {
-  [ -n "$1" ] && [ "$1" != "$2" ] && [ "$1" \> "$3" ]
+uint() {
+  case "$1" in ''|*[!0-9]*) return 1;; esac
+}
+status_is_fresh() {
+  uint "$1" && uint "$2" && uint "$3" || return 1
+  [ "$2" -le "$1" ] || return 1
+  age=$(( $1 - $2 ))
+  [ "$age" -le "$3" ]
+}
+# The zone-less inform string is deliberately opaque: the Go process may format
+# it in a different timezone from the shell. A post-restart epoch status, the
+# sole live PID, expected commit, and Active (GCM) with a nonempty inform prove
+# the new process completed an exchange (exchangeHealth starts zeroed per
+# process); equal-second status is ambiguous.
+fresh_inform_after_restart() {
+  uint "$1" && uint "$2" && uint "$3" && uint "$4" || return 1
+  status_is_fresh "$3" "$1" "$4" && [ "$1" -gt "$2" ] &&
+    [ -n "$7" ] && [ "$5" = "$6" ] && [ "$8" = "$9" ] &&
+    [ "${10}" = 'Active (GCM)' ]
 }
 
 [ "$(hostname)" = "$HOST_EXPECTED" ] || fail wrong_host
@@ -58,9 +75,9 @@ state_path=$(sed -n 's/.*"state_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p
 
 now=$(date +%s)
 status_updated=$(sed -n 's/.*"status_updated_at":[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$STATUS" | head -n 1)
-[ -n "$status_updated" ] || fail missing_status_timestamp
-age=$((now - status_updated))
-[ "$age" -ge 0 ] && [ "$age" -le 45 ] || fail stale_status
+status_pid=$(sed -n 's/.*"pid":[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$STATUS" | head -n 1)
+status_is_fresh "$now" "$status_updated" 45 || fail stale_status
+[ "$status_pid" = "$pid" ] || fail stale_status_pid_mismatch
 for expected in '"commit": "be106ec33fe6790af30a600d11bd05246445c530"' '"adopted": true' '"mode": "GCM"' '"last_status": "Active (GCM)"'; do
   grep -Fq "$expected" "$STATUS" || fail prior_daemon_not_healthy
 done
@@ -123,7 +140,6 @@ printf 'candidate_script_sha256=%s\nremote_script=%s/update.sh\nsyntax=ok\n' "$a
 
 # Foreground invocation: the verified absolute path is used in this same SSH session.
 updater_started=$(date +%s)
-updater_started_text=$(date '+%Y-%m-%d %H:%M:%S')
 if /bin/sh "$STAGE/update.sh" apply-exact dev "$COMMIT" "$REQUEST_ID" > "$STAGE/apply.log" 2>&1; then
   updater_rc=0
 else
@@ -208,15 +224,15 @@ if [ "$candidate_pid_list" != invalid ] && [ "$#" -eq 1 ]; then
   candidate_updated=$(printf '%s\n' "$candidate_status" | sed -n 's/.*"status_updated_at":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)
   candidate_status_pid=$(printf '%s\n' "$candidate_status" | sed -n 's/.*"pid":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)
   candidate_inform=$(printf '%s\n' "$candidate_status" | sed -n 's/.*"last_successful_inform":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+  candidate_status_commit=$(printf '%s\n' "$candidate_status" | sed -n 's/.*"commit":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+  candidate_last_status=$(printf '%s\n' "$candidate_status" | sed -n 's/.*"last_status":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+  candidate_observed_now=$(date +%s)
   candidate_identity=$(/tmp/unifi-bridge/unifi-bridge -version 2>/dev/null || true)
-  if [ -n "$candidate_updated" ] && [ "$candidate_updated" -ge "$updater_started" ] &&
-     [ "$candidate_status_pid" = "$candidate_pid" ] && inform_is_fresh "$candidate_inform" "$inform" "$updater_started_text" &&
+  if fresh_inform_after_restart "$candidate_updated" "$updater_started" "$candidate_observed_now" 45 "$candidate_pid" "$candidate_status_pid" "$candidate_inform" "$candidate_status_commit" "$COMMIT" "$candidate_last_status" &&
      printf '%s\n' "$candidate_identity" | grep -Fq "commit: $COMMIT" &&
      printf '%s\n' "$candidate_identity" | grep -Fq 'unifi-bridge 1.2.5' &&
-     printf '%s\n' "$candidate_status" | grep -Fq '"commit": "1f22343206c80bda01d576dfdb813e4a911e4568"' &&
      printf '%s\n' "$candidate_status" | grep -Fq '"adopted": true' &&
      printf '%s\n' "$candidate_status" | grep -Fq '"mode": "GCM"' &&
-     printf '%s\n' "$candidate_status" | grep -Fq '"last_status": "Active (GCM)"' &&
      printf '%s\n' "$candidate_status" | grep -Fq '"running": true'; then
     candidate_runtime=pass
   fi

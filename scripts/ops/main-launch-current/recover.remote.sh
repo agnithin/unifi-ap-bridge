@@ -34,8 +34,25 @@ state_identity() {
     printf '%s=%s\n' "$field" "$value" >> "$output" || return 1
   done
 }
-inform_is_fresh() {
-  [ -n "$1" ] && [ "$1" != "$2" ] && [ "$1" \> "$3" ]
+uint() {
+  case "$1" in ''|*[!0-9]*) return 1;; esac
+}
+status_is_fresh() {
+  uint "$1" && uint "$2" && uint "$3" || return 1
+  [ "$2" -le "$1" ] || return 1
+  age=$(( $1 - $2 ))
+  [ "$age" -le "$3" ]
+}
+# Use epoch fields for operation ordering and freshness. The daemon's
+# zone-less last_successful_inform string is evidence only; its clock basis is
+# not compared with shell wall time. The process starts with zeroed exchange
+# health, so its nonempty success field plus Active (GCM) proves an exchange.
+# Equal-second status is ambiguous.
+fresh_inform_after_restart() {
+  uint "$1" && uint "$2" && uint "$3" && uint "$4" || return 1
+  status_is_fresh "$3" "$1" "$4" && [ "$1" -gt "$2" ] &&
+    [ -n "$7" ] && [ "$5" = "$6" ] && [ "$8" = "$9" ] &&
+    [ "${10}" = 'Active (GCM)' ]
 }
 
 [ "$(hostname)" = "$HOST_EXPECTED" ] || fail wrong_host
@@ -179,7 +196,6 @@ cmp -s "$RESTORE_DIR/runtime/unifi-bridge" /tmp/unifi-bridge/unifi-bridge || fai
 
 release_locks
 recovery_started=$(date +%s)
-recovery_started_text=$(date '+%Y-%m-%d %H:%M:%S')
 before_inform=$(sed -n 's/.*"last_successful_inform":[[:space:]]*"\([^"]*\)".*/\1/p' "$STATUS" | head -n 1)
 printf '%s\n' "$before_inform" > "$STAGE/preserve/recovery.before_inform"
 "$INSTALL/start.sh"
@@ -191,7 +207,10 @@ while [ "$tries" -lt 25 ]; do
   live_pid=''
   case "$live_pid_list" in *[!0-9\ ]*|'') ;; *) set -- $live_pid_list; [ "$#" -eq 1 ] && live_pid=$1;; esac
   status_pid=$(sed -n 's/.*"pid":[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$STATUS" | head -n 1)
-  if inform_is_fresh "$current_inform" "$before_inform" "$recovery_started_text" && [ -n "$updated" ] && [ "$updated" -ge "$recovery_started" ] && [ -n "$live_pid" ] && [ "$live_pid" = "$status_pid" ] && grep -Fq '"running": true' "$STATUS" && grep -Fq '"enabled": true' "$STATUS" && grep -Fq '"adopted": true' "$STATUS" && grep -Fq '"mode": "GCM"' "$STATUS" && grep -Fq '"commit": "be106ec33fe6790af30a600d11bd05246445c530"' "$STATUS" && grep -Fq '"last_status": "Active (GCM)"' "$STATUS"; then
+  status_commit=$(sed -n 's/.*"commit":[[:space:]]*"\([^"]*\)".*/\1/p' "$STATUS" | head -n 1)
+  last_status=$(sed -n 's/.*"last_status":[[:space:]]*"\([^"]*\)".*/\1/p' "$STATUS" | head -n 1)
+  observed_now=$(date +%s)
+  if fresh_inform_after_restart "$updated" "$recovery_started" "$observed_now" 45 "$live_pid" "$status_pid" "$current_inform" "$status_commit" 'be106ec33fe6790af30a600d11bd05246445c530' "$last_status" && [ -n "$live_pid" ] && grep -Fq '"running": true' "$STATUS" && grep -Fq '"enabled": true' "$STATUS" && grep -Fq '"adopted": true' "$STATUS" && grep -Fq '"mode": "GCM"' "$STATUS"; then
     break
   fi
   sleep 2
