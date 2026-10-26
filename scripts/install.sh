@@ -7,7 +7,7 @@ ADDON_NAME="unifi-bridge"
 INSTALL_DIR="/jffs/addons/$ADDON_NAME"
 SCRIPTS_DIR="/jffs/scripts"
 TMP_DIR="/tmp/$ADDON_NAME"
-SOURCE_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SOURCE_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 
 fail() { echo "Installer: $*" >&2; exit 1; }
 read_meta() {

@@ -16,10 +16,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Source
-        uses: actions/checkout@v4
+        # Pin actions/checkout v4.4.0 to its verified upstream commit.
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        # Pin actions/setup-go v5.6.0 to its verified upstream commit.
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.22'
           check-latest: true
@@ -36,6 +38,9 @@ jobs:
           python3 scripts/check_secrets.py
           node scripts/test_update_ui.js
           for script in scripts/*.sh; do sh -n "$script"; done
+          # Incremental ShellCheck starts with fresh-install and startup paths.
+          # Other firmware scripts retain syntax checks while applet coverage is documented.
+          shellcheck -s sh --severity=warning scripts/install.sh scripts/start.sh
 
       - name: Build Binaries
         run: |
@@ -99,7 +104,9 @@ jobs:
           cat dist/sha256sums.txt
 
       - name: Publish Release or Dev Pre-Release
-        uses: softprops/action-gh-release@v2
+        # v3 uses Node 24, supported by GitHub-hosted ubuntu-latest runners.
+        # Pin softprops/action-gh-release v3.0.0 to its verified upstream commit.
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           tag_name: ${{ env.TAG_NAME }}
           target_commitish: ${{ github.sha }}
