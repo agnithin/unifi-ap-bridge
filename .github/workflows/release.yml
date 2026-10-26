@@ -16,15 +16,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Source
-        # Pin actions/checkout v4.4.0 to its verified upstream commit.
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        # Pin actions/checkout v6.0.3 (Node 24) to its verified upstream commit.
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Set up Go
-        # Pin actions/setup-go v5.6.0 to its verified upstream commit.
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        # Pin actions/setup-go v6.0.0 (Node 24) to its verified upstream commit.
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
         with:
           go-version: '1.22'
           check-latest: true
+          # This repository has no external Go modules; avoid searching for go.sum.
+          cache: false
 
       - name: Verify daemon and cluster behavior
         run: |
