@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import subprocess
 import shutil
+import shlex
+import re
 import tarfile
 import tempfile
 import time
@@ -14,6 +16,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
 COMMIT = "a" * 40
+PINNED_UPDATER_SHA = "2f2dc19723cf442a2ff5ea7ebd9e8b10b56b6a0c24ab2441eca602c14407547a"
 MEMBERS = [
     "apply_config.sh", "bundle.json", "install.sh", "start.sh", "sync_nodes.sh",
     "unifi-bridge-armv7", "unifi-bridge.asp", "unifi-bridge.sh", "update.sh",
@@ -76,11 +79,16 @@ class ApplyFailureTests(unittest.TestCase):
             "shutil.copyfile(source,a[a.index('-o')+1])\n",
         )
         self.write_bundle()
-        source = (ROOT / "scripts/update.sh").read_text()
+        candidate_source = os.environ.get("UNIFI_BRIDGE_CANDIDATE_UPDATER")
+        self.candidate_update_bytes = Path(candidate_source).read_bytes() if candidate_source else (ROOT / "scripts/update.sh").read_bytes()
+        if candidate_source:
+            self.assert_candidate_updater_pin(self.candidate_update_bytes)
+        source = self.candidate_update_bytes.decode()
         source = source.replace('INSTALL_DIR="/jffs/addons/$ADDON_NAME"', f'INSTALL_DIR="{self.install}"')
         source = source.replace("/tmp/unifi-bridge-update.lock", str(self.root / "update.lock"))
         source = source.replace("/tmp/unifi-bridge-start.lock", str(self.root / "start.lock"))
         source = source.replace("/tmp/unifi-bridge-mutation.lock", str(self.root / "mutation.lock"))
+        source = source.replace('tmp_dir="/tmp/unifi-update-$$"', f'tmp_dir="{self.root}/tmp/unifi-update-$$"')
         source = source.replace("/tmp/unifi-bridge/unifi-bridge", str(self.root / "tmp/unifi-bridge/unifi-bridge"))
         source = source.replace("/tmp/var/wwwext", str(self.root / "www"))
         source = source.replace("/jffs/scripts", str(self.root / "links"))
@@ -117,7 +125,10 @@ class ApplyFailureTests(unittest.TestCase):
         self.assertFalse((self.install / "config/state.json").exists())
         self.assertEqual(self.state_file.stat().st_mode & 0o777, 0o600)
 
-    def write_bundle(self, *, version="1.2.5", commit=COMMIT, architecture="armv7", members=None, link=None, binary_commit=None, binary_exit=0):
+    def assert_candidate_updater_pin(self, data):
+        self.assertEqual(hashlib.sha256(data).hexdigest(), PINNED_UPDATER_SHA)
+
+    def write_bundle(self, *, version="1.2.5", commit=COMMIT, architecture="armv7", members=None, link=None, binary_commit=None, binary_exit=0, update_script_bytes=None):
         bundle_name = f"unifi-bridge-addon-{COMMIT}-armv7.tar.gz"
         self.bundle_name = bundle_name
         files = {
@@ -130,7 +141,7 @@ class ApplyFailureTests(unittest.TestCase):
             ).encode(),
             "unifi-bridge.asp": b"<!-- unifi-ap-bridge-webui candidate -->",
             "unifi-bridge.sh": b"#!/bin/sh\nexit 0\n",
-            "update.sh": b"#!/bin/sh\nexit 0\n",
+            "update.sh": update_script_bytes or b"#!/bin/sh\nexit 0\n",
             "version.txt": (version + "\n").encode(),
             "watchdog.sh": b"#!/bin/sh\nexit 0\n",
             "bundle.json": json.dumps(
@@ -214,7 +225,7 @@ class ApplyFailureTests(unittest.TestCase):
         # Its standalone installer also predates the archive and is unmanaged.
         self.write(self.install / "install.sh", "#!/bin/sh\necho legacy-installer\n")
         self.write(self.install / "start.sh", self.compatibility_start_source("start_be106.sh"))
-        self.write(self.install / "update.sh", (ROOT / "scripts/update.sh").read_text())
+        self.write(self.install / "update.sh", self.candidate_update_bytes.decode())
         self.make_prior_bundle()
 
     def make_node_compatibility_generation(self):
@@ -264,6 +275,161 @@ class ApplyFailureTests(unittest.TestCase):
             " target=Path(args[args.index('-C')+1])\n"
             " if target.name == 'staged': (target/'update.sh').unlink()\n"
             "sys.exit(rc)\n")
+
+    def enable_update_path_trace(self):
+        trace = self.root / "filesystem-trace.jsonl"
+        for tool in ("cp", "mv", "rm", "tar"):
+            real_tool = shutil.which(tool, path=os.pathsep.join(self.env["PATH"].split(os.pathsep)[1:]))
+            self.assertIsNotNone(real_tool, tool)
+            wrapper = f'''#!/usr/bin/env python3
+import hashlib, json, os, pathlib, subprocess, sys
+ROOT = pathlib.Path(os.path.abspath(os.environ["FS_TRACE_ROOT"]))
+LOG = pathlib.Path(os.environ["FS_TRACE_LOG"])
+REAL = {real_tool!r}
+TOOL = {tool!r}
+args = sys.argv[1:]
+def safe_path(raw):
+    p = pathlib.Path(raw)
+    p = pathlib.Path(os.path.abspath(p))
+    try: p.relative_to(ROOT)
+    except ValueError: return None
+    return p
+def collect():
+    found = {{}}
+    for i, arg in enumerate(args):
+        if arg.startswith("-"): continue
+        p = safe_path(arg)
+        if p is None: continue
+        if p.name.startswith("update.sh"):
+            found[str(p)] = p
+        if p.is_dir():
+            try:
+                for child in list(p.rglob("update.sh"))[:64]: found[str(child)] = child
+            except OSError: pass
+    if "-C" in args:
+        i = args.index("-C")
+        if i + 1 < len(args):
+            p = safe_path(str(pathlib.Path(args[i + 1]) / "update.sh"))
+            if p is not None: found[str(p)] = p
+    return list(found.values())[:128]
+def describe(p):
+    try:
+        if p.is_symlink(): return {{"state":"symlink"}}
+        if not p.exists(): return {{"state":"missing"}}
+        if not p.is_file(): return {{"state":"other"}}
+        data = p.read_bytes(); st = p.stat()
+        return {{"state":"regular","bytes":len(data),"sha256":hashlib.sha256(data).hexdigest(),"mode":format(st.st_mode & 0o777,"04o")}}
+    except OSError as e: return {{"state":"read_error","errno":e.errno}}
+def record(phase, paths, rc=None):
+    count = sum(1 for _ in LOG.open()) if LOG.exists() else 0
+    with LOG.open("a") as f:
+        for p in paths:
+            if count >= 1024 or LOG.stat().st_size >= 262144:
+                pathlib.Path(str(LOG)+".limit").touch()
+                return
+            try: rel = p.relative_to(ROOT).as_posix()
+            except ValueError: rel = "[outside-fixture]"
+            row={{"tool":TOOL,"phase":phase,"path":rel[:300],"result":describe(p)}}
+            if rc is not None: row["rc"]=rc
+            line = json.dumps(row,sort_keys=True)+"\\n"
+            if LOG.stat().st_size + len(line.encode()) > 262144:
+                pathlib.Path(str(LOG)+".limit").touch()
+                return
+            f.write(line); f.flush(); count += 1
+before=collect(); record("before",before)
+rc=subprocess.call([REAL]+args)
+after=collect()
+for p in before:
+    if p not in after: after.append(p)
+record("after",after,rc)
+sys.exit(rc)
+'''
+            self.write(self.bin / tool, wrapper)
+        self.env["FS_TRACE_ROOT"] = str(self.root)
+        self.env["FS_TRACE_LOG"] = str(trace)
+        self.trace_file = trace
+
+    def observe_update_file(self, label, path, phase):
+        try:
+            if path.is_symlink():
+                state = {"state": "symlink"}
+            elif path.is_file():
+                data = path.read_bytes()
+                state = {"state": "regular", "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest(),
+                         "mode": format(path.stat().st_mode & 0o777, "04o")}
+            elif path.exists():
+                state = {"state": "other"}
+            else:
+                state = {"state": "missing"}
+        except OSError as error:
+            state = {"state": "read_error", "errno": error.errno}
+        with self.trace_file.open("a") as stream:
+            stream.write(json.dumps({"tool": "fixture", "phase": phase, "path": label, "result": state}, sort_keys=True) + "\n")
+        return state
+
+    def run_candidate_file_postflight(self, candidate_file, installed_file):
+        template = (ROOT / "scripts/ops/main-launch-current/launch.remote.template.sh").read_text()
+        functions = []
+        for name in ("perm", "file_state", "file_readable", "compare_candidate_file", "compare_candidate_mode", "record_candidate_file"):
+            if name in ("perm", "file_readable"):
+                pattern = rf"(?m)^{name}\(\)[^\n]*$"
+            else:
+                pattern = rf"(?ms)^{name}\(\) \{{\n.*?^\}}"
+            match = re.search(pattern, template)
+            self.assertIsNotNone(match, pattern)
+            functions.append(match.group(0))
+        (self.root / "candidate-files.status").write_text("file content=code mode=code\n")
+        shell = "STAGE=$1\n" + "\n".join(functions) + "\nrecord_candidate_file update.sh \"$2\" \"$3\" compare\n"
+        return subprocess.run(["sh", "-eu", "-c", shell, "fixture", str(self.root), str(candidate_file), str(installed_file)],
+            capture_output=True, text=True, timeout=5)
+
+    def test_successful_candidate_update_traces_update_script_through_postflight(self):
+        self.make_main_compatibility_generation()
+        archive_path = os.environ.get("UNIFI_BRIDGE_CANDIDATE_ARCHIVE")
+        if archive_path:
+            with tarfile.open(archive_path, "r:gz") as archive:
+                candidate_updater = archive.extractfile("update.sh").read()
+        else:
+            candidate_updater = self.candidate_update_bytes
+        self.assert_candidate_updater_pin(candidate_updater)
+        self.write_bundle(update_script_bytes=candidate_updater)
+        self.enable_update_path_trace()
+        self.write(self.bin / "nohup",
+                   '#!/bin/sh\ntouch "$RUNNING"\ncat > "$STATUS_FILE" <<EOF\n'
+                   'window.unifiBridgeStatus = {"running": true, "enabled": true, "version": "1.2.5", "commit": "' + COMMIT + '", "pid": 1234, "status_updated_at": ' + '$(date +%s)' + ', "last_successful_inform": "fixture-inform", "last_status": "Active (GCM)"};\nEOF\nexit 0\n')
+
+        staged_before = self.observe_update_file("launch-stage/update.sh", self.script, "before_updater")
+        result = self.run_apply(args=["apply-exact", "dev", COMMIT, "991001"])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        staged_after = self.observe_update_file("launch-stage/update.sh", self.script, "after_updater")
+        self.assertEqual(staged_after, staged_before)
+        update_status = json.loads((self.web / "update_status.js").read_text().split("=", 1)[1].strip().rstrip(";"))
+        self.assertEqual(update_status["status"], "SUCCESS")
+        installed_update = self.install / "update.sh"
+        self.assertEqual(hashlib.sha256(installed_update.read_bytes()).hexdigest(), PINNED_UPDATER_SHA)
+        self.assertFalse((self.install / ".update-transaction").exists())
+        for lock in ("update.lock", "start.lock", "mutation.lock"):
+            self.assertFalse((self.root / lock).exists(), lock)
+
+        # Compare the installed updater against the exact pinned archive member
+        # when supplied by the local verifier, using the production acceptance
+        # helper and preserving its explicit content/mode classifications.
+        candidate_file = self.root / "candidate-check/update.sh"
+        candidate_file.parent.mkdir()
+        candidate_file.write_bytes(candidate_updater)
+        candidate_file.chmod(0o755)
+        postflight = self.run_candidate_file_postflight(candidate_file, installed_update)
+        self.assertEqual(postflight.returncode, 0, postflight.stdout + postflight.stderr)
+        self.assertEqual((self.root / "candidate-files.status").read_text(), "file content=code mode=code\nupdate.sh content=same mode=same\n")
+
+        rows = [json.loads(line) for line in self.trace_file.read_text().splitlines()]
+        digest = PINNED_UPDATER_SHA
+        self.assertTrue(any(r["tool"] == "tar" and r["phase"] == "after" and r["path"].endswith("/staged/update.sh") and r["result"].get("sha256") == digest for r in rows), {"rows": rows, "trace_exists": self.trace_file.exists(), "trace_bytes": self.trace_file.stat().st_size, "path": self.env["PATH"]})
+        self.assertTrue(any(r["tool"] == "mv" and r["phase"] == "after" and r["path"].endswith("addon/update.sh") and r["result"].get("sha256") == digest for r in rows), rows)
+        self.assertTrue(any(r["tool"] == "rm" and r["phase"] == "after" and r["path"].endswith("/staged/update.sh") and r["result"].get("state") == "missing" for r in rows), rows)
+        self.assertLess(self.trace_file.stat().st_size, 262144)
+        self.assertFalse(Path(str(self.trace_file) + ".limit").exists())
+        print("update.sh trace: launch-stage script unchanged; archive-extracted updater regular with pinned hash; installed by atomic rename with pinned hash; updater work copy absent after normal cleanup; postflight content=same mode=same")
 
     def test_verification_helpers_reject_failed_or_invalid_tool_output(self):
         source = (ROOT / "scripts/update.sh").read_text()

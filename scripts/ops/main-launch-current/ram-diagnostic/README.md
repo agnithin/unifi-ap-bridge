@@ -64,3 +64,26 @@ Regardless of outcome, this diagnostic does not establish the historical actor. 
 ## Local validation
 
 `verify_local.py` extracts the sanitized observation helper and exercises regular file, symlink, confirmed absence, missing/unlistable parent, read/hash error, and updater-disappears/neutral-remains fixtures. It asserts that log rows contain no file contents and guards against candidate invocation or forbidden paths. `prepare_packet.py` can be run with the exact pinned local archive to validate candidate identity and generate a local payload; neither local check sends remote commands.
+
+## Local updater lifecycle regression
+
+`verify_candidate_lifecycle.py --archive PATH --sidecar PATH` checks the immutable candidate archive and runs the existing updater success and missing-stage regressions in disposable firmware fixtures. The successful case loads the exact pinned `update.sh` member and includes that updater as the candidate generation's `update.sh`. It traces bounded `tar`, `cp`, `mv`, and `rm` command boundaries plus pre/post observations of the launch-stage script. The log records only fixture-relative paths, state, size, mode, SHA-256 and command result; it never records file contents. The production candidate-comparison helper then verifies `update.sh` content and mode using the same separate classifications as launch postflight.
+
+The local host cannot execute the pinned ARMv7 daemon. The lifecycle fixture therefore substitutes a harmless synthetic daemon for runtime checks while retaining the exact candidate updater bytes and the exact candidate updater file. This validates updater orchestration and `update.sh` file handling; it does not prove execution of the complete ARMv7 archive on router firmware.
+
+`test_run_foreground.py` checks `run_foreground.py`, a local-only command wrapper for future approved foreground SSH sessions. It atomically retains a mode-0600 JSON result with the actual client exit code and total monotonic elapsed time, plus private stdout/stderr files. It records a timeout as `timed_out_remote_completion_unknown` and never retries. Example shape:
+
+A child terminated by a signal is recorded with its raw negative subprocess code (for example, `-15`), a `terminated_by_signal_remote_completion_unknown` status and the signal number. The wrapper returns the shell-compatible nonzero status `128 + signal`; neither interruption nor timeout establishes remote completion.
+
+```sh
+rtk python3 scripts/ops/main-launch-current/ram-diagnostic/run_foreground.py \
+  --result /private/tmp/private-run/result.json \
+  --stdout /private/tmp/private-run/stdout.log \
+  --stderr /private/tmp/private-run/stderr.log \
+  --stdin /private/tmp/private-run/payload.tar.gz \
+  --timeout-seconds 180 -- rtk proxy ssh -o BatchMode=yes \
+  -o StrictHostKeyChecking=yes -o ConnectTimeout=8 \
+  -o ConnectionAttempts=1 nithin@10.100.1.10 REMOTE_COMMAND
+```
+
+The command example is documentation only. No AP access or remote execution is authorized by this local lifecycle regression.
