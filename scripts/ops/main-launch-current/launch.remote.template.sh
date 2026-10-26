@@ -4,13 +4,15 @@ set -eu
 HOST_EXPECTED='ZenWiFi_XT8-7B10'
 COMMIT='1f22343206c80bda01d576dfdb813e4a911e4568'
 SCRIPT_SHA='2f2dc19723cf442a2ff5ea7ebd9e8b10b56b6a0c24ab2441eca602c14407547a'
-REQUEST_ID='20261026070142'
+ARCHIVE_SHA='16300c4bc0f08f6d5bfadae8427a7928f01de1470eaf7d000c317be6d27657f1'
+INSTALLED_SIDECAR_SHA='0e230741aefdf01fdff06eb291693299edcaeddc9ed7e45fb646593f2252116a'
+REQUEST_ID='202610261245261754'
 INSTALL='/jffs/addons/unifi-bridge'
 CONFIG="$INSTALL/config/config.json"
 STATE_EXPECTED="$INSTALL/state.json"
 KEY="$INSTALL/.ssh/cluster_key"
 STATUS='/tmp/var/wwwext/unifi-bridge/status.js'
-STAGE="/tmp/unifi-main-launch-${COMMIT}-20261026070142"
+STAGE="/tmp/unifi-main-launch-${COMMIT}-202610261245261754"
 
 fail() { printf 'preflight=FAIL reason=%s stage=%s\n' "$1" "$STAGE"; exit 70; }
 mode() { ls -ln "$1" | awk '{print $3 ":" $4 ":" substr($1,1,10)}'; }
@@ -54,8 +56,50 @@ candidate_milestone() {
   sed "s/^${milestone_key}=.*/${milestone_key}=${milestone_value}/" "$STAGE/candidate-milestones.status" > "$STAGE/candidate-milestones.tmp" &&
     mv -f "$STAGE/candidate-milestones.tmp" "$STAGE/candidate-milestones.status"
 }
+observe_candidate_file() {
+  observation_phase=$1; observation_label=$2; observation_path=$3
+  observation_state=present; observation_type=regular; observation_mode=unavailable
+  observation_bytes=unavailable; observation_sha256=unavailable
+  if [ -L "$observation_path" ]; then
+    observation_type=symlink
+  elif [ ! -e "$observation_path" ]; then
+    observation_state=missing; observation_type=missing
+  elif [ ! -f "$observation_path" ]; then
+    observation_state=not_regular; observation_type=other
+  elif ! file_readable "$observation_path"; then
+    observation_state=unreadable
+  else
+    observation_mode=$(perm "$observation_path" 2>/dev/null) || observation_mode=mode_error
+    observation_bytes=$(wc -c < "$observation_path" 2>/dev/null | tr -d '[:space:]') || observation_bytes=read_error
+    observation_hash_line=$(openssl dgst -sha256 "$observation_path" 2>/dev/null) || observation_hash_line=
+    observation_sha256=$(printf '%s\n' "$observation_hash_line" | awk '{print $NF}')
+    case "$observation_bytes" in ''|*[!0-9]*) observation_bytes=read_error; observation_state=read_error;; esac
+    case "$observation_sha256" in ''|*[!0-9a-f]*) observation_sha256=read_error; observation_state=read_error;; esac
+    [ "${#observation_mode}" -le 16 ] || observation_mode=mode_error
+    [ "${#observation_bytes}" -le 20 ] || { observation_bytes=read_error; observation_state=read_error; }
+    [ "${#observation_sha256}" -eq 64 ] || { observation_sha256=read_error; observation_state=read_error; }
+  fi
+  observation_rows=$(wc -l < "$STAGE/candidate-observations.status" | tr -d '[:space:]') || return 1
+  case "$observation_rows" in ''|*[!0-9]*) return 1;; esac
+  [ "$observation_rows" -lt 32 ] || return 1
+  printf 'phase=%s file=%s state=%s type=%s mode=%s bytes=%s sha256=%s\n' \
+    "$observation_phase" "$observation_label" "$observation_state" "$observation_type" \
+    "$observation_mode" "$observation_bytes" "$observation_sha256" >> "$STAGE/candidate-observations.status"
+}
+verify_installed_sidecar() {
+  installed_sidecar=$1
+  [ -f "$installed_sidecar" ] && file_readable "$installed_sidecar" || return 1
+  installed_sidecar_sha=$(openssl dgst -sha256 "$installed_sidecar" 2>/dev/null | awk '{print $NF}') || return 1
+  [ "$installed_sidecar_sha" = "$INSTALLED_SIDECAR_SHA" ] || return 1
+  installed_sidecar_rows=$(awk -v digest="$ARCHIVE_SHA" 'NF==2 && $1==digest && $2=="unifi-bridge.tar.gz" {n++} END {print n+0}' "$installed_sidecar") || return 1
+  [ "$installed_sidecar_rows" = 1 ]
+}
 record_candidate_file() {
   candidate_rel=$1; candidate_source=$2; candidate_destination=$3; candidate_check_mode=$4
+  if [ "$candidate_rel" = update.sh ]; then
+    observe_candidate_file before_comparison extracted_updater "$candidate_source" || fail candidate_observation_failed
+    observe_candidate_file before_comparison installed_updater "$candidate_destination" || fail candidate_observation_failed
+  fi
   candidate_content=$(compare_candidate_file "$candidate_source" "$candidate_destination")
   if [ "$candidate_check_mode" = compare ]; then
     candidate_mode=$(compare_candidate_mode "$candidate_source" "$candidate_destination")
@@ -70,6 +114,11 @@ record_candidate_file() {
     fi
   fi
   printf '%s content=%s mode=%s\n' "$candidate_rel" "$candidate_content" "$candidate_mode" >> "$STAGE/candidate-files.status"
+  if [ "$candidate_rel" = update.sh ]; then
+    printf 'phase=comparison file=update.sh content=%s mode=%s\n' "$candidate_content" "$candidate_mode" >> "$STAGE/candidate-observations.status"
+    observe_candidate_file after_comparison extracted_updater "$candidate_source" || fail candidate_observation_failed
+    observe_candidate_file after_comparison installed_updater "$candidate_destination" || fail candidate_observation_failed
+  fi
   [ "$candidate_content" = same ] && [ "$candidate_mode" = same ]
 }
 state_identity() {
@@ -119,9 +168,14 @@ fresh_inform_after_restart() {
 
 [ "$(hostname)" = "$HOST_EXPECTED" ] || fail wrong_host
 [ ! -e "$STAGE" ] || fail stage_already_exists
+available_kb=$(df -k /tmp | awk 'END {print $4}')
+case "$available_kb" in ''|*[!0-9]*) fail tmp_space_unreadable;; esac
+[ "$available_kb" -ge 65536 ] || fail tmp_space_below_64_mib
 umask 077
 mkdir -m 700 "$STAGE"
 mkdir -m 700 "$STAGE/preserve"
+: > "$STAGE/candidate-observations.status"
+chmod 600 "$STAGE/candidate-observations.status"
 
 pid_list=$(pidof unifi-bridge 2>/dev/null | tr -s '[:space:]' ' ' | sed 's/^ //;s/ $//')
 [ -n "$pid_list" ] || fail daemon_not_running
@@ -200,6 +254,7 @@ actual=$(openssl dgst -sha256 "$STAGE/update.sh" | awk '{print $NF}')
 [ "$actual" = "$SCRIPT_SHA" ] || fail candidate_script_checksum_mismatch
 sh -n "$STAGE/update.sh" || fail candidate_script_syntax
 printf 'candidate_script_sha256=%s\nremote_script=%s/update.sh\nsyntax=ok\n' "$actual" "$STAGE" >> "$STAGE/preflight.safe"
+observe_candidate_file after_handoff staged_updater "$STAGE/update.sh" || fail candidate_observation_failed
 
 # Foreground invocation: the verified absolute path is used in this same SSH session.
 updater_started=$(date +%s)
@@ -208,6 +263,8 @@ if /bin/sh "$STAGE/update.sh" apply-exact dev "$COMMIT" "$REQUEST_ID" > "$STAGE/
 else
   updater_rc=$?
 fi
+observe_candidate_file after_updater_return staged_updater "$STAGE/update.sh" || fail candidate_observation_failed
+observe_candidate_file after_updater_return installed_updater "$INSTALL/update.sh" || fail candidate_observation_failed
 
 candidate_bundle=fail
 printf 'updater_exit=%s\narchive=not_checked\narchive_checksum=not_checked\narchive_member_list=not_checked\narchive_extraction=not_checked\narchive_members=not_checked\nbundle_manifest=not_checked\nfile_comparisons=not_checked\n' "$updater_rc" > "$STAGE/candidate-milestones.status"
@@ -219,7 +276,7 @@ if [ "$updater_rc" -eq 0 ]; then
   else
     candidate_milestone archive present
     archive_sha=$(openssl dgst -sha256 "$INSTALL/unifi-bridge.tar.gz" 2>/dev/null | awk '{print $NF}')
-    if [ "$archive_sha" != '16300c4bc0f08f6d5bfadae8427a7928f01de1470eaf7d000c317be6d27657f1' ]; then
+    if [ "$archive_sha" != "$ARCHIVE_SHA" ] || ! verify_installed_sidecar "$INSTALL/unifi-bridge.tar.gz.sha256"; then
       candidate_milestone archive_checksum mismatch_or_error
     else
       candidate_milestone archive_checksum pass
@@ -231,8 +288,10 @@ if [ "$updater_rc" -eq 0 ]; then
         candidate_milestone archive_member_list pass
         if ! tar -xzpf "$INSTALL/unifi-bridge.tar.gz" -C "$STAGE/candidate-check"; then
           candidate_milestone archive_extraction error
+          observe_candidate_file after_extraction extracted_updater "$STAGE/candidate-check/update.sh" || fail candidate_observation_failed
         else
           candidate_milestone archive_extraction pass
+          observe_candidate_file after_extraction extracted_updater "$STAGE/candidate-check/update.sh" || fail candidate_observation_failed
           expected_members='apply_config.sh
 bundle.json
 install.sh
@@ -258,7 +317,7 @@ watchdog.sh'
             else
               if grep -Fq '"commit": "1f22343206c80bda01d576dfdb813e4a911e4568"' "$STAGE/candidate-check/bundle.json" &&
                  grep -Fq '"architecture": "armv7"' "$STAGE/candidate-check/bundle.json" &&
-                 [ "$(awk 'NF==2 && $2=="unifi-bridge.tar.gz" {print $1}' "$INSTALL/unifi-bridge.tar.gz.sha256")" = '16300c4bc0f08f6d5bfadae8427a7928f01de1470eaf7d000c317be6d27657f1' ]; then
+                 [ "$(awk 'NF==2 && $2=="unifi-bridge.tar.gz" {print $1}' "$INSTALL/unifi-bridge.tar.gz.sha256")" = "$ARCHIVE_SHA" ]; then
                 candidate_milestone bundle_manifest pass
                 candidate_bundle=pass
                 for rel in install.sh start.sh apply_config.sh sync_nodes.sh unifi-bridge.sh update.sh watchdog.sh; do
@@ -338,6 +397,9 @@ if [ "$candidate_pid_list" != invalid ] && [ "$#" -eq 1 ]; then
 fi
 watchdog_result=absent
 watchdog_present && watchdog_result=present
+observe_candidate_file before_acceptance staged_updater "$STAGE/update.sh" || fail candidate_observation_failed
+observe_candidate_file before_acceptance extracted_updater "$STAGE/candidate-check/update.sh" || fail candidate_observation_failed
+observe_candidate_file before_acceptance installed_updater "$INSTALL/update.sh" || fail candidate_observation_failed
 printf 'updater_exit=%s\ncandidate_bundle=%s\ncandidate_runtime=%s\nwatchdog=%s\nconfig_bytes=%s\nconfig_owner_group_mode=%s\nstate_identity=%s\nstate_bytes=%s\nstate_owner_group_mode=%s\nssh_key_bytes=%s\nssh_key_owner_group_mode=%s\ntransaction=%s\nlocks=%s\n' \
   "$updater_rc" "$candidate_bundle" "$candidate_runtime" "$watchdog_result" "$config_result" "$config_mode_result" "$state_result" "$state_bytes_result" "$state_mode_result" "$key_result" "$key_mode_result" "$journal_result" "$locks_result" > "$STAGE/worker.status"
 chmod 600 "$STAGE/worker.status"

@@ -12,12 +12,14 @@ import tempfile
 root = pathlib.Path(__file__).resolve().parent
 repo = root.parents[2]
 subprocess.run(['python3', str(root/'verify_candidate_diagnostics.py')], check=True)
+subprocess.run(['python3', str(root/'verify_instrumented_observations.py')], check=True)
 commit = '1f22343206c80bda01d576dfdb813e4a911e4568'
 archive_sha = '16300c4bc0f08f6d5bfadae8427a7928f01de1470eaf7d000c317be6d27657f1'
 sidecar_sha = '113a1ffc283a5a27ba1594736d827088aacab9e7936478234e0c775677eaf48f'
+installed_sidecar_sha = '0e230741aefdf01fdff06eb291693299edcaeddc9ed7e45fb646593f2252116a'
 updater_sha = '2f2dc19723cf442a2ff5ea7ebd9e8b10b56b6a0c24ab2441eca602c14407547a'
-recovery_sha = '15d34f02673b99d7fc5e8431aefc59088dd90b449874c78ec6701927fe642640'
-request_id = '20261026070142'
+recovery_sha = '5635a27505b03d72777ae3a9763f3867c567fc6beef65d2019248e964b33e9f2'
+request_id = '202610261245261754'
 archive = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else pathlib.Path('/private/tmp/unifi-main-1f223-current-armv7.tar.gz')
 sidecar = pathlib.Path(sys.argv[2]) if len(sys.argv) > 2 else pathlib.Path(str(archive) + '.sha256')
 
@@ -53,7 +55,14 @@ assert sha(root / 'recover.remote.sh') == recovery_sha
 for wrapper, expected_sha in [('launch_main.sh', updater_sha), ('recover_main.sh', recovery_sha)]:
     assert f"EXPECTED='{expected_sha}'" in (root / wrapper).read_text()
 launch_template = (root / 'launch.remote.template.sh').read_text()
-assert f"SCRIPT_SHA='{updater_sha}'" in launch_template and archive_sha in launch_template
+assert 'available_kb=$(df -k /tmp | awk' in launch_template and '[ "$available_kb" -ge 65536 ]' in launch_template
+assert 'candidate-observations.status' in launch_template and 'observation_rows" -lt 32' in launch_template
+for phase in ['after_handoff', 'after_updater_return', 'after_extraction', 'before_comparison', 'after_comparison', 'before_acceptance']:
+    assert phase in launch_template
+assert 'comparison file=update.sh content=%s mode=%s' in launch_template
+assert f"SCRIPT_SHA='{updater_sha}'" in launch_template and f"ARCHIVE_SHA='{archive_sha}'" in launch_template
+assert f"INSTALLED_SIDECAR_SHA='{installed_sidecar_sha}'" in launch_template
+assert 'verify_installed_sidecar "$INSTALL/unifi-bridge.tar.gz.sha256"' in launch_template
 assert f"REQUEST_ID='{request_id}'" in launch_template
 assert f"STAGE=\"/tmp/unifi-main-launch-${{COMMIT}}-{request_id}\"" in launch_template
 assert request_id in (root/'launch_main.sh').read_text()
@@ -69,7 +78,9 @@ recovery_handoff = subprocess.check_output(['python3', str(root/'build_command.p
 assert len(launch_handoff) < 1000 and len(recovery_handoff) < 1000
 for wrapper in ['launch_main.sh', 'recover_main.sh']:
     wrapper_text = (root/wrapper).read_text()
-    assert "printf '%s' \"$REMOTE_COMMAND\" | rtk proxy ssh" in wrapper_text
+    assert 'run_foreground.py' in wrapper_text
+    assert '--stdin "$RUN_DIR/' in wrapper_text and '--timeout-seconds 180' in wrapper_text
+    assert '-o StrictHostKeyChecking=yes' in wrapper_text and '-o ConnectionAttempts=1' in wrapper_text
     assert '--handoff "$HANDOFF_DIR" "$REMOTE_SHA"' in wrapper_text
 with tempfile.TemporaryDirectory(prefix='main-current-packet-') as td:
     td = pathlib.Path(td)

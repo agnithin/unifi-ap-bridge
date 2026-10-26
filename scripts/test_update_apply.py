@@ -370,8 +370,8 @@ sys.exit(rc)
     def run_candidate_file_postflight(self, candidate_file, installed_file):
         template = (ROOT / "scripts/ops/main-launch-current/launch.remote.template.sh").read_text()
         functions = []
-        for name in ("perm", "file_state", "file_readable", "compare_candidate_file", "compare_candidate_mode", "record_candidate_file"):
-            if name in ("perm", "file_readable"):
+        for name in ("fail", "perm", "file_state", "file_readable", "compare_candidate_file", "compare_candidate_mode", "observe_candidate_file", "record_candidate_file"):
+            if name in ("fail", "perm", "file_readable"):
                 pattern = rf"(?m)^{name}\(\)[^\n]*$"
             else:
                 pattern = rf"(?ms)^{name}\(\) \{{\n.*?^\}}"
@@ -379,6 +379,7 @@ sys.exit(rc)
             self.assertIsNotNone(match, pattern)
             functions.append(match.group(0))
         (self.root / "candidate-files.status").write_text("file content=code mode=code\n")
+        (self.root / "candidate-observations.status").write_text("")
         shell = "STAGE=$1\n" + "\n".join(functions) + "\nrecord_candidate_file update.sh \"$2\" \"$3\" compare\n"
         return subprocess.run(["sh", "-eu", "-c", shell, "fixture", str(self.root), str(candidate_file), str(installed_file)],
             capture_output=True, text=True, timeout=5)
@@ -421,6 +422,10 @@ sys.exit(rc)
         postflight = self.run_candidate_file_postflight(candidate_file, installed_update)
         self.assertEqual(postflight.returncode, 0, postflight.stdout + postflight.stderr)
         self.assertEqual((self.root / "candidate-files.status").read_text(), "file content=code mode=code\nupdate.sh content=same mode=same\n")
+        postflight_observations = (self.root / "candidate-observations.status").read_text().splitlines()
+        self.assertEqual(len(postflight_observations), 5)
+        self.assertIn("phase=comparison file=update.sh content=same mode=same", postflight_observations)
+        self.assertTrue(all("sha256=" + PINNED_UPDATER_SHA in row for row in postflight_observations if "file=extracted_updater" in row or "file=installed_updater" in row))
 
         rows = [json.loads(line) for line in self.trace_file.read_text().splitlines()]
         digest = PINNED_UPDATER_SHA

@@ -87,3 +87,29 @@ rtk python3 scripts/ops/main-launch-current/ram-diagnostic/run_foreground.py \
 ```
 
 The command example is documentation only. No AP access or remote execution is authorized by this local lifecycle regression.
+
+## Instrumented Main-only launch packet (prepared for review; not executed)
+
+The new packet uses request ID `202610261245261754` and stage `/tmp/unifi-main-launch-1f22343206c80bda01d576dfdb813e4a911e4568-202610261245261754`. It leaves all earlier launch, recovery and RAM-diagnostic stages untouched. Candidate commit remains `1f22343206c80bda01d576dfdb813e4a911e4568`; the archive SHA-256 remains `16300c4bc0f08f6d5bfadae8427a7928f01de1470eaf7d000c317be6d27657f1`, the downloaded release-sidecar SHA-256 remains `113a1ffc283a5a27ba1594736d827088aacab9e7936478234e0c775677eaf48f`, and updater SHA-256 remains `2f2dc19723cf442a2ff5ea7ebd9e8b10b56b6a0c24ab2441eca602c14407547a`. Separately, the updater writes a normalized installed sidecar whose SHA-256 is `0e230741aefdf01fdff06eb291693299edcaeddc9ed7e45fb646593f2252116a`; its sole row must contain the pinned archive digest and filename `unifi-bridge.tar.gz`. The launch verifies the pinned updater before handoff, then checks the installed archive hash and both the normalized sidecar hash and exact digest/filename row after updater return. Candidate acceptance gates remain fail-closed.
+
+The launch records at most 32 sanitized observation rows (under 8 KiB), with fixed phase and file labels, state/type, mode, size and SHA-256. It samples the staged updater after same-session handoff, staged and installed updater after updater return, extracted updater immediately after tar extraction even on extraction failure, extracted and installed updater before and after their content/mode comparison, and all three paths before acceptance. `candidate-files.status` still retains the existing exact classifications: missing, unreadable, comparison error, content difference and mode difference (plus its existing non-regular and mode-error states). The observation log never records file contents. A metadata read or log failure stops the launch. The outer packet and stage paths include the fresh request ID; the remote launch also requires the stage not to exist and at least 65,536 KiB free in `/tmp` before creating it.
+
+The reviewed foreground runner stores the SSH client exit status (including a raw negative signal code), total elapsed time, and private stdout/stderr logs. Both launch and recovery have a 180-second foreground bound, verified host keys, batch mode, one connection attempt and an 8-second connect timeout. A timeout or signal marks remote completion unknown: retain all local/remote evidence, do not retry, and use read-only triage. The measured archive is 2,344,402 bytes compressed and 5,832,906 bytes extracted; live free space must be checked again by preflight. Snapshots and updater temporary files consume additional space, covered by the 65,536 KiB minimum gate.
+
+The unchanged launch gates require Main identity, a sole daemon PID, fresh prior-build status and successful GCM inform, the configured effective state path, watchdog and clean journal/lock state, and exact prior-generation baselines before updater invocation. Acceptance requires the pinned candidate version/commit and fresh post-restart GCM inform, watchdog, clean transaction/locks, and preserved config/state identity and bytes/modes plus SSH-key bytes/mode. Any failed or ambiguous gate stops acceptance; no gate was weakened. Node remains outside scope and unchanged.
+
+The concrete guarded commands that would be included in one Main-only launch authorization are:
+
+```sh
+ALLOW_MAIN_PRODUCTION_LAUNCH=YES rtk sh scripts/ops/main-launch-current/launch_main.sh
+```
+
+The accompanying bounded recovery operation, only after a failed acceptance and read-only confirmation that recovery preconditions hold, is:
+
+```sh
+ALLOW_MAIN_RECOVERY=YES rtk sh scripts/ops/main-launch-current/recover_main.sh
+```
+
+Recovery is pinned to the fresh stage above. The recovery script SHA-256 is `5635a27505b03d72777ae3a9763f3867c567fc6beef65d2019248e964b33e9f2`; the packet verifies that hash and syntax, requires Main hostname, retained prior snapshots with exact members and known-good asset hashes, unchanged protected config/state identity/SSH key and modes, no transaction journal or locks, and verifies the restored prior runtime's fresh successful GCM inform, watchdog and transaction cleanup. Any failed guard stops and retains evidence. Recovery is named in the proposed authorization but is not authorized or executed now.
+
+Neither command has been run. No remote staging, service restart, AP mutation, controller write, Node access or cleanup occurred. Production remains held pending Sol review of this instrumented diff and a separate explicit decision.
