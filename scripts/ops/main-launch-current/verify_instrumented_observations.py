@@ -28,6 +28,7 @@ def main():
         function("perm", True), function("file_state"), function("file_readable", True),
         function("compare_candidate_file"), function("compare_candidate_mode"),
         function("observe_candidate_file"), function("verify_installed_sidecar"),
+        function("record_candidate_file"),
     ])
     with tempfile.TemporaryDirectory(prefix="instrumented-observation-") as temporary:
         root = pathlib.Path(temporary)
@@ -102,6 +103,38 @@ printf 'comparison_error=%s\\n' "$(compare_candidate_file {str(src)!r} {str(dst)
         }
         if not required.issubset(statuses):
             raise AssertionError(f"comparison classifications missing: {statuses}")
+
+        # The archive stores install.sh as 0644, while the updater installs
+        # managed scripts as 0755. Acceptance compares bytes and the explicit
+        # installed-mode contract independently.
+        candidate_install = root / "candidate-install.sh"
+        installed_install = root / "installed-install.sh"
+        candidate_install.write_text("#!/bin/sh\nprintf 'fixture\\n'\n")
+        candidate_install.chmod(0o644)
+        installed_install.write_bytes(candidate_install.read_bytes())
+        installed_install.chmod(0o755)
+        candidate_files = stage / "candidate-files.status"
+        candidate_files.touch(mode=0o600)
+        install_shell = f'''STAGE={str(stage)!r}
+{source}
+record_candidate_file install.sh {str(candidate_install)!r} {str(installed_install)!r} '-rwxr-xr-x'
+'''
+        accepted = subprocess.run(["/bin/sh", "-eu", "-c", install_shell], capture_output=True, text=True, timeout=5)
+        if accepted.returncode:
+            raise AssertionError("normalized install.sh mode rejected: " + accepted.stderr)
+        if candidate_files.read_text().splitlines()[-1] != "install.sh content=same mode=same":
+            raise AssertionError("install.sh 0644 archive / 0755 installed fixture did not pass")
+
+        installed_install.chmod(0o644)
+        wrong_mode = subprocess.run(["/bin/sh", "-eu", "-c", install_shell], capture_output=True, text=True, timeout=5)
+        if wrong_mode.returncode == 0 or candidate_files.read_text().splitlines()[-1] != "install.sh content=same mode=different":
+            raise AssertionError("wrong installed install.sh mode was accepted")
+
+        installed_install.write_text("#!/bin/sh\nprintf 'changed\\n'\n")
+        installed_install.chmod(0o755)
+        changed_content = subprocess.run(["/bin/sh", "-eu", "-c", install_shell], capture_output=True, text=True, timeout=5)
+        if changed_content.returncode == 0 or candidate_files.read_text().splitlines()[-1] != "install.sh content=different mode=same":
+            raise AssertionError("changed install.sh contents were accepted")
         normalized_dir = root / "sidecar-fixtures"
         normalized_dir.mkdir()
         normalized = normalized_dir / "correct.sha256"
@@ -131,7 +164,7 @@ verify_installed_sidecar {str(path)!r}
                                       capture_output=True, text=True, timeout=5)
             if rejected.returncode == 0:
                 raise AssertionError(f"normalized sidecar accepted {label}")
-    print("instrumented observations, comparison classes and normalized sidecar fixtures: PASS")
+    print("instrumented observations, comparison classes, normalized sidecar and install.sh mode fixtures: PASS")
 
 
 if __name__ == "__main__":

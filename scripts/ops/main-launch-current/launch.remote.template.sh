@@ -320,7 +320,8 @@ watchdog.sh'
                  [ "$(awk 'NF==2 && $2=="unifi-bridge.tar.gz" {print $1}' "$INSTALL/unifi-bridge.tar.gz.sha256")" = "$ARCHIVE_SHA" ]; then
                 candidate_milestone bundle_manifest pass
                 candidate_bundle=pass
-                for rel in install.sh start.sh apply_config.sh sync_nodes.sh unifi-bridge.sh update.sh watchdog.sh; do
+                record_candidate_file install.sh "$STAGE/candidate-check/install.sh" "$INSTALL/install.sh" '-rwxr-xr-x' || candidate_bundle=fail
+                for rel in start.sh apply_config.sh sync_nodes.sh unifi-bridge.sh update.sh watchdog.sh; do
                   record_candidate_file "$rel" "$STAGE/candidate-check/$rel" "$INSTALL/$rel" compare || candidate_bundle=fail
                 done
                 record_candidate_file webui/unifi-bridge.asp "$STAGE/candidate-check/unifi-bridge.asp" "$INSTALL/webui/unifi-bridge.asp" '-rw-r--r--' || candidate_bundle=fail

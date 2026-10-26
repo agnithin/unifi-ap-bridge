@@ -60,6 +60,8 @@ assert 'candidate-observations.status' in launch_template and 'observation_rows"
 for phase in ['after_handoff', 'after_updater_return', 'after_extraction', 'before_comparison', 'after_comparison', 'before_acceptance']:
     assert phase in launch_template
 assert 'comparison file=update.sh content=%s mode=%s' in launch_template
+assert 'record_candidate_file install.sh "$STAGE/candidate-check/install.sh" "$INSTALL/install.sh" \'-rwxr-xr-x\' || candidate_bundle=fail' in launch_template
+assert 'for rel in install.sh start.sh' not in launch_template
 assert f"SCRIPT_SHA='{updater_sha}'" in launch_template and f"ARCHIVE_SHA='{archive_sha}'" in launch_template
 assert f"INSTALLED_SIDECAR_SHA='{installed_sidecar_sha}'" in launch_template
 assert 'verify_installed_sidecar "$INSTALL/unifi-bridge.tar.gz.sha256"' in launch_template
