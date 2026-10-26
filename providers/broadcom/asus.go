@@ -785,8 +785,8 @@ func (p *AsusProvider) GetRadioStatsContext(ctx context.Context) ([]telemetry.Ra
 		if err != nil {
 			return nil, fmt.Errorf("read %s chanspec: %w", iface, err)
 		}
-		channel, _ := ParseChanspec(chanspecRaw)
-		if channel <= 0 {
+		channel, width := ParseChanspec(chanspecRaw)
+		if channel <= 0 || width <= 0 {
 			return nil, fmt.Errorf("read %s chanspec: invalid value %q", iface, strings.TrimSpace(chanspecRaw))
 		}
 		band := BandForChannel(channel)
@@ -801,12 +801,13 @@ func (p *AsusProvider) GetRadioStatsContext(ctx context.Context) ([]telemetry.Ra
 		}
 
 		stats = append(stats, telemetry.RadioStat{
-			Name:     radioName,
-			Channel:  channel,
-			NumSta:   0, // Populated dynamically by bridge daemon based on active VAPs
-			CuTotal:  cuTotal,
-			CuSelfRx: cuSelfRx,
-			CuSelfTx: cuSelfTx,
+			Bandwidth: width,
+			Name:      radioName,
+			Channel:   channel,
+			NumSta:    0, // Populated dynamically by bridge daemon based on active VAPs
+			CuTotal:   cuTotal,
+			CuSelfRx:  cuSelfRx,
+			CuSelfTx:  cuSelfTx,
 		})
 	}
 	return stats, nil

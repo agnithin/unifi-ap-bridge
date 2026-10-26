@@ -78,12 +78,13 @@ type Radio struct {
 }
 
 type RadioStat struct {
-	Name     string `json:"name"`
-	Channel  int    `json:"channel"`
-	NumSta   int    `json:"num_sta"`
-	CuTotal  int    `json:"cu_total"`   // Total channel utilization % (0-100)
-	CuSelfRx int    `json:"cu_self_rx"` // AP receive airtime % (0-100)
-	CuSelfTx int    `json:"cu_self_tx"` // AP transmit airtime % (0-100)
+	Bandwidth int    `json:"bw,omitempty"` // Actual operating width in MHz, independent of controller intent.
+	Name      string `json:"name"`
+	Channel   int    `json:"channel"`
+	NumSta    int    `json:"num_sta"`
+	CuTotal   int    `json:"cu_total"`   // Total channel utilization % (0-100)
+	CuSelfRx  int    `json:"cu_self_rx"` // AP receive airtime % (0-100)
+	CuSelfTx  int    `json:"cu_self_tx"` // AP transmit airtime % (0-100)
 }
 
 type PortMacEntry struct {

@@ -893,6 +893,11 @@ func TestTriBandParentIdentityAndWidth(t *testing.T) {
 	if len(stats) != 3 || stats[1].Name != radios[1].Name || stats[2].Name != radios[2].Name {
 		t.Fatalf("stats identity lost: %+v", stats)
 	}
+	for i, want := range []int{20, 40, 80} {
+		if stats[i].Bandwidth != want || stats[i].Channel != radios[i].Channel {
+			t.Fatalf("radio %s live channel/width mismatch: %+v (want %d MHz)", radios[i].Name, stats[i], want)
+		}
+	}
 }
 
 func TestFDBAgeIsLastSeenAndMultipleClientsAreUnambiguous(t *testing.T) {
