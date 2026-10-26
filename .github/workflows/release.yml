@@ -20,8 +20,8 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Set up Go
-        # Pin actions/setup-go v6.0.0 (Node 24) to its verified upstream commit.
-        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        # Pin actions/setup-go v6.5.0 (Node 24) to its verified upstream commit.
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: '1.22'
           check-latest: true

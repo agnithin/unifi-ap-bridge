@@ -13,7 +13,7 @@ short SHA.
 Current upstream references:
 
 - [`actions/checkout` v6.0.3](https://github.com/actions/checkout/releases/tag/v6.0.3), commit [`df4cb1c069e1874edd31b4311f1884172cec0e10`](https://github.com/actions/checkout/commit/df4cb1c069e1874edd31b4311f1884172cec0e10); Node 24 runtime, runner v2.327.1 or newer.
-- [`actions/setup-go` v6.0.0](https://github.com/actions/setup-go/releases/tag/v6.0.0), commit [`44694675825211faa026b3c33043df3e48a5fa00`](https://github.com/actions/setup-go/commit/44694675825211faa026b3c33043df3e48a5fa00); Node 24 runtime, runner v2.327.1 or newer.
+- [`actions/setup-go` v6.5.0](https://github.com/actions/setup-go/releases/tag/v6.5.0), commit [`924ae3a1cded613372ab5595356fb5720e22ba16`](https://github.com/actions/setup-go/commit/924ae3a1cded613372ab5595356fb5720e22ba16); Node 24 runtime, runner v2.327.1 or newer.
 - [`softprops/action-gh-release` v3.0.0](https://github.com/softprops/action-gh-release/releases/tag/v3.0.0), commit [`b4309332981a82ec1c5618f44dd2e27cc8bfbfda`](https://github.com/softprops/action-gh-release/commit/b4309332981a82ec1c5618f44dd2e27cc8bfbfda)
 
 `setup-go` caching is disabled because this repository has no external Go
