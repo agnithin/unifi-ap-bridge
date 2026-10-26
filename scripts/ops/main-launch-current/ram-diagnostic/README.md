@@ -1,6 +1,6 @@
 # Main `update.sh` RAM-only diagnostic packet
 
-**Review packet only. Production remains held. Nothing in this directory has been executed on an AP.** The packet does not invoke a launch/recovery wrapper or candidate asset. Its only executable remote payload is `diagnose.remote.sh`; copied updater bytes and every extracted candidate member remain data.
+**The reviewed RAM-only diagnostic was executed once on Main under the approval recorded in `docs/AUDIT_STATE.md`; production remains held.** The packet does not invoke a launch/recovery wrapper or candidate asset. Its only executable remote payload is `diagnose.remote.sh`; copied updater bytes and every extracted candidate member remain data.
 
 The historical `! cmp -s` check established only a nonzero comparison result. Later reads established that two stage paths are absent now. Neither observation establishes whether the file was different, absent, or unreadable at the earlier comparison, whether extraction initially created it, or who removed it. This experiment can locate a disappearance within a new 60-second observation window, but cannot identify the actor.
 
@@ -26,7 +26,7 @@ rtk proxy ssh -o BatchMode=yes -o ConnectTimeout=8 nithin@10.100.1.10 "$REMOTE_C
   < /tmp/unifi-main-ramdiag-local-UNIQUE/payload.tar.gz
 ```
 
-The command above is documented, **not run**. The builder generates a new request ID; no old stage is reused. Use a fresh output name and candidate artifact path after approval. The SSH session streams one outer archive to Main; it does not use the launch/recovery handoff or run either wrapper. If the session reaches 180 seconds, stop waiting and do not reconnect or retry. Treat whether the remote foreground script finished as unknown; preserve the stage and obtain a read-only review before any further action.
+The command above documents the receiver invocation shape; the executed instance used a freshly generated request ID, local payload and remote stage recorded in `docs/AUDIT_STATE.md`. No old stage was reused. A future approved run must use a fresh output name and candidate artifact path. The SSH session streams one outer archive to Main; it does not use the launch/recovery handoff or run either wrapper. If a future session reaches 180 seconds, stop waiting and do not reconnect or retry. Treat whether the remote foreground script finished as unknown; preserve the stage and obtain a read-only review before any further action.
 
 ## Remote phases, writes and bounds
 
