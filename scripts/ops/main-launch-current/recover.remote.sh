@@ -6,7 +6,7 @@ INSTALL='/jffs/addons/unifi-bridge'
 CONFIG="$INSTALL/config/config.json"
 STATE="$INSTALL/state.json"
 KEY="$INSTALL/.ssh/cluster_key"
-STAGE='/tmp/unifi-main-launch-1f22343206c80bda01d576dfdb813e4a911e4568-20261026054615'
+STAGE='/tmp/unifi-main-launch-1f22343206c80bda01d576dfdb813e4a911e4568-20261026064831'
 STATUS='/tmp/var/wwwext/unifi-bridge/status.js'
 UPDATE_LOCK='/tmp/unifi-bridge-update.lock'
 MUTATION_LOCK='/tmp/unifi-bridge-mutation.lock'
@@ -15,7 +15,7 @@ ASSETS='unifi-bridge.tar.gz unifi-bridge.tar.gz.sha256 install.sh start.sh apply
 
 fail() { printf 'recovery=STOP reason=%s stage=%s\n' "$1" "$STAGE"; exit 90; }
 mode() { ls -ln "$1" | awk '{print $3 ":" $4 ":" substr($1,1,10)}'; }
-perm() { ls -ln "$1" | awk '{print substr($1,1,10)}'; }
+perm() { ls -lnd "$1" | awk '{print substr($1,1,10)}'; }
 compare() {
   if cmp -s "$1" "$2"; then
     printf same

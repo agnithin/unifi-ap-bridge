@@ -16,7 +16,7 @@ actual=$(rtk proxy openssl dgst -sha256 "$LOCAL_SCRIPT" | rtk proxy awk '{print 
 rtk sh -n "$LOCAL_SCRIPT"
 REMOTE_COMMAND=$(rtk bypass python3 "$BUILDER" "$TEMPLATE" "$LOCAL_SCRIPT")
 REMOTE_SHA=$(printf '%s' "$REMOTE_COMMAND" | rtk proxy openssl dgst -sha256 | rtk proxy awk '{print $NF}')
-HANDOFF_DIR='/tmp/unifi-main-launch-handoff-1f22343206c80bda01d576dfdb813e4a911e4568-20261026054615'
+HANDOFF_DIR='/tmp/unifi-main-launch-handoff-1f22343206c80bda01d576dfdb813e4a911e4568-20261026064831'
 REMOTE_RECEIVER=$(rtk bypass python3 "$BUILDER" --handoff "$HANDOFF_DIR" "$REMOTE_SHA")
 [ "${#REMOTE_RECEIVER}" -lt 1000 ] || { echo 'Remote handoff receiver exceeds the reviewed command-size bound.' >&2; exit 66; }
 # Keep the SSH exec request small. The receiver reads the complete stream into a

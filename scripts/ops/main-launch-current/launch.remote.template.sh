@@ -4,17 +4,17 @@ set -eu
 HOST_EXPECTED='ZenWiFi_XT8-7B10'
 COMMIT='1f22343206c80bda01d576dfdb813e4a911e4568'
 SCRIPT_SHA='2f2dc19723cf442a2ff5ea7ebd9e8b10b56b6a0c24ab2441eca602c14407547a'
-REQUEST_ID='20261026054615'
+REQUEST_ID='20261026064831'
 INSTALL='/jffs/addons/unifi-bridge'
 CONFIG="$INSTALL/config/config.json"
 STATE_EXPECTED="$INSTALL/state.json"
 KEY="$INSTALL/.ssh/cluster_key"
 STATUS='/tmp/var/wwwext/unifi-bridge/status.js'
-STAGE="/tmp/unifi-main-launch-${COMMIT}-20261026054615"
+STAGE="/tmp/unifi-main-launch-${COMMIT}-20261026064831"
 
 fail() { printf 'preflight=FAIL reason=%s stage=%s\n' "$1" "$STAGE"; exit 70; }
 mode() { ls -ln "$1" | awk '{print $3 ":" $4 ":" substr($1,1,10)}'; }
-perm() { ls -ln "$1" | awk '{print substr($1,1,10)}'; }
+perm() { ls -lnd "$1" | awk '{print substr($1,1,10)}'; }
 state_identity() {
   input=$1; output=$2
   : > "$output" || return 1

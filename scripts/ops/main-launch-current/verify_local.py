@@ -14,7 +14,8 @@ commit = '1f22343206c80bda01d576dfdb813e4a911e4568'
 archive_sha = '16300c4bc0f08f6d5bfadae8427a7928f01de1470eaf7d000c317be6d27657f1'
 sidecar_sha = '113a1ffc283a5a27ba1594736d827088aacab9e7936478234e0c775677eaf48f'
 updater_sha = '2f2dc19723cf442a2ff5ea7ebd9e8b10b56b6a0c24ab2441eca602c14407547a'
-recovery_sha = '33c26d45a8cc05df015625e3aab42c29857cf09459a3dd4d3e7548ca31f70f9c'
+recovery_sha = '2fa83e1743726c58a1b49cb321e8c58862aac16566e953493d95407796ad00ba'
+request_id = '20261026064831'
 archive = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else pathlib.Path('/private/tmp/unifi-main-1f223-current-armv7.tar.gz')
 sidecar = pathlib.Path(sys.argv[2]) if len(sys.argv) > 2 else pathlib.Path(str(archive) + '.sha256')
 
@@ -51,6 +52,12 @@ for wrapper, expected_sha in [('launch_main.sh', updater_sha), ('recover_main.sh
     assert f"EXPECTED='{expected_sha}'" in (root / wrapper).read_text()
 launch_template = (root / 'launch.remote.template.sh').read_text()
 assert f"SCRIPT_SHA='{updater_sha}'" in launch_template and archive_sha in launch_template
+assert f"REQUEST_ID='{request_id}'" in launch_template
+assert f"STAGE=\"/tmp/unifi-main-launch-${{COMMIT}}-{request_id}\"" in launch_template
+assert request_id in (root/'launch_main.sh').read_text()
+assert request_id in (root/'recover_main.sh').read_text()
+assert request_id in (root/'recover.remote.template.sh').read_text()
+assert request_id in (root/'recover.remote.sh').read_text()
 launch_command = subprocess.check_output(['python3', str(root/'build_command.py'), str(root/'launch.remote.template.sh'), str(source)], text=True)
 recovery_command = subprocess.check_output(['python3', str(root/'build_command.py'), str(root/'recover.remote.template.sh'), str(root/'recover.remote.sh')], text=True)
 launch_payload = launch_command.rstrip('\n')  # POSIX command substitution removes trailing newlines.
@@ -88,10 +95,12 @@ with tempfile.TemporaryDirectory(prefix='main-current-packet-') as td:
 compare_fn = re.search(r'(?ms)^compare\(\) \{\n.*?^\}', launch_template).group(0)
 identity_fn = re.search(r'(?ms)^state_identity\(\) \{\n.*?^\}', launch_template).group(0)
 locks_fn = re.search(r'(?ms)^locks_absent\(\) \{\n.*?^\}', launch_template).group(0)
+perm_fn = re.search(r'(?m)^perm\(\)[^\n]*$', launch_template).group(0)
 uint_fn = re.search(r'(?ms)^uint\(\) \{\n.*?^\}', launch_template).group(0)
 status_fresh_fn = re.search(r'(?ms)^status_is_fresh\(\) \{\n.*?^\}', launch_template).group(0)
 restart_fresh_fn = re.search(r'(?ms)^fresh_inform_after_restart\(\) \{\n.*?^\}', launch_template).group(0)
 recovery_template = (root/'recover.remote.sh').read_text()
+assert perm_fn == re.search(r'(?m)^perm\(\)[^\n]*$', recovery_template).group(0)
 assert uint_fn == re.search(r'(?ms)^uint\(\) \{\n.*?^\}', recovery_template).group(0)
 assert status_fresh_fn == re.search(r'(?ms)^status_is_fresh\(\) \{\n.*?^\}', recovery_template).group(0)
 assert restart_fresh_fn == re.search(r'(?ms)^fresh_inform_after_restart\(\) \{\n.*?^\}', recovery_template).group(0)
@@ -99,6 +108,10 @@ with tempfile.TemporaryDirectory(prefix='main-current-preservation-') as td:
     td = pathlib.Path(td)
     same, changed, absent = td/'same', td/'changed', td/'absent'
     same.write_text('same\n'); changed.write_text('different\n')
+    mode_dir = td/'mode-dir'; mode_dir.mkdir(); mode_file = mode_dir/'child'; mode_file.write_text('private\n')
+    mode_dir.chmod(0o700); mode_file.chmod(0o600)
+    probe = f'''{perm_fn}\n[ "$(perm {mode_file})" = '-rw-------' ] || exit 30\n[ "$(perm {mode_dir})" = 'drwx------' ] || exit 30\n'''
+    subprocess.run(['sh', '-eu', '-c', probe], check=True)
     probe = f'''{compare_fn}\n[ "$(compare {same} {same})" = same ] || exit 31\n[ "$(compare {same} {changed})" = changed ] || exit 32\n[ "$(compare {same} {absent})" = error ] || exit 33\n'''
     subprocess.run(['sh', '-eu', '-c', probe], check=True)
     state_a, state_b, state_bad = td/'state-a', td/'state-b', td/'state-bad'
@@ -130,4 +143,4 @@ with tempfile.TemporaryDirectory(prefix='main-current-preservation-') as td:
 print(f'candidate={commit}; armv7_archive_sha256={archive_sha}; sidecar_sha256={sidecar_sha}; updater_sha256={updater_sha}')
 print('release manifest, all member hashes, architecture, exact member set and sidecar: PASS')
 print(f'launch_stream_bytes={len(launch_command)}; recovery_stream_bytes={len(recovery_command)}; receiver_command_bytes={len(launch_handoff)}/{len(recovery_handoff)}; shell_syntax=PASS')
-print('verified same-session stdin handoff, truncated-stream rejection, preservation comparators, state identity, lock cleanup, UTC/local-boundary and stale-heartbeat regressions: PASS')
+print('verified same-session stdin handoff, truncated-stream rejection, file/directory mode checks, preservation comparators, state identity, lock cleanup, UTC/local-boundary and stale-heartbeat regressions: PASS')
