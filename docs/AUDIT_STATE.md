@@ -566,7 +566,7 @@ The worker's `state_unchanged=no` remains an unverified historical comparison. T
 
 ### Current disposition
 
-This diagnosis packet is complete. The configured-state-path regression passed an independent 34-test rerun, literal-secret guard and whitespace checks; it is being checkpointed with this documentation. Hosted validation is recorded below when complete. No deployment retry occurred; Main remains on `be106ec`, Node remains on `6224430`, and production rollout remains held. Historical deletion attribution and byte-for-byte state continuity remain unavailable. Asus browser acceptance and Main migration acceptance remain open.
+This diagnosis packet is complete. The configured-state-path regression passed an independent 34-test rerun, literal-secret guard and whitespace checks; it was committed and pushed as `bdd5773aab217a67baf37888e0b5d247eddb4c5f`. [Hosted CI 40251571736](https://github.com/agnithin/unifi-ap-bridge/actions/runs/40251571736) passed all workflow checks, ARMv7/ARM64 builds and dev publication. This test/docs checkpoint changes no production updater code and does not lift the rollout hold. No deployment retry occurred; Main remains on `be106ec`, Node remains on `6224430`, and production rollout remains held. Historical deletion attribution and byte-for-byte state continuity remain unavailable. Asus browser acceptance and Main migration acceptance remain open.
 
 ### Prepared next decision: one Main-only migration
 
