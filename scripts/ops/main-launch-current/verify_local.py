@@ -11,6 +11,7 @@ import tempfile
 
 root = pathlib.Path(__file__).resolve().parent
 repo = root.parents[2]
+subprocess.run(['python3', str(root/'verify_candidate_diagnostics.py')], check=True)
 commit = '1f22343206c80bda01d576dfdb813e4a911e4568'
 archive_sha = '16300c4bc0f08f6d5bfadae8427a7928f01de1470eaf7d000c317be6d27657f1'
 sidecar_sha = '113a1ffc283a5a27ba1594736d827088aacab9e7936478234e0c775677eaf48f'

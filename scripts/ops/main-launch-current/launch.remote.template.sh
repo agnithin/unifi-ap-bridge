@@ -15,6 +15,63 @@ STAGE="/tmp/unifi-main-launch-${COMMIT}-20261026070142"
 fail() { printf 'preflight=FAIL reason=%s stage=%s\n' "$1" "$STAGE"; exit 70; }
 mode() { ls -ln "$1" | awk '{print $3 ":" $4 ":" substr($1,1,10)}'; }
 perm() { ls -lnd "$1" | awk '{print substr($1,1,10)}'; }
+file_state() {
+  [ -e "$1" ] || { printf missing; return 0; }
+  [ -f "$1" ] || { printf not_regular; return 0; }
+  file_readable "$1" || { printf unreadable; return 0; }
+  printf present
+}
+file_readable() { [ -r "$1" ]; }
+compare_candidate_file() {
+  source_state=$(file_state "$1")
+  case "$source_state" in
+    missing) printf source_missing; return 0;;
+    unreadable) printf source_unreadable; return 0;;
+    not_regular) printf source_not_regular; return 0;;
+  esac
+  destination_state=$(file_state "$2")
+  case "$destination_state" in
+    missing) printf destination_missing; return 0;;
+    unreadable) printf destination_unreadable; return 0;;
+    not_regular) printf destination_not_regular; return 0;;
+  esac
+  if cmp -s "$1" "$2"; then
+    printf same
+  else
+    compare_rc=$?
+    case "$compare_rc" in 1) printf different;; *) printf comparison_error;; esac
+  fi
+}
+compare_candidate_mode() {
+  source_mode=$(perm "$1" 2>/dev/null) || source_mode=
+  [ -n "$source_mode" ] || { printf source_mode_error; return 0; }
+  destination_mode=$(perm "$2" 2>/dev/null) || destination_mode=
+  [ -n "$destination_mode" ] || { printf destination_mode_error; return 0; }
+  [ "$source_mode" = "$destination_mode" ] && printf same || printf different
+}
+candidate_milestone() {
+  milestone_key=$1; milestone_value=$2
+  sed "s/^${milestone_key}=.*/${milestone_key}=${milestone_value}/" "$STAGE/candidate-milestones.status" > "$STAGE/candidate-milestones.tmp" &&
+    mv -f "$STAGE/candidate-milestones.tmp" "$STAGE/candidate-milestones.status"
+}
+record_candidate_file() {
+  candidate_rel=$1; candidate_source=$2; candidate_destination=$3; candidate_check_mode=$4
+  candidate_content=$(compare_candidate_file "$candidate_source" "$candidate_destination")
+  if [ "$candidate_check_mode" = compare ]; then
+    candidate_mode=$(compare_candidate_mode "$candidate_source" "$candidate_destination")
+  else
+    candidate_mode=$(perm "$candidate_destination" 2>/dev/null) || candidate_mode=
+    if [ -z "$candidate_mode" ]; then
+      candidate_mode=destination_mode_error
+    elif [ "$candidate_mode" = "$candidate_check_mode" ]; then
+      candidate_mode=same
+    else
+      candidate_mode=different
+    fi
+  fi
+  printf '%s content=%s mode=%s\n' "$candidate_rel" "$candidate_content" "$candidate_mode" >> "$STAGE/candidate-files.status"
+  [ "$candidate_content" = same ] && [ "$candidate_mode" = same ]
+}
 state_identity() {
   input=$1; output=$2
   : > "$output" || return 1
@@ -153,12 +210,30 @@ else
 fi
 
 candidate_bundle=fail
-if [ "$updater_rc" -eq 0 ] && [ -f "$INSTALL/unifi-bridge.tar.gz" ] &&
-   [ "$(openssl dgst -sha256 "$INSTALL/unifi-bridge.tar.gz" | awk '{print $NF}')" = '16300c4bc0f08f6d5bfadae8427a7928f01de1470eaf7d000c317be6d27657f1' ]; then
-  if mkdir -m 700 "$STAGE/candidate-check" &&
-     tar -tzf "$INSTALL/unifi-bridge.tar.gz" > "$STAGE/candidate.members" &&
-     tar -xzpf "$INSTALL/unifi-bridge.tar.gz" -C "$STAGE/candidate-check"; then
-    expected_members='apply_config.sh
+printf 'updater_exit=%s\narchive=not_checked\narchive_checksum=not_checked\narchive_member_list=not_checked\narchive_extraction=not_checked\narchive_members=not_checked\nbundle_manifest=not_checked\nfile_comparisons=not_checked\n' "$updater_rc" > "$STAGE/candidate-milestones.status"
+printf 'file content=code mode=code\n' > "$STAGE/candidate-files.status"
+chmod 600 "$STAGE/candidate-milestones.status" "$STAGE/candidate-files.status"
+if [ "$updater_rc" -eq 0 ]; then
+  if [ ! -f "$INSTALL/unifi-bridge.tar.gz" ]; then
+    candidate_milestone archive missing
+  else
+    candidate_milestone archive present
+    archive_sha=$(openssl dgst -sha256 "$INSTALL/unifi-bridge.tar.gz" 2>/dev/null | awk '{print $NF}')
+    if [ "$archive_sha" != '16300c4bc0f08f6d5bfadae8427a7928f01de1470eaf7d000c317be6d27657f1' ]; then
+      candidate_milestone archive_checksum mismatch_or_error
+    else
+      candidate_milestone archive_checksum pass
+      if ! mkdir -m 700 "$STAGE/candidate-check"; then
+        candidate_milestone archive_extraction destination_error
+      elif ! tar -tzf "$INSTALL/unifi-bridge.tar.gz" > "$STAGE/candidate.members"; then
+        candidate_milestone archive_member_list error
+      else
+        candidate_milestone archive_member_list pass
+        if ! tar -xzpf "$INSTALL/unifi-bridge.tar.gz" -C "$STAGE/candidate-check"; then
+          candidate_milestone archive_extraction error
+        else
+          candidate_milestone archive_extraction pass
+          expected_members='apply_config.sh
 bundle.json
 install.sh
 start.sh
@@ -169,22 +244,40 @@ unifi-bridge.sh
 update.sh
 version.txt
 watchdog.sh'
-    if printf '%s\n' "$expected_members" | LC_ALL=C sort > "$STAGE/candidate.expected-members" &&
-       LC_ALL=C sort "$STAGE/candidate.members" > "$STAGE/candidate.actual-members" &&
-       cmp -s "$STAGE/candidate.expected-members" "$STAGE/candidate.actual-members" &&
-       grep -Fq '"commit": "1f22343206c80bda01d576dfdb813e4a911e4568"' "$STAGE/candidate-check/bundle.json" &&
-       grep -Fq '"architecture": "armv7"' "$STAGE/candidate-check/bundle.json" &&
-       [ "$(awk 'NF==2 && $2=="unifi-bridge.tar.gz" {print $1}' "$INSTALL/unifi-bridge.tar.gz.sha256")" = '16300c4bc0f08f6d5bfadae8427a7928f01de1470eaf7d000c317be6d27657f1' ]; then
-      candidate_bundle=pass
-      for rel in install.sh start.sh apply_config.sh sync_nodes.sh unifi-bridge.sh update.sh watchdog.sh; do
-        if ! cmp -s "$STAGE/candidate-check/$rel" "$INSTALL/$rel" || [ "$(perm "$STAGE/candidate-check/$rel")" != "$(perm "$INSTALL/$rel")" ]; then candidate_bundle=fail; fi
-      done
-      if ! cmp -s "$STAGE/candidate-check/unifi-bridge.asp" "$INSTALL/webui/unifi-bridge.asp" ||
-         ! cmp -s "$STAGE/candidate-check/version.txt" "$INSTALL/version.txt" ||
-         ! cmp -s "$STAGE/candidate-check/unifi-bridge-armv7" /tmp/unifi-bridge/unifi-bridge ||
-         [ "$(perm "$INSTALL/version.txt")" != '-rw-r--r--' ] ||
-         [ "$(perm "$INSTALL/webui/unifi-bridge.asp")" != '-rw-r--r--' ] ||
-         [ "$(perm /tmp/unifi-bridge/unifi-bridge)" != '-rwxr-xr-x' ]; then candidate_bundle=fail; fi
+          if printf '%s\n' "$expected_members" | LC_ALL=C sort > "$STAGE/candidate.expected-members" &&
+             LC_ALL=C sort "$STAGE/candidate.members" > "$STAGE/candidate.actual-members"; then
+            if cmp -s "$STAGE/candidate.expected-members" "$STAGE/candidate.actual-members"; then
+              candidate_milestone archive_members pass
+            else
+              member_rc=$?
+              if [ "$member_rc" -eq 1 ]; then candidate_milestone archive_members different
+              else candidate_milestone archive_members comparison_error; fi
+            fi
+            if [ "$(sed -n 's/^archive_members=//p' "$STAGE/candidate-milestones.status")" != pass ]; then
+              candidate_milestone bundle_manifest not_checked_members
+            else
+              if grep -Fq '"commit": "1f22343206c80bda01d576dfdb813e4a911e4568"' "$STAGE/candidate-check/bundle.json" &&
+                 grep -Fq '"architecture": "armv7"' "$STAGE/candidate-check/bundle.json" &&
+                 [ "$(awk 'NF==2 && $2=="unifi-bridge.tar.gz" {print $1}' "$INSTALL/unifi-bridge.tar.gz.sha256")" = '16300c4bc0f08f6d5bfadae8427a7928f01de1470eaf7d000c317be6d27657f1' ]; then
+                candidate_milestone bundle_manifest pass
+                candidate_bundle=pass
+                for rel in install.sh start.sh apply_config.sh sync_nodes.sh unifi-bridge.sh update.sh watchdog.sh; do
+                  record_candidate_file "$rel" "$STAGE/candidate-check/$rel" "$INSTALL/$rel" compare || candidate_bundle=fail
+                done
+                record_candidate_file webui/unifi-bridge.asp "$STAGE/candidate-check/unifi-bridge.asp" "$INSTALL/webui/unifi-bridge.asp" '-rw-r--r--' || candidate_bundle=fail
+                record_candidate_file version.txt "$STAGE/candidate-check/version.txt" "$INSTALL/version.txt" '-rw-r--r--' || candidate_bundle=fail
+                record_candidate_file unifi-bridge-armv7 "$STAGE/candidate-check/unifi-bridge-armv7" /tmp/unifi-bridge/unifi-bridge '-rwxr-xr-x' || candidate_bundle=fail
+                if [ "$candidate_bundle" = pass ]; then candidate_milestone file_comparisons pass
+                else candidate_milestone file_comparisons fail; fi
+              else
+                candidate_milestone bundle_manifest invalid_or_missing
+              fi
+            fi
+          else
+            candidate_milestone archive_members listing_error
+          fi
+        fi
+      fi
     fi
   fi
 fi
@@ -248,10 +341,12 @@ watchdog_present && watchdog_result=present
 printf 'updater_exit=%s\ncandidate_bundle=%s\ncandidate_runtime=%s\nwatchdog=%s\nconfig_bytes=%s\nconfig_owner_group_mode=%s\nstate_identity=%s\nstate_bytes=%s\nstate_owner_group_mode=%s\nssh_key_bytes=%s\nssh_key_owner_group_mode=%s\ntransaction=%s\nlocks=%s\n' \
   "$updater_rc" "$candidate_bundle" "$candidate_runtime" "$watchdog_result" "$config_result" "$config_mode_result" "$state_result" "$state_bytes_result" "$state_mode_result" "$key_result" "$key_mode_result" "$journal_result" "$locks_result" > "$STAGE/worker.status"
 chmod 600 "$STAGE/worker.status"
+chmod 600 "$STAGE/candidate-milestones.status" "$STAGE/candidate-files.status"
 grep -E '"(version|commit|pid|adopted|mode|last_successful_inform|last_status)"' "$STATUS" > "$STAGE/postflight.safe" 2>/dev/null || true
 printf 'stage=%s\n' "$STAGE"
 cat "$STAGE/worker.status"
 printf 'logs_and_snapshots=retained\n'
+printf 'candidate_diagnostics=retained\n'
 [ "$updater_rc" -eq 0 ] || exit "$updater_rc"
 [ "$candidate_bundle" = pass ] || exit 87
 [ "$candidate_runtime" = pass ] || exit 85
