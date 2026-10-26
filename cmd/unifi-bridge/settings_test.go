@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -9,6 +11,23 @@ import (
 	"sync"
 	"testing"
 )
+
+type settingsReadError struct{ err error }
+
+func (r settingsReadError) Read([]byte) (int, error) { return 0, r.err }
+
+func TestSettingsReadersReportInputErrorsSeparatelyFromSizeLimit(t *testing.T) {
+	readErr := errors.New("synthetic reader failure")
+	if err := mergeSettings(filepath.Join(t.TempDir(), "config.json"), settingsReadError{readErr}, "json", ""); !errors.Is(err, readErr) {
+		t.Fatalf("mergeSettings error = %v, want wrapped reader error", err)
+	}
+	if err := mergeSharedSettings(filepath.Join(t.TempDir(), "config.json"), settingsReadError{readErr}, ""); !errors.Is(err, readErr) {
+		t.Fatalf("mergeSharedSettings error = %v, want wrapped reader error", err)
+	}
+	if err := mergeSettings(filepath.Join(t.TempDir(), "config.json"), io.LimitReader(strings.NewReader(strings.Repeat("x", 65537)), 65537), "json", ""); err == nil || err.Error() != "settings input exceeds limit" {
+		t.Fatalf("oversized input error = %v, want size-limit error", err)
+	}
+}
 
 func TestSettingsPreserveConfiguration(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")

@@ -82,7 +82,10 @@ func mergeSettings(path string, input io.Reader, format, gateway string, expecte
 		expectedRequestID = expectedRequestIDs[0]
 	}
 	raw, err := io.ReadAll(io.LimitReader(input, 65537))
-	if err != nil || len(raw) > 65536 {
+	if err != nil {
+		return fmt.Errorf("read settings input: %w", err)
+	}
+	if len(raw) > 65536 {
 		return fmt.Errorf("settings input exceeds limit")
 	}
 	var patch map[string]json.RawMessage
@@ -257,7 +260,10 @@ func mergeSettings(path string, input io.Reader, format, gateway string, expecte
 // under the target node's ownership.
 func mergeSharedSettings(path string, input io.Reader, gateway string) error {
 	raw, err := io.ReadAll(io.LimitReader(input, 65537))
-	if err != nil || len(raw) > 65536 {
+	if err != nil {
+		return fmt.Errorf("read shared settings: %w", err)
+	}
+	if len(raw) > 65536 {
 		return fmt.Errorf("settings input exceeds limit")
 	}
 	var source map[string]json.RawMessage
