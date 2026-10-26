@@ -14,8 +14,8 @@ commit = '1f22343206c80bda01d576dfdb813e4a911e4568'
 archive_sha = '16300c4bc0f08f6d5bfadae8427a7928f01de1470eaf7d000c317be6d27657f1'
 sidecar_sha = '113a1ffc283a5a27ba1594736d827088aacab9e7936478234e0c775677eaf48f'
 updater_sha = '2f2dc19723cf442a2ff5ea7ebd9e8b10b56b6a0c24ab2441eca602c14407547a'
-recovery_sha = '2fa83e1743726c58a1b49cb321e8c58862aac16566e953493d95407796ad00ba'
-request_id = '20261026064831'
+recovery_sha = 'd3ad344c4f186cb2f30d9add0179d76b4a1f61f75a40ba051608bf5e5dc64f63'
+request_id = '20261026070142'
 archive = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else pathlib.Path('/private/tmp/unifi-main-1f223-current-armv7.tar.gz')
 sidecar = pathlib.Path(sys.argv[2]) if len(sys.argv) > 2 else pathlib.Path(str(archive) + '.sha256')
 
@@ -101,6 +101,7 @@ status_fresh_fn = re.search(r'(?ms)^status_is_fresh\(\) \{\n.*?^\}', launch_temp
 restart_fresh_fn = re.search(r'(?ms)^fresh_inform_after_restart\(\) \{\n.*?^\}', launch_template).group(0)
 recovery_template = (root/'recover.remote.sh').read_text()
 assert perm_fn == re.search(r'(?m)^perm\(\)[^\n]*$', recovery_template).group(0)
+assert identity_fn == re.search(r'(?ms)^state_identity\(\) \{\n.*?^\}', recovery_template).group(0)
 assert uint_fn == re.search(r'(?ms)^uint\(\) \{\n.*?^\}', recovery_template).group(0)
 assert status_fresh_fn == re.search(r'(?ms)^status_is_fresh\(\) \{\n.*?^\}', recovery_template).group(0)
 assert restart_fresh_fn == re.search(r'(?ms)^fresh_inform_after_restart\(\) \{\n.*?^\}', recovery_template).group(0)
@@ -114,12 +115,13 @@ with tempfile.TemporaryDirectory(prefix='main-current-preservation-') as td:
     subprocess.run(['sh', '-eu', '-c', probe], check=True)
     probe = f'''{compare_fn}\n[ "$(compare {same} {same})" = same ] || exit 31\n[ "$(compare {same} {changed})" = changed ] || exit 32\n[ "$(compare {same} {absent})" = error ] || exit 33\n'''
     subprocess.run(['sh', '-eu', '-c', probe], check=True)
-    state_a, state_b, state_bad = td/'state-a', td/'state-b', td/'state-bad'
-    state_a.write_text('{"schema":1,"mac":"00:11:22:33:44:55","adopted":true,"mode":"GCM","authkey":"test-only","paused":false,"metadata":1}\n')
+    state_a, state_b, state_true, state_bad = td/'state-a', td/'state-b', td/'state-true', td/'state-bad'
+    state_a.write_text('{"schema":1,"mac":"00:11:22:33:44:55","adopted":true,"mode":"GCM","authkey":"test-only","metadata":1}\n')
     state_b.write_text('{"schema":1,"mac":"00:11:22:33:44:55","adopted":true,"mode":"GCM","authkey":"test-only","paused":false,"metadata":2}\n')
-    state_bad.write_text('{"schema":1,"mac":"00:11:22:33:44:55","adopted":true,"mode":"GCM","paused":false}\n')
-    n1, n2, nb = td/'n1', td/'n2', td/'nb'
-    probe = f'''{identity_fn}\nstate_identity {state_a} {n1}\nstate_identity {state_b} {n2}\ncmp -s {n1} {n2} || exit 34\nif state_identity {state_bad} {nb}; then exit 35; fi\n'''
+    state_true.write_text('{"schema":1,"mac":"00:11:22:33:44:55","adopted":true,"mode":"GCM","authkey":"test-only","paused":true}\n')
+    state_bad.write_text('{"schema":1,"mac":"00:11:22:33:44:55","adopted":true,"mode":"GCM","authkey":"test-only","paused":}\n')
+    n1, n2, n3, nb = td/'n1', td/'n2', td/'n3', td/'nb'
+    probe = f'''{identity_fn}\nstate_identity {state_a} {n1}\nstate_identity {state_b} {n2}\ncmp -s {n1} {n2} || exit 34\nstate_identity {state_true} {n3}\nif cmp -s {n1} {n3}; then exit 35; fi\nif state_identity {state_bad} {nb}; then exit 36; fi\n'''
     subprocess.run(['sh', '-eu', '-c', probe], check=True)
     lock_a, lock_b = td/'lock-a', td/'lock-b'
     (lock_a).mkdir()

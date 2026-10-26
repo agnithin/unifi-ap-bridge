@@ -4,13 +4,13 @@ set -eu
 HOST_EXPECTED='ZenWiFi_XT8-7B10'
 COMMIT='1f22343206c80bda01d576dfdb813e4a911e4568'
 SCRIPT_SHA='2f2dc19723cf442a2ff5ea7ebd9e8b10b56b6a0c24ab2441eca602c14407547a'
-REQUEST_ID='20261026064831'
+REQUEST_ID='20261026070142'
 INSTALL='/jffs/addons/unifi-bridge'
 CONFIG="$INSTALL/config/config.json"
 STATE_EXPECTED="$INSTALL/state.json"
 KEY="$INSTALL/.ssh/cluster_key"
 STATUS='/tmp/var/wwwext/unifi-bridge/status.js'
-STAGE="/tmp/unifi-main-launch-${COMMIT}-20261026064831"
+STAGE="/tmp/unifi-main-launch-${COMMIT}-20261026070142"
 
 fail() { printf 'preflight=FAIL reason=%s stage=%s\n' "$1" "$STAGE"; exit 70; }
 mode() { ls -ln "$1" | awk '{print $3 ":" $4 ":" substr($1,1,10)}'; }
@@ -20,7 +20,13 @@ state_identity() {
   : > "$output" || return 1
   for field in schema mac adopted mode authkey paused; do
     value=$(sed -n "s/.*\"$field\"[[:space:]]*:[[:space:]]*\\([^,}]*\\).*/\\1/p" "$input")
-    [ -n "$value" ] || return 1
+    if [ -z "$value" ]; then
+      if [ "$field" = paused ] && ! grep -Fq '"paused"' "$input"; then
+        value=false
+      else
+        return 1
+      fi
+    fi
     printf '%s=%s\n' "$field" "$value" >> "$output" || return 1
   done
 }

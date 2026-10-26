@@ -6,7 +6,7 @@ INSTALL='/jffs/addons/unifi-bridge'
 CONFIG="$INSTALL/config/config.json"
 STATE="$INSTALL/state.json"
 KEY="$INSTALL/.ssh/cluster_key"
-STAGE='/tmp/unifi-main-launch-1f22343206c80bda01d576dfdb813e4a911e4568-20261026064831'
+STAGE='/tmp/unifi-main-launch-1f22343206c80bda01d576dfdb813e4a911e4568-20261026070142'
 STATUS='/tmp/var/wwwext/unifi-bridge/status.js'
 UPDATE_LOCK='/tmp/unifi-bridge-update.lock'
 MUTATION_LOCK='/tmp/unifi-bridge-mutation.lock'
@@ -30,7 +30,13 @@ state_identity() {
   : > "$output" || return 1
   for field in schema mac adopted mode authkey paused; do
     value=$(sed -n "s/.*\"$field\"[[:space:]]*:[[:space:]]*\\([^,}]*\\).*/\\1/p" "$input")
-    [ -n "$value" ] || return 1
+    if [ -z "$value" ]; then
+      if [ "$field" = paused ] && ! grep -Fq '"paused"' "$input"; then
+        value=false
+      else
+        return 1
+      fi
+    fi
     printf '%s=%s\n' "$field" "$value" >> "$output" || return 1
   done
 }
