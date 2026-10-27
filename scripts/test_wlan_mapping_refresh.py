@@ -31,7 +31,7 @@ class WlanMappingRefreshTests(unittest.TestCase):
         run.side_effect = [
             subprocess.CompletedProcess([], 0, b"missing\n", b""),
             subprocess.CompletedProcess([], 0, b"", b""),
-            subprocess.CompletedProcess([], 0, b"600 " + digest + b"\n", b""),
+            subprocess.CompletedProcess([], 0, b"-rw------- " + digest + b"\n", b""),
         ]
         refresh_wlan_mapping.publish("nithin@main-ap", payload, "/private/key")
         args, kwargs = run.call_args_list[1]
@@ -51,7 +51,7 @@ class WlanMappingRefreshTests(unittest.TestCase):
     def test_publish_skips_flash_write_when_sha256_matches(self, run) -> None:  # noqa: ANN001
         payload = b'{"blueberry":"0123456789abcdef01234567"}\n'
         digest = refresh_wlan_mapping.hashlib.sha256(payload).hexdigest().encode()
-        run.return_value = subprocess.CompletedProcess([], 0, b"600 " + digest + b"\n", b"")
+        run.return_value = subprocess.CompletedProcess([], 0, b"-rw------- " + digest + b"\n", b"")
         refresh_wlan_mapping.publish("nithin@main-ap", payload, "/private/key")
         run.assert_called_once()
 

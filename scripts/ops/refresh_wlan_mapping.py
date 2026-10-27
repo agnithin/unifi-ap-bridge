@@ -31,8 +31,8 @@ REMOTE_COMMAND = (
 )
 REMOTE_CHECKSUM_COMMAND = (
     "if [ -f /jffs/addons/unifi-bridge/config/wlan-mapping.json ]; then "
-    "mode=$(stat -c '%a' /jffs/addons/unifi-bridge/config/wlan-mapping.json) && "
-    "digest=$(sha256sum /jffs/addons/unifi-bridge/config/wlan-mapping.json) && "
+    "mode=$(ls -ld /jffs/addons/unifi-bridge/config/wlan-mapping.json | awk '{print substr($1,1,10)}') && "
+    "digest=$(openssl dgst -sha256 /jffs/addons/unifi-bridge/config/wlan-mapping.json) && "
     "printf '%s %s\\n' \"$mode\" \"${digest%% *}\"; else printf 'missing\\n'; fi"
 )
 HOST_RE = re.compile(r"(?:[A-Za-z0-9_.-]+@)?[A-Za-z0-9][A-Za-z0-9_.:-]{0,252}\Z")
@@ -115,7 +115,7 @@ def publish(host: str, payload: bytes, identity_file: str, ssh: str = "ssh") -> 
     ]
     expected_digest = hashlib.sha256(payload).hexdigest()
     current = remote_state(ssh_args, host)
-    if current == ("600", expected_digest):
+    if current == ("-rw-------", expected_digest):
         return
     try:
         result = subprocess.run(
@@ -130,7 +130,7 @@ def publish(host: str, payload: bytes, identity_file: str, ssh: str = "ssh") -> 
         raise RuntimeError(f"mapping publish timed out for {host}") from exc
     if result.returncode:
         raise RuntimeError(f"mapping publish failed for {host} (ssh exit {result.returncode})")
-    if remote_state(ssh_args, host) != ("600", expected_digest):
+    if remote_state(ssh_args, host) != ("-rw-------", expected_digest):
         raise RuntimeError(f"mapping verification failed for {host}")
 
 
