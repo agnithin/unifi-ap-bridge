@@ -11,35 +11,40 @@ import (
 // station snapshots. ObservedAt is the poll time, not a precise association
 // time. The AP cannot infer the client's destination after it disappears.
 type StationEvent struct {
-	Type             string    `json:"type"` // observed_association, observed_disassociation, observed_radio_change
-	MAC              string    `json:"mac"`
-	ObservedAt       time.Time `json:"observed_at"`
-	PreviousObserved time.Time `json:"previous_observed,omitempty"`
-	PollGapSeconds   int64     `json:"poll_gap_seconds,omitempty"`
-	Radio            string    `json:"radio,omitempty"`
-	PreviousRadio    string    `json:"previous_radio,omitempty"`
-	Band             string    `json:"band,omitempty"`
-	PreviousBand     string    `json:"previous_band,omitempty"`
-	BSSID            string    `json:"bssid,omitempty"`
-	ESSID            string    `json:"essid,omitempty"`
-	Signal           int       `json:"signal,omitempty"`
-	SignalKnown      bool      `json:"signal_known,omitempty"`
+	Type                  string    `json:"type"` // observed_association, observed_disassociation, observed_radio_change, observed_bssid_change
+	MAC                   string    `json:"mac"`
+	ObservedAt            time.Time `json:"observed_at"`
+	PreviousObserved      time.Time `json:"previous_observed,omitempty"`
+	PollGapSeconds        int64     `json:"poll_gap_seconds,omitempty"`
+	Radio                 string    `json:"radio,omitempty"`
+	PreviousRadio         string    `json:"previous_radio,omitempty"`
+	Band                  string    `json:"band,omitempty"`
+	PreviousBand          string    `json:"previous_band,omitempty"`
+	PhysicalRadio         string    `json:"physical_radio,omitempty"`
+	PreviousPhysicalRadio string    `json:"previous_physical_radio,omitempty"`
+	BSSID                 string    `json:"bssid,omitempty"`
+	PreviousBSSID         string    `json:"previous_bssid,omitempty"`
+	ESSID                 string    `json:"essid,omitempty"`
+	Signal                int       `json:"signal,omitempty"`
+	SignalKnown           bool      `json:"signal_known,omitempty"`
 }
 
 // StationTimeline retains a bounded AP-local history. An event is emitted
 // only when both sides of the transition are covered by successful samples.
 type StationTimeline struct {
-	mu          sync.Mutex
-	maxEvents   int
-	maxStations int
-	stations    map[string]stationObservation
-	events      []StationEvent
-	initialized bool
+	mu             sync.Mutex
+	maxEvents      int
+	maxStations    int
+	stations       map[string]stationObservation
+	events         []StationEvent
+	initialized    bool
+	lastObservedAt time.Time
 }
 
 type stationObservation struct {
-	station Station
-	at      time.Time
+	station       Station
+	physicalRadio string
+	at            time.Time
 }
 
 // NewStationTimeline creates a tracker with bounded event and station state.
@@ -58,7 +63,7 @@ func NewStationTimeline(maxEvents, maxStations int) *StationTimeline {
 // collection failed; failed snapshots never create disconnect events or move
 // the baseline. The first successful snapshot establishes a baseline only.
 func (t *StationTimeline) Observe(vaps []VAP, at time.Time, success bool) []StationEvent {
-	if t == nil || !success || at.IsZero() {
+	if t == nil || !success || at.IsZero() || vaps == nil {
 		return nil
 	}
 	current, complete := snapshotStations(vaps, t.maxStations)
@@ -67,6 +72,9 @@ func (t *StationTimeline) Observe(vaps []VAP, at time.Time, success bool) []Stat
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if !t.lastObservedAt.IsZero() && !at.After(t.lastObservedAt) {
+		return nil
+	}
 	for mac, observation := range current {
 		observation.at = at
 		current[mac] = observation
@@ -74,6 +82,7 @@ func (t *StationTimeline) Observe(vaps []VAP, at time.Time, success bool) []Stat
 	if !t.initialized {
 		t.stations = current
 		t.initialized = true
+		t.lastObservedAt = at
 		return nil
 	}
 	keys := make(map[string]struct{}, len(t.stations)+len(current))
@@ -94,13 +103,19 @@ func (t *StationTimeline) Observe(vaps []VAP, at time.Time, success bool) []Stat
 		now, isPresent := current[mac]
 		switch {
 		case !wasPresent && isPresent:
-			newEvents = append(newEvents, makeStationEvent("observed_association", now.station, time.Time{}, at))
+			newEvents = append(newEvents, makeStationEvent("observed_association", now.station, now.physicalRadio, t.lastObservedAt, at))
 		case wasPresent && !isPresent:
-			newEvents = append(newEvents, makeStationEvent("observed_disassociation", old.station, old.at, at))
-		case wasPresent && isPresent && (old.station.Radio != now.station.Radio || old.station.BSSID != now.station.BSSID):
-			event := makeStationEvent("observed_radio_change", now.station, old.at, at)
-			event.PreviousRadio = old.station.Radio
-			event.PreviousBand = stationBand(old.station.Radio)
+			newEvents = append(newEvents, makeStationEvent("observed_disassociation", old.station, old.physicalRadio, old.at, at))
+		case wasPresent && isPresent && (old.station.Radio != now.station.Radio || old.physicalRadio != now.physicalRadio || old.station.BSSID != now.station.BSSID):
+			event := makeStationEvent("observed_radio_change", now.station, now.physicalRadio, old.at, at)
+			event.PreviousBSSID = old.station.BSSID
+			if old.station.Radio != now.station.Radio || old.physicalRadio != now.physicalRadio {
+				event.PreviousRadio = old.station.Radio
+				event.PreviousBand = stationBand(old.station.Radio)
+				event.PreviousPhysicalRadio = old.physicalRadio
+			} else {
+				event.Type = "observed_bssid_change"
+			}
 			newEvents = append(newEvents, event)
 		}
 	}
@@ -112,6 +127,7 @@ func (t *StationTimeline) Observe(vaps []VAP, at time.Time, success bool) []Stat
 		t.events = t.events[:t.maxEvents]
 	}
 	t.stations = current
+	t.lastObservedAt = at
 	return append([]StationEvent(nil), newEvents...)
 }
 
@@ -148,7 +164,7 @@ func snapshotStations(vaps []VAP, limit int) (map[string]stationObservation, boo
 				duplicates[mac] = true
 				continue
 			}
-			result[mac] = stationObservation{station: station}
+			result[mac] = stationObservation{station: station, physicalRadio: vap.RadioName}
 		}
 	}
 	if len(duplicates) > 0 {
@@ -160,8 +176,8 @@ func snapshotStations(vaps []VAP, limit int) (map[string]stationObservation, boo
 	return result, true
 }
 
-func makeStationEvent(kind string, station Station, previous, at time.Time) StationEvent {
-	event := StationEvent{Type: kind, MAC: station.MAC, ObservedAt: at, Radio: station.Radio, Band: stationBand(station.Radio), BSSID: station.BSSID, ESSID: station.ESSID}
+func makeStationEvent(kind string, station Station, physicalRadio string, previous, at time.Time) StationEvent {
+	event := StationEvent{Type: kind, MAC: station.MAC, ObservedAt: at, Radio: station.Radio, Band: stationBand(station.Radio), PhysicalRadio: physicalRadio, BSSID: station.BSSID, ESSID: station.ESSID}
 	if station.Signal != 0 {
 		event.Signal, event.SignalKnown = station.Signal, true
 	}

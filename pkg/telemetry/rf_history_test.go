@@ -44,3 +44,16 @@ func TestPassiveRFHistoryIgnoresFailedOrAmbiguousSamples(t *testing.T) {
 		t.Fatalf("insufficient samples produced a trend: %+v", got)
 	}
 }
+
+func TestPassiveRFHistoryBoundsRadioIdentitySet(t *testing.T) {
+	history := NewPassiveRFHistory(2, 1)
+	now := time.Now().UTC()
+	history.Observe(now, []RadioStat{{Name: "wifi-ng", CuTotal: 11}}, true)
+	history.Observe(now.Add(time.Second), []RadioStat{{Name: "unbounded-name", CuTotal: 22}}, true)
+	if got := history.Radios(); len(got) != 1 || got[0] != "wifi-ng" {
+		t.Fatalf("radio identity cap failed: %v", got)
+	}
+	if got := history.Series("wifi-ng"); len(got) != 1 || got[0].CuTotal != 11 {
+		t.Fatalf("over-limit identity sample changed retained series: %+v", got)
+	}
+}

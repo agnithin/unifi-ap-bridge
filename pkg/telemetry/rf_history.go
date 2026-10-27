@@ -60,6 +60,15 @@ func (h *PassiveRFHistory) Observe(at time.Time, stats []RadioStat, success bool
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	newRadioCount := len(h.byRadio)
+	for name := range seen {
+		if _, exists := h.byRadio[name]; !exists {
+			newRadioCount++
+		}
+	}
+	if newRadioCount > h.maxRadios {
+		return
+	}
 	for _, stat := range stats {
 		series := h.byRadio[stat.Name]
 		point := PassiveRFPoint{ObservedAt: at, RadioStat: cloneRadioStat(stat)}
