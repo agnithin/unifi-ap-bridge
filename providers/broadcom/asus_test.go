@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -883,6 +884,9 @@ func TestTriBandParentIdentityAndWidth(t *testing.T) {
 		radios[0].Is11ac || !radios[1].Is11ac || !radios[2].Is11ac {
 		t.Fatalf("bad radio inventory: %+v", radios)
 	}
+	if got, want := []string{radios[0].Name, radios[1].Name, radios[2].Name}, []string{"wifi-ng", "wifi-na", "wifi-na-1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("default radio names = %v, want legacy names %v", got, want)
+	}
 	vaps, e := p.GetVAPs(nil)
 	if e != nil {
 		t.Fatal(e)
@@ -900,6 +904,39 @@ func TestTriBandParentIdentityAndWidth(t *testing.T) {
 	for i, want := range []int{20, 40, 80} {
 		if stats[i].Bandwidth != want || stats[i].Channel != radios[i].Channel {
 			t.Fatalf("radio %s live channel/width mismatch: %+v (want %d MHz)", radios[i].Name, stats[i], want)
+		}
+	}
+
+	compact := NewAsusProviderWithOptions(runner, AsusProviderOptions{CompactRadioNames: true})
+	compactRadios, err := compact.GetRadios()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := []string{compactRadios[0].Name, compactRadios[1].Name, compactRadios[2].Name}, []string{"wifi-ng", "wifi-na", "wifi-na1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("compact radio names = %v, want %v", got, want)
+	}
+	compactVAPs, err := compact.GetVAPs(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compactStats, err := compact.GetRadioStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(compactVAPs) != 2 || len(compactStats) != 3 {
+		t.Fatalf("compact identities missing: vaps=%+v stats=%+v", compactVAPs, compactStats)
+	}
+	for i, vap := range compactVAPs {
+		if vap.RadioName != compactRadios[i+1].Name {
+			t.Errorf("VAP %s radio_name = %q, want %q", vap.Name, vap.RadioName, compactRadios[i+1].Name)
+		}
+	}
+	for i, stat := range compactStats {
+		if stat.Name != compactRadios[i].Name {
+			t.Errorf("radio stat name = %q, want %q", stat.Name, compactRadios[i].Name)
+		}
+		if parts := strings.Split(stat.Name+"-client_signal_avg", "-"); len(parts) < 2 || len(parts) > 3 {
+			t.Errorf("radio metric key %q falls outside observed 2/3-segment contract", strings.Join(parts, "-"))
 		}
 	}
 }

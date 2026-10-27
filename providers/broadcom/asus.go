@@ -91,17 +91,18 @@ type sampleCommandCache struct {
 }
 
 type AsusProvider struct {
-	runner          CmdRunner
-	radioNames      map[string]string
-	previousCPU     cpuSample
-	retryBaselines  map[string]retryCounterBaseline
-	vapCounterState *vapCounterTracker
-	cacheMu         sync.Mutex
-	staticCache     map[string]staticCacheEntry
-	now             func() time.Time
-	readFile        func(string) ([]byte, error)
-	readDir         func(string) ([]os.DirEntry, error)
-	parentCache     *verifiedParent
+	runner            CmdRunner
+	compactRadioNames bool
+	radioNames        map[string]string
+	previousCPU       cpuSample
+	retryBaselines    map[string]retryCounterBaseline
+	vapCounterState   *vapCounterTracker
+	cacheMu           sync.Mutex
+	staticCache       map[string]staticCacheEntry
+	now               func() time.Time
+	readFile          func(string) ([]byte, error)
+	readDir           func(string) ([]os.DirEntry, error)
+	parentCache       *verifiedParent
 }
 
 type verifiedParent struct {
@@ -110,6 +111,12 @@ type verifiedParent struct {
 	portID         string
 	remotePort     int
 	verifiedAt     time.Time
+}
+
+// AsusProviderOptions controls startup-only identity behavior.
+// CompactRadioNames requires a controller identity migration on adopted APs.
+type AsusProviderOptions struct {
+	CompactRadioNames bool
 }
 
 const parentCacheTTL = 2 * time.Minute
@@ -127,10 +134,14 @@ type retryCounterBaseline struct {
 }
 
 func NewAsusProvider(runner CmdRunner) *AsusProvider {
+	return NewAsusProviderWithOptions(runner, AsusProviderOptions{})
+}
+
+func NewAsusProviderWithOptions(runner CmdRunner, options AsusProviderOptions) *AsusProvider {
 	if runner == nil {
 		runner = defaultCmdRunner
 	}
-	return &AsusProvider{runner: runner, staticCache: make(map[string]staticCacheEntry), retryBaselines: make(map[string]retryCounterBaseline), vapCounterState: newVAPCounterTracker(), now: time.Now, readFile: os.ReadFile, readDir: os.ReadDir}
+	return &AsusProvider{runner: runner, compactRadioNames: options.CompactRadioNames, staticCache: make(map[string]staticCacheEntry), retryBaselines: make(map[string]retryCounterBaseline), vapCounterState: newVAPCounterTracker(), now: time.Now, readFile: os.ReadFile, readDir: os.ReadDir}
 }
 
 func (p *AsusProvider) Collect(ctx context.Context, mapping map[string]string) (*providers.Sample, error) {
@@ -405,7 +416,11 @@ func (p *AsusProvider) GetRadiosContext(ctx context.Context) ([]telemetry.Radio,
 		band := BandForChannel(channel)
 		radioName := "wifi-" + band
 		if bandCounts[band] > 0 {
-			radioName += "-" + strconv.Itoa(bandCounts[band])
+			if p.compactRadioNames {
+				radioName += strconv.Itoa(bandCounts[band])
+			} else {
+				radioName += "-" + strconv.Itoa(bandCounts[band])
+			}
 		}
 		bandCounts[band]++
 		p.radioNames[iface] = radioName

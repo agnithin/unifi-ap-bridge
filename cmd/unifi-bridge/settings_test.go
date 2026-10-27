@@ -147,8 +147,15 @@ func TestLegacyConfigEnabledByDefault(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	_ = os.WriteFile(path, []byte(`{"interval_sec":10}`), 0600)
 	cfg, e := loadConfig(path)
-	if e != nil || !cfg.Enabled {
-		t.Fatal("legacy configs must remain enabled")
+	if e != nil || !cfg.Enabled || cfg.CompactRadioNames {
+		t.Fatalf("legacy config defaults changed: %+v err=%v", cfg, e)
+	}
+	if err := os.WriteFile(path, []byte(`{"compact_radio_names":true}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, e = loadConfig(path)
+	if e != nil || !cfg.CompactRadioNames {
+		t.Fatalf("explicit compact radio setting was not loaded: %+v err=%v", cfg, e)
 	}
 }
 
@@ -181,6 +188,72 @@ func TestSharedSettingsPreserveNodeOwnedFields(t *testing.T) {
 		if json.Unmarshal(got[key], &actualValue) != nil || json.Unmarshal([]byte(want), &expectedValue) != nil || !reflect.DeepEqual(actualValue, expectedValue) {
 			t.Errorf("%s = %s, want %s", key, got[key], want)
 		}
+	}
+}
+
+func TestSharedSettingsPreserveNodeLocalCompactRadioNames(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "node-config.json")
+	nodeConfig := []byte(`{"enabled":true,"compact_radio_names":false,"nodes":["10.0.0.3"]}`)
+	if err := os.WriteFile(path, nodeConfig, 0600); err != nil {
+		t.Fatal(err)
+	}
+	mainConfig := []byte(`{"enabled":true,"compact_radio_names":true,"interval_sec":30}`)
+	mainPath := filepath.Join(root, "main-config.json")
+	if err := os.WriteFile(mainPath, mainConfig, 0600); err != nil {
+		t.Fatal(err)
+	}
+	mainFile, err := os.Open(mainPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mergeSharedSettings(path, mainFile, ""); err != nil {
+		_ = mainFile.Close()
+		t.Fatal(err)
+	}
+	if err := mainFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]json.RawMessage
+	data, err := os.ReadFile(path)
+	if err != nil || json.Unmarshal(data, &got) != nil {
+		t.Fatalf("read merged node config: err=%v data=%s", err, data)
+	}
+	if string(got["compact_radio_names"]) != "false" {
+		t.Fatalf("satellite compact_radio_names = %s, want local false", got["compact_radio_names"])
+	}
+	if string(got["interval_sec"]) != "30" {
+		t.Fatalf("shared interval_sec = %s, want 30", got["interval_sec"])
+	}
+	mainAfter, err := os.ReadFile(mainPath)
+	if err != nil || string(mainAfter) != string(mainConfig) {
+		t.Fatalf("satellite sync changed Main config: err=%v data=%s", err, mainAfter)
+	}
+}
+
+func TestSharedSettingsDoNotImportCompactRadioNamesWhenNodeUnset(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "node-config.json")
+	if err := os.WriteFile(path, []byte(`{"enabled":true}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	mainConfig := `{"enabled":true,"compact_radio_names":true}`
+	if err := mergeSharedSettings(path, strings.NewReader(mainConfig), ""); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := got["compact_radio_names"]; exists {
+		t.Fatalf("Main-only compact setting was copied to node: %s", data)
+	}
+	cfg, err := loadConfig(path)
+	if err != nil || cfg.CompactRadioNames {
+		t.Fatalf("unset node compact setting did not default false: cfg=%+v err=%v", cfg, err)
 	}
 }
 

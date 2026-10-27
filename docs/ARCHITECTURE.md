@@ -259,3 +259,9 @@ Native `avg_client_signal` is a rounded arithmetic dBm mean of a complete curren
 ### Separate passive CCA categories
 
 The optional local `radio_stats` fields `cu_nocat` and `cu_nopkt` preserve the firmware's named, validated 0–100 percent columns. Broadcom defines `nocat` as bad-FCS plus some control-frame activity and `nopkt` as invalid-PLCP/CRS noise-like activity. They remain separate from OBSS and noise-floor dBm; no sum, inferred non-Wi-Fi classification or native UniFi interference mapping is supplied. Asus RF diagnostics display unavailable fields as dashes.
+
+### Optional compact radio identities (migration required)
+
+Default provider naming remains `wifi-ng`, `wifi-na`, `wifi-na-1`. `compact_radio_names: true` changes only duplicate-band suffix construction, yielding `wifi-na1` for the second 5 GHz interface. The interface-to-name mapping remains shared by Radio, VAP and RadioStat generation; band, channel, operating width, VAP name and counters are unchanged. Startup passes the flag through provider options; status reports the selected flag. The config field is node-local: shared-settings merge does not import it from Main, and ordinary settings merge preserves it.
+
+Matching UniFi 10.6.109 code stores per-radio history but classifies summary metrics by splitting hyphen-separated keys. Radio fields with two or three parts are recognized; the existing secondary name creates four and gets dropped. Compact names are a bridge workaround candidate, not a vendor parser patch. They remain disabled pending controlled migration and live acceptance; simply renaming emitted identities would retain an extra old controller row.

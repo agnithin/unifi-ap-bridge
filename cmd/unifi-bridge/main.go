@@ -31,6 +31,7 @@ var (
 type Config struct {
 	ControllerResponseCaptureCount int               `json:"controller_response_capture_count,omitempty"`
 	ControllerRebootEnabled        bool              `json:"controller_reboot_enabled,omitempty"`
+	CompactRadioNames              bool              `json:"compact_radio_names,omitempty"`
 	WlanMappingFile                string            `json:"wlan_mapping_file,omitempty"`
 	Enabled                        bool              `json:"enabled"`
 	AutoGateway                    bool              `json:"auto_gateway"`
@@ -140,6 +141,7 @@ func updateWebUIStatus(host *providers.HostInfo, modelProfile models.ModelProfil
 		"ip":                     host.IP,
 		"model":                  modelProfile.DisplayName,
 		"model_code":             modelProfile.ModelCode,
+		"compact_radio_names":    cfg.CompactRadioNames,
 		"firmware":               modelProfile.Firmware,
 		"controller_url":         cfg.ControllerURL,
 		"auto_gateway":           cfg.AutoGateway,
@@ -350,7 +352,9 @@ func main() {
 		}
 		provider = p
 	} else {
-		provider = broadcom.NewAsusProvider(nil)
+		provider = broadcom.NewAsusProviderWithOptions(nil, broadcom.AsusProviderOptions{
+			CompactRadioNames: cfg.CompactRadioNames,
+		})
 	}
 
 	startupCtx, startupCancel := context.WithTimeout(ctx, 8*time.Second)

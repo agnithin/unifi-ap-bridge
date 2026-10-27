@@ -378,3 +378,9 @@ Asus **RF diagnostics & observed client changes** also separates neighboring WiF
 ### Read-only AirView history check from the Mac
 
 Run `python3 scripts/ops/radio_history.py --insecure` for this homelab's existing self-signed controller, or supply `--ca-file /path/on/CT107/ca.pem`. Certificate verification is the default. The helper uses the Mac's existing strict-host-verified SSH access through CT107, keeps the API key on CT107, and compares current radio measurements with UniFi's 24-hour history. It prints only per-AP aggregate radio summaries; it does not access the APs, change settings or run on a timer. `null` means unavailable. `history_summary_zero_with_active_clients` is an observation, not proof of its cause or a truly interference-free channel.
+
+### Prepared workaround for upper-radio AirView history
+
+The opt-in `compact_radio_names` config option uses `wifi-na1` for a second 5 GHz radio. It is **off by default** and remains off on both installed APs. UniFi 10.6.109 stores our existing upper-radio measurements, but its summary parser rejects metric names containing the extra hyphen in `wifi-na-1`. The compact identifier fits the observed parser contract.
+
+Do not enable this on an adopted AP without a controlled controller identity migration: UniFi retains old radio rows, and an in-place rename API has not been established. This candidate has source/regression coverage, not live enabled acceptance. The option is local to each AP and is preserved by local settings saves and satellite synchronization. See the audit ledger for the prepared Main-only decision and history/restore limits.
