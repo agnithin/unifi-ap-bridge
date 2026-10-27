@@ -21,7 +21,7 @@ controller certificate verification on the private LAN.
 
 The AP cache is `/jffs/addons/unifi-bridge/config/wlan-mapping.json`, mode
 `0600`, atomically replaced only when the mapping changes. The publisher checks
-the remote SHA-256 and mode before and after a write. Before running the command,
+the remote SHA-256 and mode before and after a write. First run the command to publish and verify both caches. Then
 activate this path in the AP bridge configuration as `wlan_mapping_file`. The
 current manual `wlan_mapping` entries take precedence, so remove only the two
 target SSID keys in the same reviewed settings change; retain unrelated entries.

@@ -1,6 +1,6 @@
 # Architecture & Technical Reference
 
-> **Current delivery status — 2026-10-26 PDT:** Main is runtime-accepted on `cd7bd64`, with fresh GCM and live passive RF metrics; Node remains untouched on last-verified `6224430`. Reboot dispatch is disabled and no scan was run. Asus diagnostics and unchanged-save acceptance passed; Main’s UniFi 80 MHz display is fixed; changed saves, stale-radio cleanup and Node rollout remain pending. See [the canonical live ledger](AUDIT_STATE.md#21-main-wireless-batch-deployment--2026-10-27-0403-utc).
+> **Current delivery status — 2026-10-27 PDT:** Both APs are accepted on `71da89b`, with fresh GCM, watchdogs, protected state and physical20/40/80 MHz radios. Changed-save/cluster propagation, both Mac-published WLAN caches and one Main UniFi reboot/persistence test passed. Locate execution and packet capture remain pending firmware/tool evidence. See [the canonical live ledger](AUDIT_STATE.md).
 
 `unifi-ap-bridge` is a standalone, dependency-free daemon and WebUI extension engineered for Asuswrt-Merlin and Broadcom-based routers. It translates raw Linux and Broadcom wireless and switch telemetry into the Ubiquiti UniFi Inform protocol (`:8080/inform`).
 
@@ -230,7 +230,7 @@ Authenticated command observations are allowlisted projections after successful
 GCM decoding for a previously adopted non-bootstrap identity. The optional reboot
 dispatcher defaults off; it requires a request ID, atomically persists bounded
 hashed IDs before execution and invokes only `/sbin/reboot`. Unknown actions and
-locate observations do not execute. Live authenticated captures on Main establish `_type: "reboot"` with a request ID and `_type: "cmd", cmd: "set-locate"`. These captures establish delivery, not execution acceptance. Locate stays observation-only until the firmware LED restoration contract is verified.
+locate observations do not execute. Live authenticated captures on Main establish `_type: "reboot"` with a request ID and `_type: "cmd", cmd: "set-locate"`. The observed reboot envelope now has live execution acceptance on Main: changed boot identity, restored startup and fresh GCM. The feature is enabled on both APs; Node physical reboot was not tested. Locate stays observation-only until the firmware LED restoration contract is verified.
 
 Manual RF scanning is a distinct CLI operation before daemon startup, never an
 inform-loop side effect. Explicit disruptive-operation opt-in, selected channels,

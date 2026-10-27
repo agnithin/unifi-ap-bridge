@@ -1,6 +1,6 @@
 # unifi-ap-bridge
 
-> **Current delivery status — 2026-10-27 PDT:** Main is accepted on `f737864` (v1.2.5 dev); Node is accepted on `cd7bd64` with a follow-up update in progress. Both display three radios at 20/40/80 MHz and 2.5 GbE uplinks in UniFi. Main’s stale Auto radio is resolved. RF scan retrieval and host cross-AP correlation are verified; changed-settings and router-reboot acceptance remain pending. See [current audit state](docs/AUDIT_STATE.md).
+> **Current delivery status — 2026-10-27 PDT:** Both APs are accepted on `71da89b` (v1.2.5 dev). Changed-settings/cluster save, Mac-only WLAN cache refresh and one real Main UniFi reboot passed. Three physical radios report20/40/80 MHz; the stale Auto row is resolved. Locate execution and packet capture remain firmware/tool dependent. See [current audit state](docs/AUDIT_STATE.md).
 
 A high-performance, ultra-lightweight standalone daemon and WebUI addon for **Asuswrt-Merlin** and Linux routers that bridges Broadcom Wi-Fi and switch telemetry into the **Ubiquiti UniFi Inform Protocol** (`:8080/inform`).
 
@@ -10,11 +10,11 @@ It emulates a genuine UniFi 6 Access Point—featuring native **UniFi 6 In-Wall 
 
 ## Current deployment
 
-Main is accepted on `f737864`, version `1.2.5 dev`, with protected state, fresh GCM, watchdog and clean transaction state. Node's accepted baseline is `cd7bd64`; the latest ledger records its follow-up update separately.
+Both APs are accepted on `71da89b`, version `1.2.5 dev`, with protected state, fresh GCM, watchdogs and clean transactions. Main completed one real UniFi-triggered reboot and recovered its configuration, WLAN cache and daemon automatically. Reboot handling is enabled on both APs; Node's router was not rebooted for this test.
 
-Both APs now show channels6/36/161 at20/40/80 MHz and the correct gateway ports in UniFi. Main's extra Auto radio is gone after operator re-adoption. Passive scan retrieval passed on Main, with driver result freshness explicitly unknown. Host tools can correlate natural AP departure/arrival observations without claiming exact roaming latency. WLAN mapping refresh is on demand from the Mac; no new CT107 administrative access or timer is required.
+Both APs report channels6/36/161 at20/40/80 MHz and the correct gateway ports. Main's extra Auto radio is gone after operator re-adoption. Passive scan retrieval passed, with driver result freshness explicitly unknown. Host tools correlate natural AP departure/arrival observations without claiming precise roaming latency. WLAN mapping refresh runs on demand from the Mac and both private caches are active; no new CT107 administrative access or timer is needed.
 
-Asus diagnostics and unchanged-save acceptance passed. Changed-save and controlled router-reboot acceptance are tracked separately. Locate is observation-only pending a reliable firmware LED restoration contract; no packet capture utility was installed.
+Asus diagnostics, unchanged saves and changed-save/cluster propagation passed. Locate is observation-only pending a reliable firmware LED restoration contract; packet capture remains pending a supported utility and implementation.
 
 See [audit state](docs/AUDIT_STATE.md) and [architecture](docs/ARCHITECTURE.md).
 
@@ -256,9 +256,7 @@ The current dev batch adds semantic no-op settings saves (no bridge restart or
 node sync), bounded AP-local station-change history and passive RF trends in the
 Asus UI, Mac-triggered host-resolved WLAN mapping, default-off authenticated reboot
 dispatch, and an explicitly opted-in manual passive scan. These changes are
-deployed to Main as `cd7bd64`; runtime, passive metrics, signed-in diagnostics and
-unchanged settings saves are verified. Changed saves, one-time WLAN cache activation and
-disruptive command/scan acceptance remain pending.
+deployed to both APs as `71da89b`. Runtime, passive metrics, changed and unchanged saves, WLAN cache activation, one Main router reboot and passive scan retrieval are verified. Locate execution and packet capture remain pending.
 See [the current feature batch](docs/AUDIT_STATE.md#20-parallel-wireless-feature-batch).
 
 Run `python3 -B scripts/ops/mac_wlan_mapping.py` from the trusted Mac when the
@@ -333,10 +331,10 @@ Main deployment and its preserved wrapper result are documented in [Section 19](
 | B5: Accurate tri-band telemetry | Separate physical radio/VAP identities, actual channel widths and per-radio counts implemented and tested in dev. Three-radio rendering under U6IW passed in the actual UniFi overview on both APs; other diagnostic/control surfaces remain outside that check. |
 | B6: Exposed controller key | Resolved: replacement installed privately in CT107 and verified; exposed key revoked (old 401, new 200). Temporary secret copies removed. Historical exposure remains documented without key values. |
 | B7–B10: Health and telemetry correctness | CPU deltas, unknown noise/experience handling, topology/FDB corrections, UI freshness/unverified labels and watchdog log cap implemented and tested in dev. Sampling deadlines/caching, stable traffic counters, rollback, structured config verification and remaining form transport work stay open. |
-| F1: WLAN mapping | `scripts/ops/mac_wlan_mapping.py` runs on demand from the Mac, streams the fixed classic WLAN resolver through PVE to CT107, then atomically updates the AP cache over existing Mac SSH. The API key remains on CT107; a one-time AP configuration change is still required to activate the cache. |
+| F1: WLAN mapping | `scripts/ops/mac_wlan_mapping.py` runs on demand from the Mac, streams the fixed classic WLAN resolver through PVE to CT107, then atomically updates the AP cache over existing Mac SSH. The API key remains on CT107; both AP private caches are activated and verified. Future refreshes need no restart. |
 | F2: Guest/VLAN classification | Report actual VAP bridge/VLAN/isolation metadata first. Classification does not enforce network policy. |
-| F3: Roaming | New bounded AP-local poll-derived client/radio/BSSID timeline and known signal in Asus UI; source-tested, not deployed. Cross-AP destination, precise event time and disconnect reasons remain unknown unless another verified source supplies them. |
-| F4: RF diagnostics | New passive noise/OBSS fields and RF trends plus explicit opt-in manual passive scan source; no automatic scan or live acceptance. Results freshness unknown; packet capture and proprietary spectrum parity remain unresolved. |
+| F3: Roaming | AP-local client/radio/BSSID timeline is deployed. The host correlator matched a natural Main→Node transition using private snapshots. Polling bounds are explicit; precise event time, reason and causal roam proof remain unavailable. |
+| F4: RF diagnostics | Passive noise/OBSS/trends are deployed; bounded opt-in passive scan retrieval passed on Main. Driver result age remains unknown; packet capture and proprietary spectrum parity remain unresolved. |
 | F5: Simple UniFi device commands | Default-off authenticated GCM cmd/reboot dispatcher, fixed executor and persistent request-ID deduplication are source-tested. Real command/firmware acceptance is pending. Locate is observation-only; no firmware/provisioning handler. |
 | F6: UniFi provisioning / firmware | **Deferred by operator:** firmware updates, UniFi-triggered bridge upgrades and broad SSID/security/radio/VLAN provisioning. Asus remains the configuration authority. Existing GitHub bridge-addon updater correctness is a separate maintenance fix. |
 | F7: Community distribution | amtm/SNBForums submission after installation, release integrity and compatibility gaps are closed. |

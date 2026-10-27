@@ -1,8 +1,8 @@
 # Audit State & Current Operations
 
-> **Current delivery status — 2026-10-27 PDT:** Main is accepted on `f737864312ee0d741f64055f74580e778a0ef0f5`, with fresh Active GCM after disabling its temporary command capture. Node's accepted baseline is `cd7bd64`; its follow-up wrapper stopped before invoking the updater because it checked Main's key path. The Node-specific preservation check is being corrected; no new build is accepted yet. Both APs now show three radios, widths 20/40/80 MHz, and 2.5 GbE gateway uplinks in UniFi. Main's stale Auto row is resolved following operator re-adoption. See Section 24 and the latest checkpoint below.
+> **Current delivery status — 2026-10-27 PDT:** Both APs are accepted on `71da89b944a078a0ca15bc1ab6084037ea0d7869` (v1.2.5 dev), with fresh Active GCM, watchdogs, protected state and correct physical widths20/40/80 MHz. Main's UniFi Restart command completed a real router reboot and startup persistence acceptance. Signed-in Asus changed-save/cluster acceptance passed. Both APs use the Mac-published WLAN caches. Main's stale Auto row is resolved following operator re-adoption; 80 MHz display also passed after Main reboot and a normal browser refresh.
 
-**Pending:** Complete the in-flight Node verification, deploy/test the newly observed reboot-envelope handler, changed-settings persistence acceptance, and optional firmware-dependent Locate/packet capture. The operator selected Mac-only on-demand WLAN refresh; no CT107 SSH credential or unattended timer will be added. RF scan acceptance passed on Main; cross-AP host correlation produced a natural transition pair without claiming precise roam latency.
+**Remaining:** Locate execution needs a verified firmware LED restore contract. Packet capture needs a supported utility/dependency and bounded implementation; inspected firmware lacks tcpdump/Entware. Driver scan-result freshness and firmware roam reason/timing remain unknown, rather than fabricated. Cross-AP correlation and passive scan retrieval work within those limits. Firmware updates and broad UniFi provisioning stay deferred.
 
 **Release track:** `dev`. No main merge or stable tag was created. Sections below preserve dated audit/recovery history; this header and the latest section describe current delivery.
 
@@ -1194,3 +1194,42 @@ The original configuration was restored after verifying its only difference was 
 The operator chose Mac-only on-demand WLAN refresh, normally needed only after deleting/recreating a WLAN or rebuilding the controller. Existing mappings remain active. CT107-to-AP access expansion and the five-minute timer are not selected. Locate remains observation-only because no reliable LED prior-state/restoration contract is established on this firmware. Packet capture remains unavailable at the inspected tool paths; no dependency was installed.
 
 Node follow-up correction: the first wrapper created only its stage/preserve directories, then failed while checking the absent Main-style addon cluster key; the next invocation stopped at the existing-stage guard. Neither invoked the updater. Node uses `/jffs/.ssh/dropbear_ed25519_host_key`, already verified during its cd7 acceptance. No authentication/trust change is required. The original stages remain as evidence; any corrected invocation uses a fresh identity.
+
+### Node final acceptance and Mac resolver verification
+
+The orchestrator inspected the worker wrapper and found the Main-only config checksum/capture replacement block had remained. Node's different configuration failed that checksum gate before any config write or updater invocation; previous staging-directory presence alone was not evidence of deployment. A minimal Node-specific wrapper removed the entire Main config mutation block and verified the installed updater hash before staging it. The exact remote request/stage path is recorded in the retained local metadata under `/tmp/unifi-node-exact-1793121263250192000/`; consult that metadata rather than guessing the timestamp suffix.
+
+The actual updater exited0; wrapper exit0 in12.915 seconds, empty SSH stderr, config/state/active-host-key bytes preserved and transaction/locks clean. Node PID26133 reports f737, fresh Active GCM, watchdog, channels6/36/161, uplink2500 and local Port4 up1000. Main remained f737/PID5702 and healthy. No AP authentication or radio settings changed.
+
+The Mac resolver was exercised read-only against verified CT107 identity `core-ops-broker`; it resolved both allowlisted WLAN IDs while keeping the API key inside CT107. Cache publishing/activation is not yet claimed by this lookup. Command/Mac workflow source milestone `71da89b` is pushed; hosted validation and Main command execution acceptance remain pending.
+
+### WLAN activation and changed-settings acceptance
+
+The Mac on-demand publisher resolved both WLAN IDs on CT107 and successfully published both private0600 AP caches. Each AP was activated serially by adding the fixed `wlan_mapping_file` path and removing only the two matching manual overrides. Private before-config copies are retained locally under `/var/folders/94/c9cnfjw56nqby7p8y5h8s1s80000gn/T/unifi-mapping-activation-pbte384g/`. Main's first immediate status read raced with startup; no configuration retry was performed. Independent follow-up showed `file_enabled=true`, `entries=2`, empty mapping error and Active GCM. Node activation then exited0 and passed the same checks.
+
+Signed-in Asus changed-save acceptance passed using a reversible reporting interval change10→15 seconds. Both APs restarted their bridge daemons, adopted/running GCM and reported interval15 with both file mappings retained. Restoring10 through the same UI also passed on both APs (Main PID26122, Node PID1898 at that checkpoint). No radio settings were changed. This verifies actual cluster settings propagation, not just matching versions.
+
+Hosted run40548764684 passed for exact source `71da89b944a078a0ca15bc1ab6084037ea0d7869`. Main's exact update to that source exited0 in13.483 seconds with protected bytes preserved and clean transaction/locks. The authenticated top-level reboot handler was enabled on Main; pre-request checks confirmed unchanged boot identity, expected71da runtime and Active GCM. A single fresh UniFi Restart request was submitted; physical restart acceptance is in progress and must be recorded separately from request delivery. Node remains onf737 until this Main-only test finishes.
+
+### Final feature acceptance — 2026-10-27 PDT
+
+Main UniFi Restart acceptance passed: a fresh request produced a changed kernel boot identity and the expected71da runtime with successful Active GCM within105.414 seconds of bounded observation. Main returned as PID10183, restored watchdog, clean update/start/mutation locks and transaction journal, private0600 adoption state and private0600 persistent command-ID store. Config and both automatic WLAN entries survived the router reboot. Driver radios returned6/20,36/40,161/80; uplink2500. No recovery or second physical reboot was invoked.
+
+After Main returned, Node's exact71da updater/wrapper exited0 in13.098 seconds, with empty SSH stderr, protected config/state/active host-key bytes preserved and transaction/locks clean. The fixed authenticated reboot feature is enabled on both APs; only Main's physical reboot was tested. Node's bridge-only restart exited0; PID10307 reports fresh GCM and both file mappings. Node remains local Port1 uplink2500 and local Port4 HomeBase1000. Neither AP has temporary raw-response capture enabled.
+
+Final live telemetry independently confirms both71da commits, interval10, fresh GCM, radios6/20,36/40,161/80 and mappings `file_enabled=true,entries=2,last_error=""`. LLDP sample status is `unavailable`; configured gateway topology remains MainPort1/NodePort3. This is a known source limitation, not a claim of fresh LLDP discovery.
+
+| Requested feature | Disposition |
+|---|---|
+| UniFi80 MHz display | Accepted on both, including the refreshed post-reboot UniFi overview:20/40/80 MHz and correct gateway ports. |
+| Main extra Auto radio | Resolved following operator re-adoption; three configured/live identities verified. |
+| Asus changed settings save | Accepted10→15→10 with both APs' live config/GCM and cache preservation verified. |
+| UniFi reboot | Implemented from authenticated live envelope; enabled both; one real Main reboot and persistence accepted. |
+| Locate | Authenticated `set-locate` delivery recognized; LED execution remains blocked by firmware restore semantics. |
+| WLAN mapping | On-demand Mac resolver/publisher and both active private AP caches accepted; no new key/timer. |
+| Roaming enrichment | AP-local history plus host cross-AP correlation accepted on a natural transition; exact latency/reason unavailable. |
+| RF scanning/capture | Bounded passive scan retrieval accepted; driver age unknown. Packet capture utility/implementation remains pending. |
+
+No main merge, stable tag, router firmware change, database edit, additional re-adoption or credential/access expansion occurred. Historical updater-disappearance attribution remains unknown; successful bounded updates do not identify its old cause.
+
+Final browser refresh confirms both APs online with20/40/80 MHz channels and correct2.5GbE gateway parent ports. Main's temporary blank channel columns during startup cleared on the refreshed view; no controller write or radio change was needed. Screenshot proof: `/tmp/unifi-both-aps-accepted.jpg`. The Asus changed-save proof is `/tmp/unifi-asus-settings-accepted.jpg`. Final retained build is71da on both; the following documentation commit does not retarget deployed artifacts.
