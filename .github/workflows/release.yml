@@ -40,6 +40,7 @@ jobs:
           python3 scripts/test_wlan_mapping.py
           python3 scripts/test_wlan_mapping_publish.py
           python3 scripts/test_mac_wlan_mapping.py
+          python3 scripts/test_radio_history.py
           python3 scripts/check_secrets.py
           node scripts/test_update_ui.js
           for script in scripts/*.sh; do sh -n "$script"; done

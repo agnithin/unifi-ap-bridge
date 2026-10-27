@@ -374,3 +374,7 @@ GNU General Public License v3.0 (GPL-3.0) — see [LICENSE](LICENSE) for details
 Copyright (C) 2026 Nithin. All rights reserved.
 
 Asus **RF diagnostics & observed client changes** also separates neighboring WiFi occupancy, bad-frame/control activity, noise-like activity and noise floor. These are passive driver measurements for each physical radio; they do not identify a particular interfering device or supply UniFi's proprietary interference average.
+
+### Read-only AirView history check from the Mac
+
+Run `python3 scripts/ops/radio_history.py --insecure` for this homelab's existing self-signed controller, or supply `--ca-file /path/on/CT107/ca.pem`. Certificate verification is the default. The helper uses the Mac's existing strict-host-verified SSH access through CT107, keeps the API key on CT107, and compares current radio measurements with UniFi's 24-hour history. It prints only per-AP aggregate radio summaries; it does not access the APs, change settings or run on a timer. `null` means unavailable. `history_summary_zero_with_active_clients` is an observation, not proof of its cause or a truly interference-free channel.
