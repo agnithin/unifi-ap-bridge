@@ -38,6 +38,9 @@ func TestSettingsPreserveConfiguration(t *testing.T) {
 	if e := mergeSettings(path, strings.NewReader(`{"enabled":false,"interval":15}`), "json", ""); e != nil {
 		t.Fatal(e)
 	}
+	if !settingsChanged {
+		t.Fatal("effective settings change was not reported")
+	}
 	raw, _ := os.ReadFile(path)
 	var got, before map[string]json.RawMessage
 	_ = json.Unmarshal(raw, &got)
@@ -60,6 +63,9 @@ func TestSettingsPreserveConfiguration(t *testing.T) {
 	beforeInfo, _ := os.Stat(path)
 	if e := mergeSettings(path, strings.NewReader(`{"enabled":false,"interval":15}`), "json", ""); e != nil {
 		t.Fatal(e)
+	}
+	if settingsChanged {
+		t.Fatal("semantic no-op was reported as a change")
 	}
 	afterInfo, _ := os.Stat(path)
 	if !os.SameFile(beforeInfo, afterInfo) {

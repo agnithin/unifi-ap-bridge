@@ -180,18 +180,27 @@ if [ -n "$REQUEST_ID" ] && [ -z "$AMNG" ]; then
 fi
 if [ -n "$AMNG" ]; then
     if [ -n "$REQUEST_ID" ]; then
-        printf '%s' "$AMNG" | UNIFI_BRIDGE_MUTATION_LOCK_HELD=1 UNIFI_BRIDGE_MUTATION_LOCK_OWNER="$$" \
-            "$BRIDGE_BIN" -config "$CONF_FILE" -apply-settings -gateway "$GW_IP" -request-id "$REQUEST_ID" || exit 1
+        SETTINGS_RESULT=$(printf '%s' "$AMNG" | UNIFI_BRIDGE_MUTATION_LOCK_HELD=1 UNIFI_BRIDGE_MUTATION_LOCK_OWNER="$$" \
+            "$BRIDGE_BIN" -config "$CONF_FILE" -apply-settings -gateway "$GW_IP" -request-id "$REQUEST_ID") || exit 1
     else
-        printf '%s' "$AMNG" | UNIFI_BRIDGE_MUTATION_LOCK_HELD=1 UNIFI_BRIDGE_MUTATION_LOCK_OWNER="$$" \
-            "$BRIDGE_BIN" -config "$CONF_FILE" -apply-settings -gateway "$GW_IP" || exit 1
+        SETTINGS_RESULT=$(printf '%s' "$AMNG" | UNIFI_BRIDGE_MUTATION_LOCK_HELD=1 UNIFI_BRIDGE_MUTATION_LOCK_OWNER="$$" \
+            "$BRIDGE_BIN" -config "$CONF_FILE" -apply-settings -gateway "$GW_IP") || exit 1
     fi
 elif [ -f "$SETTINGS_FILE" ]; then
-    UNIFI_BRIDGE_MUTATION_LOCK_HELD=1 UNIFI_BRIDGE_MUTATION_LOCK_OWNER="$$" \
-        "$BRIDGE_BIN" -config "$CONF_FILE" -apply-settings -settings-format custom -gateway "$GW_IP" < "$SETTINGS_FILE" || exit 1
+    SETTINGS_RESULT=$(UNIFI_BRIDGE_MUTATION_LOCK_HELD=1 UNIFI_BRIDGE_MUTATION_LOCK_OWNER="$$" \
+        "$BRIDGE_BIN" -config "$CONF_FILE" -apply-settings -settings-format custom -gateway "$GW_IP" < "$SETTINGS_FILE") || exit 1
 else
     echo "No submitted settings" >&2
     exit 1
+fi
+# A semantic no-op is complete at the configuration layer. Do not restart
+# this AP or dispatch a cluster sync for an unchanged save.
+if [ "$SETTINGS_RESULT" = "SETTINGS_CHANGED=0" ]; then
+    if [ "$action_status_started" -eq 1 ]; then
+        write_action_status SAVED_NOOP "Settings already match; no service or node changes were needed"
+        action_status_done=1
+    fi
+    exit 0
 fi
 settings_saved=1
 

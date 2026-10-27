@@ -230,7 +230,7 @@ function startActionRequest(operation, requestId, actionScript) {
     if (operation === "settings") {
       loadActionStatus(function(st) {
         if (activeActionRequest !== request || !st || String(st.request_id || "") !== request.id || st.operation !== "settings") return;
-        if (st.status === "SAVED") {
+        if (st.status === "SAVED" || st.status === "SAVED_NOOP") {
           finishActionRequest();
           actionMessage(st.message || "Settings saved locally; runtime and cluster outcomes remain unverified.", false);
           loadStatus();

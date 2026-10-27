@@ -218,6 +218,13 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
+		if *applySettingsFlag {
+			if settingsChanged {
+				fmt.Println("SETTINGS_CHANGED=1")
+			} else {
+				fmt.Println("SETTINGS_CHANGED=0")
+			}
+		}
 		return
 	}
 
