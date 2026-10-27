@@ -1,6 +1,6 @@
 # unifi-ap-bridge
 
-> **Current delivery status — 2026-10-27 PDT:** Both APs are accepted on `d9c91f9` (v1.2.5 dev). Changed-settings/cluster save, Mac-only WLAN cache refresh and one real Main UniFi reboot passed. Three physical radios report20/40/80 MHz; the stale Auto row is resolved. Native radio utilization now reaches UniFi; bounded LAN packet capture passed a Main self-test. AirView now shows measured signal, airtime and retry averages for 2.4 GHz/lower 5 GHz. Upper 5 GHz history, interference and Locate remain pending. See [current audit state](docs/AUDIT_STATE.md).
+> **Current delivery status — 2026-10-27 PDT:** Both APs are accepted on `fe90aff` (v1.2.5 dev). Changed-settings/cluster save, Mac-only WLAN cache refresh and one real Main UniFi reboot passed. Three physical radios report20/40/80 MHz; the stale Auto row is resolved. Native radio utilization now reaches UniFi; bounded LAN packet capture passed a Main self-test. AirView now shows measured signal, airtime and retry averages for 2.4 GHz/lower 5 GHz. Upper 5 GHz history, interference and Locate remain pending. See [current audit state](docs/AUDIT_STATE.md).
 
 A high-performance, ultra-lightweight standalone daemon and WebUI addon for **Asuswrt-Merlin** and Linux routers that bridges Broadcom Wi-Fi and switch telemetry into the **Ubiquiti UniFi Inform Protocol** (`:8080/inform`).
 
@@ -10,7 +10,7 @@ It emulates a genuine UniFi 6 Access Point—featuring native **UniFi 6 In-Wall 
 
 ## Current deployment
 
-Both APs are accepted on `d9c91f9`, version `1.2.5 dev`, with protected state, fresh GCM, watchdogs and clean transactions. Main completed one real UniFi-triggered reboot and recovered its configuration, WLAN cache and daemon automatically. Reboot handling is enabled on both APs; Node's router was not rebooted for this test.
+Both APs are accepted on `fe90aff`, version `1.2.5 dev`, with protected state, fresh GCM, watchdogs and clean transactions. Main completed one real UniFi-triggered reboot and recovered its configuration, WLAN cache and daemon automatically. Reboot handling is enabled on both APs; Node's router was not rebooted for this test.
 
 Both APs report channels6/36/161 at20/40/80 MHz and the correct gateway ports. Main's extra Auto radio is gone after operator re-adoption. Passive scan retrieval passed, with driver result freshness explicitly unknown. Host tools correlate natural AP departure/arrival observations without claiming precise roaming latency. WLAN mapping refresh runs on demand from the Mac and both private caches are active; no new CT107 administrative access or timer is needed.
 
@@ -256,7 +256,7 @@ The current dev batch adds semantic no-op settings saves (no bridge restart or
 node sync), bounded AP-local station-change history and passive RF trends in the
 Asus UI, Mac-triggered host-resolved WLAN mapping, default-off authenticated reboot
 dispatch, and an explicitly opted-in manual passive scan. These changes are
-deployed to both APs as `d9c91f9`. Runtime, passive metrics, changed and unchanged saves, WLAN cache activation, one Main router reboot and passive scan retrieval are verified. Locate execution and full wireless-monitor capture remain pending; bounded LAN PCAP is implemented.
+deployed to both APs as `fe90aff`. Runtime, passive metrics, changed and unchanged saves, WLAN cache activation, one Main router reboot and passive scan retrieval are verified. Locate execution and full wireless-monitor capture remain pending; bounded LAN PCAP is implemented.
 See [the current feature batch](docs/AUDIT_STATE.md#20-parallel-wireless-feature-batch).
 
 Run `python3 -B scripts/ops/mac_wlan_mapping.py` from the trusted Mac when the

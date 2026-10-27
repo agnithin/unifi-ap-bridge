@@ -1,6 +1,6 @@
 # Audit State & Current Operations
 
-> **Current delivery status — 2026-10-27 PDT:** Both APs are accepted on `d9c91f929729ae4aef9e7847347fc0a1f700a801` (v1.2.5 dev). Measured signal and matched retry counts now reach UniFi for all active VAPs. AirView visibly shows signal, airtime and retry averages for both APs' 2.4 GHz/lower 5 GHz radios. Fresh GCM, watchdogs, protected config/state/keys, three 20/40/80 MHz physical radios and expected port links remain healthy. Earlier settings-save, WLAN cache, Main reboot/persistence, stale-radio and bounded Main LAN capture acceptance remain valid.
+> **Current delivery status — 2026-10-27 PDT:** Both APs are accepted on `fe90aff747aa5349939e0aa2d7f9432799da6d5d` (v1.2.5 dev). Measured signal and matched retry counts now reach UniFi for all active VAPs. AirView visibly shows signal, airtime and retry averages for both APs' 2.4 GHz/lower 5 GHz radios. Fresh GCM, watchdogs, protected config/state/keys, three 20/40/80 MHz physical radios and expected port links remain healthy. Earlier settings-save, WLAN cache, Main reboot/persistence, stale-radio and bounded Main LAN capture acceptance remain valid.
 
 **Remaining:** Both upper 5 GHz rows lack historical AirView traffic/signal/airtime/retry summaries despite valid current clients and native telemetry; interference remains unproven. Locate needs a reliable firmware LED restore contract. RF monitor-frame capture/spectrum analysis and scan-result freshness remain unsupported/unproven; the accepted PCAP feature is limited LAN Ethernet capture. Firmware updates and broad provisioning remain deferred.
 
@@ -1302,10 +1302,26 @@ Both upper 5 GHz rows still show missing historical signal/traffic and zero aver
 
 Private deployment evidence: `/tmp/main-metrics-1793125382533637000/` and `/tmp/node-metrics-1793125423680818000/`. Existing unrelated Python caches are preserved. This documentation checkpoint does not rebuild or retarget the accepted artifacts.
 
-## 27. Passive RF categories and upper-band history investigation — source checkpoint
+## 27. Passive RF categories and upper-band history investigation — accepted runtime
 
 Focused source review found consistent exact physical identities across Radio, VAP, station counts and nested driver stats. No supported naming/BSSID fix was found for the upper 5 GHz historical summary. The next discriminator is an actual controller `radio_details` response for `wifi-na-1`; no working request contract is yet established. No speculative rename, model change or re-adoption is justified.
 
 Read-only Main chanim samples expose separate measured categories, e.g. 2.4 GHz `obss=14`, `nocat=6`, `nopkt=7`, `knoise=-91`. Broadcom's WLAN Client Utility manual, section `msglevel chanim`, defines OBSS as outside-BSS reception, nocat as bad-FCS/some control traffic, and nopkt as invalid-PLCP/CRS noise-like activity ([manufacturer manual, mirrored PDF](https://device.report/m/5c3ed7d305b4daedef930e21ef5dd21b227ca8d12244ac3402955f45f0fd7c4a.pdf)). None establishes a source-specific non-Wi-Fi interference percentage or UniFi's native interference contract.
 
-Source now adds separately labeled optional bad-frame/control and noise-like activity fields to the Asus passive RF diagnostics for all three physical radios. Named headers, 0–100 validation, unknown omission and dash rendering are preserved; no counter sum or native interference value is invented. No additional scan is started. Publication and live acceptance remain required for this source checkpoint.
+Source now adds separately labeled optional bad-frame/control and noise-like activity fields to the Asus passive RF diagnostics for all three physical radios. Named headers, 0–100 validation, unknown omission and dash rendering are preserved; no counter sum or native interference value is invented. No additional scan is started. The following rollout checkpoint records publication and runtime acceptance.
+
+### Passive CCA rollout acceptance
+
+Exact source `fe90aff747aa5349939e0aa2d7f9432799da6d5d` passed targeted Go race tests, UI regressions and diff checks, followed by hosted [run 40563549864](https://github.com/agnithin/unifi-ap-bridge/actions/runs/40563549864). Main updater/wrapper exited 0 in 13.437 seconds; after its live acceptance, Node updater/wrapper exited 0 in 12.767 seconds. Protected config/state/active-key bytes were preserved on each, with clean journals/locks. Final PIDs are Main 18958 and Node 22110, both expected commit, adopted, fresh Active GCM and installed watchdogs. Installed ASP hashes match the tested source.
+
+All six physical radios expose valid optional categories at their unchanged 6/20, 36/40, 161/80 channel/width pairs. One Node 2.4 GHz sample was OBSS 21%, bad-frame/control 18%, noise-like 13%, noise floor -77 dBm; these are instantaneous independent driver measurements, not an additive breakdown or attribution to a particular interferer. Neither AP was router-rebooted and no new RF scan or radio/controller setting change was made. Private updater evidence: `/tmp/main-cca-1793127105177727000/` and `/tmp/node-cca-1793127132045622000/`.
+
+The new Asus browser preview is pending authentication: a fresh read-only tab at `http://10.100.1.10/user3.asp` shows the sign-in form. This does not invalidate the exact installed-file/hash, runtime-status and UI fixture checks, but those checks are not claimed as live browser rendering acceptance.
+
+### Infrastructure-view investigation
+
+Operator screenshot showed only gateway and switch in Infrastructure. Live browser verification shows both APs and their clients in normal Topology. Infrastructure is a separate physical graph; public UI source consumes its own `infrastructure` model and renders all returned vertices without an AP-specific rendering exclusion. This points to the controller's Infrastructure graph membership rather than a missing logical AP connection; the server-side reason for omitting these APs remains unproven. [UniFi Network 10.2.105 release notes](https://community.ui.com/releases/UniFi-Network-Application-10-2-105/cf38dace-ce91-4e4a-8ab7-a1d2db30aa55) describe the core-infrastructure/physical-link view and rack Digital Twin.
+
+The live Add Device panel offers wired clients and rack-style server/UPS/PDU/NAS/cooling/generic types, with no adopted AP option. It is not evidence of a supported force-add operation for these APs. The panel was canceled unchanged. No telemetry/name/model/adoption change is justified by this evidence. Normal Topology proof: `/tmp/unifi-topology-aps-visible.jpg`; Infrastructure scope proof: `/tmp/unifi-infrastructure-scope.jpg`.
+
+Remaining reporting gaps are upper 5 GHz historical AirView summaries and the unsupported native UniFi interference mapping. The Asus passive diagnostics are a measured alternative, not a claim those controller gaps are fixed. Locate LED control, RF result freshness and wireless monitor capture retain their earlier evidence limits. Both unrelated Python cache directories remain preserved.
