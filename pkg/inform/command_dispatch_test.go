@@ -67,6 +67,33 @@ func TestRebootDispatcherStartsOnceAndBoundsDuplicateAndCooldown(t *testing.T) {
 	}
 }
 
+func TestRebootDispatcherAcceptsObservedTopLevelGCMEnvelope(t *testing.T) {
+	now := time.Unix(1_790_000_000, 0)
+	calls := 0
+	path := filepath.Join(t.TempDir(), "commands.json")
+	d := NewRebootDispatcher(true, func() error { calls++; return nil }, path)
+	eligibility := CommandEligibility{AuthenticatedGCM: true, Adopted: true}
+	payload := map[string]any{
+		"_type": "reboot", "_id": "observed-fixture-id", "time": float64(now.Unix()),
+		"datetime": "2026-10-27T12:00:00Z",
+	}
+	if got := d.Dispatch(payload, eligibility, now); got != (CommandDispatchResult{Type: "reboot", Action: "reboot", Status: "started"}) {
+		t.Fatalf("observed top-level form was not handled safely: %+v", got)
+	}
+	if got := d.Dispatch(payload, eligibility, now.Add(time.Second)); got != (CommandDispatchResult{Type: "reboot", Action: "reboot", Status: "duplicate"}) {
+		t.Fatalf("observed request ID was not deduplicated: %+v", got)
+	}
+	if calls != 1 {
+		t.Fatalf("executor calls=%d, want 1", calls)
+	}
+
+	// The legacy cmd envelope remains independently recognized.
+	legacy := NewRebootDispatcher(false, nil, filepath.Join(t.TempDir(), "disabled.json"))
+	if got := legacy.Dispatch(map[string]any{"_type": "cmd", "cmd": "reboot", "_id": "other"}, eligibility, now); got != (CommandDispatchResult{Type: "cmd", Action: "reboot", Status: "disabled"}) {
+		t.Fatalf("existing cmd envelope changed: %+v", got)
+	}
+}
+
 func TestRebootDispatcherReservesFailedAttemptAndAppliesCooldown(t *testing.T) {
 	now := time.Unix(1_790_000_000, 0)
 	calls := 0

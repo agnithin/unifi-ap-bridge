@@ -1,100 +1,53 @@
-# Host WLAN mapping refresh
+# On-demand Mac WLAN mapping
 
-The bridge reads `/jffs/addons/unifi-bridge/config/wlan-mapping.json` when
-`wlan_mapping_file` is configured. `refresh_wlan_mapping.py` resolves only the
-exact `blueberry` and `blueberry-prime` SSIDs with the existing read-only
-classic WLAN-list GET, then sends only those names and validated 24-hex legacy
-ObjectIds to each configured AP over SSH. The API key stays at
-`/etc/ops-broker/unifi-api-key` on CT107. The AP file is mode `0600` and is
-atomically replaced on persistent storage only when the content changes; the
-host compares remote SHA-256 before writing. A failed controller read does not
-publish anything, and the mapping survives AP reboot without placing API
-credentials on the device.
+Run `python3 -B scripts/ops/mac_wlan_mapping.py` from the trusted Mac after a
+UniFi WLAN is renamed or replaced. It streams the bounded resolver source to
+CT107 using the existing strict-known-host PVE SSH route. The resolver reads
+`/etc/ops-broker/unifi-api-key` inside CT107 and returns only the exact
+`blueberry` and `blueberry-prime` names with validated legacy 24-hex ObjectIds.
+The Mac then uses its existing strict-known-host SSH access to publish that
+small mapping to Main and Node. No API key is read or stored on the Mac or APs.
 
-## Prepare on CT107
+The defaults are PVE `root@10.100.1.100`, controller `https://10.100.1.1`,
+site `default`, Main `nithin@10.100.1.10`, and Node `nithin@10.100.1.11`. The
+Mac's existing SSH identity and `known_hosts` must already authorize those
+routes; the command uses BatchMode and refuses unknown host keys. It creates no
+keys and changes no trust. Override a host with repeated `--ap-host` options.
 
-Install the matching bridge source tree under `/opt/unifi-ap-bridge` and copy
-these files into its `scripts/ops/` directory:
+Controller TLS uses CT107's system trust by default. If that controller
+certificate needs a private CA bundle already on CT107, pass its CT path with
+`--ca-file`. Use `--insecure` only if the operator explicitly accepts disabling
+controller certificate verification on the private LAN.
 
-```text
-wlan_mapping.py
-refresh_wlan_mapping.py
-unifi-wlan-mapping-refresh.service
-unifi-wlan-mapping-refresh.timer
-```
+The AP cache is `/jffs/addons/unifi-bridge/config/wlan-mapping.json`, mode
+`0600`, atomically replaced only when the mapping changes. The publisher checks
+the remote SHA-256 and mode before and after a write. Before running the command,
+activate this path in the AP bridge configuration as `wlan_mapping_file`. The
+current manual `wlan_mapping` entries take precedence, so remove only the two
+target SSID keys in the same reviewed settings change; retain unrelated entries.
+Changing `wlan_mapping_file` is a one-time settings operation that may restart
+the bridge and sync its Node. Once configured, later cache-content updates are
+read without restart, and invalid refreshes preserve the last valid mapping.
 
-Create `/etc/ops-broker/unifi-wlan-mapping.json` as root-owned mode `0600`:
-
-```json
-{
-  "controller": "https://<controller-address>",
-  "site": "default",
-  "identity_file": "/etc/ops-broker/unifi-ap-mapping-ed25519",
-  "ap_hosts": ["nithin@10.100.1.10", "nithin@10.100.1.11"],
-  "ca_file": "/etc/ssl/certs/unifi-controller-ca.pem"
-}
-```
-
-Read-only verification found CT107's existing key is not authorized on either
-AP. Strict host-key checks passed through to user authentication on both APs,
-but each returned `Permission denied (publickey,password)`. Do not enable the
-timer until the operator approves a dedicated CT107 key and authorizes its
-public half for the existing AP admin account. This service requires shell
-access as that account to write the fixed mapping file. Never copy an AP cluster
-private key to CT107. The script refuses unknown SSH host keys.
-The dedicated identity file path above must be root-owned mode `0600`; the
-publisher explicitly selects it and will not fall back to CT107's generic key.
-The controller TLS connection must use a trusted CA file, or explicitly set
-`"insecure": true` for a local self-signed controller;
-the latter encrypts transport but does not authenticate the controller and is
-not the preferred setup. The existing API key file must be regular, contain a
-single token, and have no group/other permission bits.
-
-After the first successful publish has been verified on both APs, change the AP
-configuration to set `wlan_mapping_file` to
-`/jffs/addons/unifi-bridge/config/wlan-mapping.json` and remove only the
-`blueberry` and `blueberry-prime` keys from its manual `wlan_mapping` object.
-Manual entries take precedence over the refreshed file; leaving either targeted
-entry means that SSID continues using its manual ID. Preserve unrelated manual
-entries. A refresh does not restart the bridge.
-
-Run the publisher once before the AP configuration change; after verifying the
-file on both APs and applying the AP setting above, enable the timer:
-
-```sh
-python3 -B /opt/unifi-ap-bridge/scripts/ops/refresh_wlan_mapping.py
-install -m 0644 /opt/unifi-ap-bridge/scripts/ops/unifi-wlan-mapping-refresh.service /etc/systemd/system/
-install -m 0644 /opt/unifi-ap-bridge/scripts/ops/unifi-wlan-mapping-refresh.timer /etc/systemd/system/
-systemctl daemon-reload
-systemctl enable --now unifi-wlan-mapping-refresh.timer
-```
-
-The timer refreshes every five minutes and one minute after CT boot. AP flash is
-written only when either resolved ObjectId changes. Inspect
-only sanitized state with `systemctl status` and `journalctl -u
-unifi-wlan-mapping-refresh.service`; success logs contain no mapping values or
-credentials. The last valid mapping remains on AP flash if the controller is
-unavailable, so current mappings remain available across reboots. A deleted or
-renamed controller WLAN cannot be detected while the controller is offline; once
-it returns, the exact-name resolver must succeed before replacing the cache.
+This is an on-demand Mac command; it installs no timer and does not modify AP
+configuration. Each run performs one bounded controller GET and one atomic
+cache update per AP only if needed. If one AP publish fails, the other may
+already have the same valid mapping; rerunning is safe and skips identical
+content.
 
 ## Rollback
 
-Disable scheduling and remove the AP mapping file, then remove the bridge's
-`wlan_mapping_file` setting. Preserve any unrelated manual mappings. The
-manual entries for the two target SSIDs may be restored from the private AP
-configuration backup if rollback requires their prior behavior.
+Disable automatic file use by removing `wlan_mapping_file` from the reviewed AP
+configuration. Restore only the two manual target entries from the private
+configuration backup if their previous behavior is wanted. Remove the cache
+file over the existing Mac SSH route if cleanup is needed:
 
 ```sh
-systemctl disable --now unifi-wlan-mapping-refresh.timer
-rm -f /etc/systemd/system/unifi-wlan-mapping-refresh.{service,timer}
-systemctl daemon-reload
-ssh root@<main-ssh-host> 'rm -f /jffs/addons/unifi-bridge/config/wlan-mapping.json /jffs/addons/unifi-bridge/config/wlan-mapping.json.tmp.*'
-ssh root@<node-ssh-host> 'rm -f /jffs/addons/unifi-bridge/config/wlan-mapping.json /jffs/addons/unifi-bridge/config/wlan-mapping.json.tmp.*'
-rm -f /etc/ops-broker/unifi-wlan-mapping.json
+ssh -o BatchMode=yes -o StrictHostKeyChecking=yes nithin@10.100.1.10 \
+  'rm -f /jffs/addons/unifi-bridge/config/wlan-mapping.json /jffs/addons/unifi-bridge/config/wlan-mapping.json.tmp.*'
+ssh -o BatchMode=yes -o StrictHostKeyChecking=yes nithin@10.100.1.11 \
+  'rm -f /jffs/addons/unifi-bridge/config/wlan-mapping.json /jffs/addons/unifi-bridge/config/wlan-mapping.json.tmp.*'
 ```
 
-These are prepared operator steps only; source validation does not run them or
-write to CT107/APs. Rollback must also remove the dedicated CT107 public key
-from both AP admin accounts and delete `/etc/ops-broker/unifi-ap-mapping-ed25519`
-from CT107.
+These are operator-run rollback steps only. Source validation does not contact
+CT107 or write to either AP.

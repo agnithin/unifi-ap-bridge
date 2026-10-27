@@ -195,13 +195,11 @@ Radio names now identify physical radios even when two share 5 GHz, and each VAP
 
 `-is-enabled -config <path>` exits 0 for enabled and 3 for disabled before hardware/adoption access. Disabled status retains version, branch and model, including with older startup callers. Semantic settings no-ops avoid flash writes; concurrent settings/sync serialization remains pending.
 
-The first v1.2.4 upgrade requires reviewed matching scripts, checksum-verified binary and explicit tracked-startup installation. Immutable all-assets bundles, transaction locking, automatic rollback and verified final per-node outcomes remain pending. The sequential v1.2.5 rollout and per-node heartbeat verification passed; reboot and disable/re-enable persistence tests remain pending. Reboot command support is queued; UniFi-triggered updates, router firmware and broad provisioning remain deferred.
+Current v1.2.5 updates use exact-commit all-assets bundles, checksums, coordinated mutation/start/update locks, private snapshots and rollback verification. Main and Node have both completed sequential updates with fresh GCM verification. Router reboot and changed-settings persistence acceptance are recorded separately in the current ledger. UniFi-triggered firmware updates and broad provisioning remain deferred.
 
-### Updater operation locking (follow-up dev source; not deployed)
+### Updater operation locking
 
-Checks and installs acquire an atomic RAM-directory lock at `/tmp/unifi-bridge-update.lock` before starting the operation. A competing request exits without replacing the owner's status or entering its download/install path. Exit/INT/TERM cleanup releases only a lock with this shell's PID. A stale lock is not automatically stolen: inspect process/service state and partial-install status before recovery. This lock serializes updater operations only; settings and cluster sync still need coordinated mutation protection.
-
-Success is published once. The previous delayed background rewrite to UP_TO_DATE was removed so a completed request cannot overwrite a subsequent request's status. Synthetic overlap and busy-owner tests pass. These changes are subsequent source work and are not part of the deployed `be106ec` scripts; automatic rollback, immutable bundles and broader coordination remain open.
+Checks and installs acquire the RAM-directory update lock before download or activation. Settings, startup and cluster receivers use coordinated mutation/start locks. Exit/INT/TERM cleanup releases only locks owned by that invocation; stale locks are never stolen automatically. Accepted updates verify installed assets, exact runtime identity, fresh successful informs and transaction cleanup before reporting success. The synthetic updater suite exercises rollback and contention; firmware acceptance remains a separate live check.
 
 
 ## Wireless diagnostics and optional controller operations (dev source)
@@ -226,16 +224,13 @@ A host-side exact-SSID resolver uses the previously verified classic WLAN-list
 GET. Its API key stays on the host. The optional AP mapping-file cache accepts
 at most 64 KiB, 256 exact SSIDs and validated 24-hex legacy IDs, rejects duplicate
 keys, and retains last-known-good entries after invalid refreshes. Manual config
-mappings override cached values. The cache is separate from SSID/VLAN provisioning.
+mappings override cached values. The cache is separate from SSID/VLAN provisioning. The operator selected on-demand refresh from the Mac; no CT107-to-AP administrative key or unattended timer is installed. Refresh is needed after WLAN deletion/recreation, not ordinary AP restarts or client roaming.
 
 Authenticated command observations are allowlisted projections after successful
 GCM decoding for a previously adopted non-bootstrap identity. The optional reboot
 dispatcher defaults off; it requires a request ID, atomically persists bounded
 hashed IDs before execution and invokes only `/sbin/reboot`. Unknown actions and
-locate observations do not execute. Current reboot shape evidence comes from
-[unifi-emu's primary implementation](https://github.com/jamesbraid/unifi-emu/blob/main/docs/PROTOCOL.md);
-legacy mFi documentation is not firmware interoperability proof. Neither reboot
-nor locate has been tested against the live AP/controller.
+locate observations do not execute. Live authenticated captures on Main establish `_type: "reboot"` with a request ID and `_type: "cmd", cmd: "set-locate"`. These captures establish delivery, not execution acceptance. Locate stays observation-only until the firmware LED restoration contract is verified.
 
 Manual RF scanning is a distinct CLI operation before daemon startup, never an
 inform-loop side effect. Explicit disruptive-operation opt-in, selected channels,

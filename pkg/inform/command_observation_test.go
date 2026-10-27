@@ -22,13 +22,13 @@ func TestObserveAuthenticatedCommandSanitizesDocumentedShapes(t *testing.T) {
 			wantType: "cmd", wantAction: "reboot", wantID: true, wantTime: true,
 		},
 		{
-			name:     "legacy top-level reboot",
-			payload:  map[string]any{"_type": "reboot", "_id": "request", "datetime": "2026-10-26T12:00:00Z"},
+			name:     "observed top-level reboot",
+			payload:  map[string]any{"_type": "reboot", "_id": "request", "time": float64(1790000000), "datetime": "2026-10-26T12:00:00Z"},
 			wantType: "reboot", wantAction: "reboot", wantID: true, wantTime: true,
 		},
 		{
-			name:     "legacy locate",
-			payload:  map[string]any{"_type": "cmd", "cmd": "locate", "_id": "request", "time": float64(1790000000)},
+			name:     "observed set-locate",
+			payload:  map[string]any{"_type": "cmd", "cmd": "set-locate", "_id": "request", "time": float64(1790000000), "datetime": "2026-10-26T12:00:00Z"},
 			wantType: "cmd", wantAction: "locate", wantID: true, wantTime: true,
 		},
 	}
@@ -75,7 +75,7 @@ func TestObserveAuthenticatedCommandRejectsUnauthenticatedAndUnknownShapes(t *te
 
 func TestObserveAuthenticatedCommandOnlyRecordsValidMetadataPresence(t *testing.T) {
 	got, ok := ObserveAuthenticatedCommand(map[string]any{
-		"_type": "cmd", "cmd": "locate", "_id": map[string]any{"bad": true}, "time": false,
+		"_type": "cmd", "cmd": "set-locate", "_id": map[string]any{"bad": true}, "time": false,
 	}, true)
 	if !ok {
 		t.Fatal("expected allowed action")

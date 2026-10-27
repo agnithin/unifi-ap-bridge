@@ -15,10 +15,9 @@ type CommandObservation struct {
 // authenticated AES-GCM response has been successfully decoded. CBC responses
 // do not provide authentication and must not be observed through this API.
 //
-// "reboot" as a command is documented in the current unifi-emu protocol
-// implementation. The legacy top-level reboot type and cmd/locate shape are
-// documented by the archived mFi inform write-up; their current UniFi behavior
-// remains unverified. This function observes those shapes only; it never acts.
+// Main captures confirm a top-level `_type: reboot` request and a
+// `_type: cmd, cmd: set-locate` request after GCM authentication. The locate
+// shape is observed only; this package does not change LED state.
 func ObserveAuthenticatedCommand(payload map[string]any, authenticated bool) (CommandObservation, bool) {
 	if !authenticated || payload == nil {
 		return CommandObservation{}, false
@@ -32,8 +31,10 @@ func ObserveAuthenticatedCommand(payload map[string]any, authenticated bool) (Co
 	case "cmd":
 		cmd, _ := payload["cmd"].(string)
 		switch cmd {
-		case "reboot", "locate":
+		case "reboot":
 			action = cmd
+		case "set-locate":
+			action = "locate"
 		default:
 			return CommandObservation{}, false
 		}

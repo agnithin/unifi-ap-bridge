@@ -1,8 +1,8 @@
 # Audit State & Current Operations
 
-> **Current delivery status — 2026-10-26 PDT / 2026-10-27 04:03 UTC:** Main is deployed and runtime-accepted on `cd7bd643280f8345377b2a36e4829716a09a6969` (v1.2.5 dev). Hosted validation and Main-only update passed; latest updater/SSH exited 0 in 17.690 seconds. Main's UniFi upper-band display is now accepted at 80 MHz (Section 23). Signed-in diagnostics and unchanged settings-save acceptance passed (Section 22). Fresh Active GCM, protected files, watchdog, clean transaction/locks, three physical radios at 20/40/80 MHz and a 2.5 GbE uplink were independently verified. Node was not accessed or changed; last verified build remains `6224430`. See Sections 21–22.
+> **Current delivery status — 2026-10-27 PDT:** Main is accepted on `f737864312ee0d741f64055f74580e778a0ef0f5`, with fresh Active GCM after disabling its temporary command capture. Node's accepted baseline is `cd7bd64`; its follow-up wrapper stopped before invoking the updater because it checked Main's key path. The Node-specific preservation check is being corrected; no new build is accepted yet. Both APs now show three radios, widths 20/40/80 MHz, and 2.5 GbE gateway uplinks in UniFi. Main's stale Auto row is resolved following operator re-adoption. See Section 24 and the latest checkpoint below.
 
-**Pending:** Changed-settings apply/synchronization and controlled persistence checks; stale Auto radio and Node's still-old capability/display behavior; operational WLAN refresh setup; live reboot/locate evidence and packet capture. Reboot handling remains disabled; no scan, router reboot, radio-setting or controller mutation was authorized or performed in this rollout.
+**Pending:** Complete the in-flight Node verification, deploy/test the newly observed reboot-envelope handler, changed-settings persistence acceptance, and optional firmware-dependent Locate/packet capture. The operator selected Mac-only on-demand WLAN refresh; no CT107 SSH credential or unattended timer will be added. RF scan acceptance passed on Main; cross-AP host correlation produced a natural transition pair without claiming precise roam latency.
 
 **Release track:** `dev`. No main merge or stable tag was created. Sections below preserve dated audit/recovery history; this header and the latest section describe current delivery.
 
@@ -1184,3 +1184,13 @@ No key/trust was changed. The operator was asked about a dedicated automation ke
 then requested an explanation of purpose/cadence. Decision is pending; on-demand
 refresh is recommended for two rarely recreated SSIDs and can reuse existing
 access without a new key. No unattended host timer has been installed.
+
+### Batch checkpoint: authenticated command evidence and RF acceptance
+
+Main's exact `f737864312ee0d741f64055f74580e778a0ef0f5` updater and SSH wrapper exited0 in18.869 seconds. Protected config/state/key bytes were preserved, transaction/locks were clean and fresh GCM followed. A temporary three-response capture budget was enabled only for authenticated command probes. The actual controller sends `_type: "cmd", cmd: "set-locate"` and top-level `_type: "reboot"`, both with nonempty request IDs and time metadata. Raw captures remain private; these statements describe delivery, not executed router actions. No physical reboot or LED command has yet run.
+
+The original configuration was restored after verifying its only difference was the capture-count field; capture is now disabled. The bridge-only restart exited0; Main PID5702 reports the expected f737 commit and Active GCM. The corrected passive channel6 scan exited0 in0.714 seconds without stderr. Results are private RAM data and explicitly retain `freshness=unknown`; successful retrieval does not prove driver result age.
+
+The operator chose Mac-only on-demand WLAN refresh, normally needed only after deleting/recreating a WLAN or rebuilding the controller. Existing mappings remain active. CT107-to-AP access expansion and the five-minute timer are not selected. Locate remains observation-only because no reliable LED prior-state/restoration contract is established on this firmware. Packet capture remains unavailable at the inspected tool paths; no dependency was installed.
+
+Node follow-up correction: the first wrapper created only its stage/preserve directories, then failed while checking the absent Main-style addon cluster key; the next invocation stopped at the existing-stage guard. Neither invoked the updater. Node uses `/jffs/.ssh/dropbear_ed25519_host_key`, already verified during its cd7 acceptance. No authentication/trust change is required. The original stages remain as evidence; any corrected invocation uses a fresh identity.

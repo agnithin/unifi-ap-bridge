@@ -31,8 +31,9 @@ type CommandDispatchResult struct {
 	Status string `json:"status"`
 }
 
-// RebootDispatcher supports only the current documented `cmd: reboot` action.
-// It is disabled by default and has no generic remote-execution path.
+// RebootDispatcher supports the observed top-level `_type: reboot` envelope
+// and the existing `cmd: reboot` envelope. It is disabled by default and has
+// no generic remote-execution path.
 type RebootDispatcher struct {
 	mu          sync.Mutex
 	enabled     bool
@@ -61,10 +62,18 @@ func NewRebootDispatcher(enabled bool, execute RebootExecutor, statePath ...stri
 // Dispatch inspects a successfully decoded controller response. It never
 // handles locate or unknown commands. now is injectable for deterministic tests.
 func (d *RebootDispatcher) Dispatch(payload map[string]any, eligibility CommandEligibility, now time.Time) CommandDispatchResult {
-	result := CommandDispatchResult{Type: "cmd", Action: "reboot", Status: "ignored"}
-	if payload == nil || payloadString(payload, "_type") != "cmd" || payloadString(payload, "cmd") != "reboot" {
+	if payload == nil {
 		return CommandDispatchResult{}
 	}
+	typ := payloadString(payload, "_type")
+	if typ == "cmd" {
+		if payloadString(payload, "cmd") != "reboot" {
+			return CommandDispatchResult{}
+		}
+	} else if typ != "reboot" {
+		return CommandDispatchResult{}
+	}
+	result := CommandDispatchResult{Type: typ, Action: "reboot", Status: "ignored"}
 	if !d.enabled {
 		result.Status = "disabled"
 		return result
