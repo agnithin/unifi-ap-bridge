@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -41,6 +42,11 @@ func (a *apFileFlag) Set(value string) error {
 type apInput struct {
 	name string
 	path string
+}
+
+type observedEvent struct {
+	ap    string
+	event telemetry.StationEvent
 }
 
 type statusSnapshot struct {
@@ -109,6 +115,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	correlator := telemetry.NewCrossAPCorrelator(*window, maxInputEvents, maxInputEvents)
 	seenAPMACs := make(map[string]string, len(inputs))
 	count := 0
+	observations := make([]observedEvent, 0, maxInputEvents)
 	for _, input := range inputs {
 		snapshot, err := readSnapshot(input.path)
 		if err != nil {
@@ -139,8 +146,24 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return fmt.Errorf("input exceeds %d station events", maxInputEvents)
 		}
 		for _, event := range events {
-			correlator.Observe(input.name, event)
+			observations = append(observations, observedEvent{ap: input.name, event: event})
 		}
+	}
+	// The tracker prunes against each observation time. Feeding one AP's full
+	// timeline before another's could discard a valid earlier pair when the
+	// per-AP polling histories have different latest timestamps.
+	sort.SliceStable(observations, func(i, j int) bool {
+		left, right := observations[i], observations[j]
+		if !left.event.ObservedAt.Equal(right.event.ObservedAt) {
+			return left.event.ObservedAt.Before(right.event.ObservedAt)
+		}
+		if left.ap != right.ap {
+			return left.ap < right.ap
+		}
+		return left.event.Type < right.event.Type
+	})
+	for _, observation := range observations {
+		correlator.Observe(observation.ap, observation.event)
 	}
 	var salt [32]byte
 	if _, err := rand.Read(salt[:]); err != nil {

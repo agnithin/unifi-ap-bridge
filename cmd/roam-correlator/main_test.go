@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -49,6 +50,45 @@ func TestRunCorrelatesAndRedactsClientIdentifiers(t *testing.T) {
 	}
 	if !strings.Contains(output.EvidenceScope, "does not prove a roam") {
 		t.Fatalf("missing evidence limitation: %q", output.EvidenceScope)
+	}
+}
+
+func TestRunGloballyOrdersObservationsAcrossAPs(t *testing.T) {
+	dir := t.TempDir()
+	base := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	mainPath := writeSnapshotFixture(t, dir, "main.json", []telemetry.StationEvent{
+		{Type: "observed_disassociation", MAC: "02:11:22:33:44:55", ObservedAt: base.Add(10 * time.Second)},
+		{Type: "observed_association", MAC: "02:11:22:33:44:55", ObservedAt: base.Add(100 * time.Second)},
+	})
+	nodePath := writeSnapshotFixture(t, dir, "node.json", []telemetry.StationEvent{
+		{Type: "observed_association", MAC: "02:11:22:33:44:55", ObservedAt: base.Add(11 * time.Second)},
+	})
+	type pair struct {
+		Type          string    `json:"type"`
+		SourceAP      string    `json:"source_ap"`
+		DestinationAP string    `json:"destination_ap"`
+		DepartureAt   time.Time `json:"departure_observed_at"`
+		ArrivalAt     time.Time `json:"arrival_observed_at"`
+	}
+	decode := func(args ...string) []pair {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		if err := run(args, &stdout, &stderr); err != nil {
+			t.Fatalf("run failed: %v stderr=%s", err, stderr.String())
+		}
+		var output struct {
+			Pairs []pair `json:"pairs"`
+		}
+		if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+			t.Fatalf("output is not JSON: %v", err)
+		}
+		return output.Pairs
+	}
+	mainFirst := decode("-window", "30s", "-ap", "main="+mainPath, "-ap", "node="+nodePath)
+	nodeFirst := decode("-window", "30s", "-ap", "node="+nodePath, "-ap", "main="+mainPath)
+	want := []pair{{Type: "correlated_ap_observations", SourceAP: "main", DestinationAP: "node", DepartureAt: base.Add(10 * time.Second), ArrivalAt: base.Add(11 * time.Second)}}
+	if !reflect.DeepEqual(mainFirst, want) || !reflect.DeepEqual(nodeFirst, want) {
+		t.Fatalf("AP argument order changed retained pairs: main-first=%+v node-first=%+v", mainFirst, nodeFirst)
 	}
 }
 
