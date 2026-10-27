@@ -1,0 +1,17 @@
+[Unit]
+Description=Refresh the allowlisted UniFi WLAN ObjectId mapping on ASUS bridge APs
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/unifi-ap-bridge/scripts/ops
+ExecStart=/usr/bin/python3 -B /opt/unifi-ap-bridge/scripts/ops/refresh_wlan_mapping.py
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

@@ -1,0 +1,10 @@
+{
+  "controller": "https://<controller-address>",
+  "site": "default",
+  "identity_file": "/etc/ops-broker/unifi-ap-mapping-ed25519",
+  "ap_hosts": [
+    "nithin@10.100.1.10",
+    "nithin@10.100.1.11"
+  ],
+  "ca_file": "/etc/ssl/certs/unifi-controller-ca.pem"
+}

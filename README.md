@@ -267,13 +267,19 @@ unchanged settings saves are verified. Changed saves, WLAN refresh setup and
 disruptive command/scan acceptance remain pending.
 See [the current feature batch](docs/AUDIT_STATE.md#20-parallel-wireless-feature-batch).
 
-WLAN discovery runs on a trusted host using `scripts/ops/wlan_mapping.py`.
-Publish its allowlisted JSON atomically to a private RAM file on the AP and set
-`wlan_mapping_file` to that path during an approved configuration change.
-The daemon refreshes the file without restarting; explicit `wlan_mapping`
-entries take precedence, and malformed refreshes preserve the last good cache.
-No controller credential belongs on the AP. Refresh scheduling/publication is a
-separate operational setup, not automatically installed by this source change.
+WLAN discovery runs on a trusted host using `scripts/ops/wlan_mapping.py` and
+the scheduled publisher `scripts/ops/refresh_wlan_mapping.py`. It resolves only
+the two selected SSIDs, keeps the API key on CT107, and writes a private
+`/jffs/addons/unifi-bridge/config/wlan-mapping.json` only when its content
+changes. Configure `wlan_mapping_file` to that path during an approved AP
+configuration change. Explicit `wlan_mapping` entries take precedence, so only
+the two matching manual keys should be removed after a successful publish;
+preserve other entries. The daemon refreshes without restart and malformed
+updates preserve the last good cache. See
+[`scripts/ops/WLAN_MAPPING_SETUP.md`](scripts/ops/WLAN_MAPPING_SETUP.md) for the
+CT107 timer, SSH trust requirements, and rollback steps. No controller
+credential belongs on an AP; no live configuration is installed by this source
+change.
 
 Reboot support requires `controller_reboot_enabled: true` and an adopted,
 non-bootstrap authenticated GCM session. Only the supported `cmd/reboot` shape
