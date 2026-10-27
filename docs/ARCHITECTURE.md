@@ -237,7 +237,9 @@ inform-loop side effect. Explicit disruptive-operation opt-in, selected channels
 passive-only flags, dwell/time/output caps and private results are enforced.
 Installed driver help supports the command syntax but not a reliable completion
 marker. Latest `scanresults` may predate the requested scan; source results retain
-that uncertainty. No external capture utility was installed. The built-in optional LAN capture helper passed a bounded Main self-test; wireless monitor capture remains unsupported.
+that uncertainty. A single Main extended-scan/event trace returned network
+results, but its listener log was empty and there was no captured scan ID or
+terminal status. That observation does not establish result freshness. No external capture utility was installed. The built-in optional LAN capture helper passed a bounded Main self-test; wireless monitor capture remains unsupported.
 
 Radio capability reports include canonical `is_11ac` for 5 GHz radios, alongside
 legacy `has_vht`. Live Main acceptance proved this field enables UniFi’s 80 MHz

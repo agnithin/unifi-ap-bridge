@@ -313,7 +313,9 @@ The operation uses 100 ms passive/home dwell, an explicit channel list, a
 10-second command deadline and a 16 KiB output cap. The result is mode 0600 in
 RAM. The driver starts scans asynchronously, so the deadline bounds command
 execution, not proven firmware completion. Main scan retrieval passed, with
-result age still unknown. A bounded Main LAN capture self-test passed using the
+result age still unknown. A later bounded passive extended-scan trace produced
+network results but no captured event ID or terminal status; it did not prove
+the results were fresh. A bounded Main LAN capture self-test passed using the
 built-in helper; no tcpdump is required.
 
 ### Optional LAN packet capture
