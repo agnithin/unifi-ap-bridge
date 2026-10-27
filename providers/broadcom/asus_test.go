@@ -130,6 +130,9 @@ func TestAsusProvider(t *testing.T) {
 	if rStats[0].CuTotal != 64 || rStats[0].CuSelfTx != 12 || rStats[0].CuSelfRx != 2 {
 		t.Errorf("2.4G radio stats mismatch: %+v", rStats[0])
 	}
+	if rStats[0].CuOBSS == nil || *rStats[0].CuOBSS != 35 || rStats[0].NoiseDBm == nil || *rStats[0].NoiseDBm != -91 {
+		t.Errorf("expected measured passive OBSS/noise fields: %+v", rStats[0])
+	}
 	// eth6 (5 GHz, Ch 161): idle=75 -> cu_total=25, cu_self_tx=5, cu_self_rx=3
 	if rStats[1].CuTotal != 25 || rStats[1].CuSelfTx != 5 || rStats[1].CuSelfRx != 3 {
 		t.Errorf("5G radio stats mismatch: %+v", rStats[1])

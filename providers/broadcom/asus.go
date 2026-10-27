@@ -428,7 +428,7 @@ func (p *AsusProvider) GetRadiosContext(ctx context.Context) ([]telemetry.Radio,
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		cuTotal, cuSelfRx, cuSelfTx, err := p.parseChanimStatsStrict(ctx, iface)
+		cuTotal, cuSelfRx, cuSelfTx, _, err := p.parseChanimStatsStrict(ctx, iface)
 		if err != nil {
 			return nil, fmt.Errorf("read %s channel utilization: %w", iface, err)
 		}
@@ -712,18 +712,19 @@ func (p *AsusProvider) parseChanimStats(iface string) (cuTotal int, cuSelfRx int
 }
 
 func (p *AsusProvider) parseChanimStatsContext(ctx context.Context, iface string) (cuTotal int, cuSelfRx int, cuSelfTx int) {
-	cuTotal, cuSelfRx, cuSelfTx, _ = p.parseChanimStatsStrict(ctx, iface)
+	cuTotal, cuSelfRx, cuSelfTx, _, _ = p.parseChanimStatsStrict(ctx, iface)
 	return
 }
 
-func (p *AsusProvider) parseChanimStatsStrict(ctx context.Context, iface string) (cuTotal int, cuSelfRx int, cuSelfTx int, resultErr error) {
+func (p *AsusProvider) parseChanimStatsStrict(ctx context.Context, iface string) (cuTotal int, cuSelfRx int, cuSelfTx int, details telemetry.ChanimDetails, resultErr error) {
 	raw, err := p.wlCmdContext(ctx, iface, "chanim_stats")
 	if err != nil {
-		return 0, 0, 0, err
+		return 0, 0, 0, details, err
 	}
 	if len(strings.TrimSpace(raw)) == 0 {
-		return 0, 0, 0, fmt.Errorf("empty response")
+		return 0, 0, 0, details, fmt.Errorf("empty response")
 	}
+	details = telemetry.ParseChanimDetails(raw)
 	lines := strings.Split(raw, "\n")
 	var headerIdx map[string]int
 	for _, line := range lines {
@@ -743,25 +744,25 @@ func (p *AsusProvider) parseChanimStatsStrict(ctx context.Context, iface string)
 			rxIdx, hasRx := headerIdx["inbss"]
 			idleIdx, hasIdle := headerIdx["idle"]
 			if !hasTx || !hasRx || !hasIdle || txIdx >= len(fields) || rxIdx >= len(fields) || idleIdx >= len(fields) {
-				return 0, 0, 0, fmt.Errorf("malformed utilization row")
+				return 0, 0, 0, details, fmt.Errorf("malformed utilization row")
 			}
 			cuSelfTx, err = strconv.Atoi(fields[txIdx])
 			if err != nil {
-				return 0, 0, 0, fmt.Errorf("invalid tx utilization: %w", err)
+				return 0, 0, 0, details, fmt.Errorf("invalid tx utilization: %w", err)
 			}
 			cuSelfRx, err = strconv.Atoi(fields[rxIdx])
 			if err != nil {
-				return 0, 0, 0, fmt.Errorf("invalid inbss utilization: %w", err)
+				return 0, 0, 0, details, fmt.Errorf("invalid inbss utilization: %w", err)
 			}
 			idle, err := strconv.Atoi(fields[idleIdx])
 			if err != nil || idle < 0 || idle > 100 {
-				return 0, 0, 0, fmt.Errorf("invalid idle utilization %q", fields[idleIdx])
+				return 0, 0, 0, details, fmt.Errorf("invalid idle utilization %q", fields[idleIdx])
 			}
 			cuTotal = 100 - idle
-			return cuTotal, cuSelfRx, cuSelfTx, nil
+			return cuTotal, cuSelfRx, cuSelfTx, details, nil
 		}
 	}
-	return 0, 0, 0, fmt.Errorf("unrecognized response")
+	return 0, 0, 0, details, fmt.Errorf("unrecognized response")
 }
 
 func (p *AsusProvider) GetRadioStats() ([]telemetry.RadioStat, error) {
@@ -795,7 +796,7 @@ func (p *AsusProvider) GetRadioStatsContext(ctx context.Context) ([]telemetry.Ra
 			radioName = "wifi-" + band
 		}
 
-		cuTotal, cuSelfRx, cuSelfTx, err := p.parseChanimStatsStrict(ctx, iface)
+		cuTotal, cuSelfRx, cuSelfTx, rfDetails, err := p.parseChanimStatsStrict(ctx, iface)
 		if err != nil {
 			return nil, fmt.Errorf("read %s channel utilization: %w", iface, err)
 		}
@@ -808,6 +809,8 @@ func (p *AsusProvider) GetRadioStatsContext(ctx context.Context) ([]telemetry.Ra
 			CuTotal:   cuTotal,
 			CuSelfRx:  cuSelfRx,
 			CuSelfTx:  cuSelfTx,
+			CuOBSS:    rfDetails.OBSSPercent,
+			NoiseDBm:  rfDetails.NoiseDBm,
 		})
 	}
 	return stats, nil
