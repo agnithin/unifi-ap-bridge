@@ -1,16 +1,14 @@
 # Audit State & Current Operations
 
-> **Current delivery status — 2026-10-25:** Node is verified on v1.2.5 dev, commit `62244303039e3abc38f8aa31e544b5d4ad61343d`. Main SSH/HTTP initially timed out after a reviewed retry, then SSH returned around 20:40 UTC. Its prior `be106ec` daemon is verified with fresh Active GCM; system uptime was about two minutes, indicating a recent reboot of unknown cause. Main retains a compatibility bootstrap bundle (old daemon/scripts plus candidate updater), so candidate rollout is not accepted. See Section 13. Candidate `6224430` passed hosted CI and published exact-SHA dev bundles. W5 and W6 are implemented, tested and Sol-reviewed. Signed-in browser update-check and gateway/uplink visibility acceptance is recorded in Section 18; settings-save and live bandwidth acceptance remain pending. Stable release publication remains held; latest stable tag is v1.2.1.
+> **Current delivery status — 2026-10-26 PDT / 2026-10-27 04:03 UTC:** Main is deployed and runtime-accepted on `1fc317ce6a1fa3b17ff31820452c787002bf932c` (v1.2.5 dev). The exact-SHA hosted build passed. Main-only updater/SSH exit was 0 in 17.664 seconds. Fresh Active GCM, protected files, watchdog, clean transaction/locks, three physical radios at 20/40/80 MHz and a 2.5 GbE uplink were independently verified. Node was not accessed or changed; last verified build remains `6224430`. See Section 21.
 
-**Baseline live verification:** 2026-10-25, approximately 09:25–09:28 PDT (16:25–16:28 UTC); see Section 9. Later Node rollout and Main recovery evidence is recorded in Section 12. Section 7 preserves the original code audit; Section 8 records current fixes and pending acceptance.
+**Pending:** Asus signed-in settings-save/browser acceptance; controlled persistence checks; controller 40/80 display and stale Auto radio; operational WLAN refresh setup; live reboot/locate evidence and packet capture. Reboot handling remains disabled; no scan, router reboot, radio-setting or controller mutation was authorized or performed in this rollout.
 
-**Status:** Node is verified on `6224430`; Main is reachable and its prior `be106ec` runtime is verified after a recent reboot of unknown cause (Section 13). The failed retry and compatibility bootstrap generation still need review before another rollout. Main's prior generation, files/modes, runtime/archive, config/key and exact watchdog entry were verified after the first failed canary rollback. W5–W6 correctness fixes are locally committed and Sol-reviewed; hosted CI and SHA-qualified dev publication passed for `6224430`. The Asus browser login handoff remains pending. Controller credential rotation is complete (Section 8); controlled outage/persistence tests remain open and router reboot is excluded.
-
-**Release track:** `dev`, daemon `1.2.5`, candidate commit `62244303039e3abc38f8aa31e544b5d4ad61343d`. Node is verified on the candidate; Main's daemon is verified on prior `be106ec`, with a compatibility bootstrap script/bundle set as detailed in Section 13. The standing launch contract excludes merging to `main` and stable tagging. Section 5 supersedes earlier v1.2.2 UI-closure/provenance claims.
+**Release track:** `dev`. No main merge or stable tag was created. Sections below preserve dated audit/recovery history; this header and the latest section describe current delivery.
 
 **Repository:** `/Users/nithinag/workspace/unifi-ap-bridge`.
 
-See [README](../README.md) for usage and [ARCHITECTURE.md](ARCHITECTURE.md) for implementation details.
+See [README](../README.md) and [ARCHITECTURE](ARCHITECTURE.md).
 
 ## 1. Previous v1.2.2 Deployment — 2026-10-24, approximately 23:00–23:06 PDT
 
@@ -970,3 +968,34 @@ passed hosted run [40435024311](https://github.com/agnithin/unifi-ap-bridge/acti
 including dev publication. The controller-mode follow-up passed targeted Go race
 and UI regressions plus diff checks; its hosted result is tracked by the next dev
 commit. Neither milestone establishes live deployment or acceptance.
+
+## 21. Main Wireless Batch Deployment — 2026-10-27 04:03 UTC
+
+The operator approved the proposed Main-only deployment, with reboot handling
+remaining off, no scans and Node unchanged. Exact candidate `1fc317ce6a1fa3b17ff31820452c787002bf932c`
+passed [hosted run 40435538835](https://github.com/agnithin/unifi-ap-bridge/actions/runs/40435538835).
+Its ARMv7 archive SHA-256 is `5176e8260e55909738c360a35069e18a78ec5ab8ec0742078bb7292155ef343b`;
+local sidecar and archive updater bytes matched before invocation.
+
+A fresh private stage `/tmp/unifi-main-wireless-1793073786913283000` retained prior
+addon/runtime tar snapshots, protected config/state/key copies and updater log.
+One foreground, strict-host-verified SSH session invoked candidate `apply-exact`
+(which does not fan out), with a 180-second local bound. Runner and updater exited
+0 normally in 17.664 seconds with empty SSH stderr. Config, effective state and
+cluster-key bytes were unchanged; their mode remained 0600. No recovery was run.
+
+Independent read-only acceptance found PID 23137 on the exact candidate, adopted
+and running Active (GCM), successful-inform present, status five seconds old and
+fresh telemetry. Watchdog cron is installed; update/start/mutation locks and the
+transaction journal are absent. Radios report channels 6/36/161 at 20/40/80 MHz,
+with real noise/OBSS samples. Port 1 is up full-duplex at 2500 Mbps. Default-off
+reboot status is verified. Existing two manual WLAN mappings remain; mapping-file
+refresh is not configured. No client records or credentials are committed.
+
+Private local runner evidence is retained at
+`/var/folders/94/c9cnfjw56nqby7p8y5h8s1s80000gn/T/unifi-main-wireless-adqbo86o/`.
+No Node access, scan/capture, controller write, AP reboot or radio change occurred.
+The Asus browser session is logged out; signed-in settings-save and visual
+acceptance remain pending. Deployment establishes live metric collection, not
+cross-AP roaming correlation, scan completion, reboot interoperability, locate,
+packet capture or resolution of the two controller display defects.

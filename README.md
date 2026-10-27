@@ -1,6 +1,6 @@
 # unifi-ap-bridge
 
-> **Current delivery status — 2026-10-26:** Main candidate `1f223432` is accepted from independent live follow-up; Node was left unchanged on its previously verified `6224430` build. The parallel wireless-feature batch below is new dev source, not deployed. See [live acceptance](docs/AUDIT_STATE.md#19-approved-main-launch-and-live-acceptance--2026-10-26-2325-utc) and [the current feature batch](docs/AUDIT_STATE.md#20-parallel-wireless-feature-batch).
+> **Current delivery status — 2026-10-26 PDT:** Main is deployed and runtime-accepted on `1fc317c` (v1.2.5 dev), including the wireless diagnostics batch. Node remains untouched on last-verified `6224430`. Asus signed-in acceptance and the controller display issues remain pending. See [current audit state](docs/AUDIT_STATE.md).
 
 A high-performance, ultra-lightweight standalone daemon and WebUI addon for **Asuswrt-Merlin** and Linux routers that bridges Broadcom Wi-Fi and switch telemetry into the **Ubiquiti UniFi Inform Protocol** (`:8080/inform`).
 
@@ -10,18 +10,15 @@ It emulates a genuine UniFi 6 Access Point—featuring native **UniFi 6 In-Wall 
 
 ## Current deployment
 
-Main is accepted on `1f223432`, version `1.2.5 dev`, after successful updater
-execution and independent live checks. The launch wrapper returned 87 due to its
-subsequently corrected `install.sh` mode expectation; that exit is preserved as
-a wrapper failure, not rewritten as success. Recovery was not needed. Protected
-config/adoption/key state, fresh GCM, watchdog, clean transaction/locks and
-physical radio widths 20/40/80 MHz were verified.
+Main is accepted on `1fc317c`, version `1.2.5 dev`. The exact-commit updater
+and SSH runner exited 0 in 17.664 seconds. Independent checks verified protected
+config/adoption/key state, fresh GCM, watchdog, clean transaction/locks, physical
+radio widths 20/40/80 MHz and a 2.5 GbE Port 1 uplink. Noise/OBSS diagnostics are live.
+Reboot handling is disabled and no scan was run.
 
-UniFi shows Main on Cloud Gateway Max Port 1 at 2.5 GbE. Its upper-5-GHz width
-still displays 40 MHz and Main retains an extra configured Auto radio. Those
-controller-display issues remain open. Node was not accessed or changed by the
-accepted rollout; its last verified build remains `6224430`. New wireless
-features described below require separate deployment/live acceptance.
+UniFi's upper-5-GHz 40 MHz display and Main's extra configured Auto radio remain
+open. Asus signed-in visual/settings-save acceptance remains pending. Node was
+not accessed or changed; its last verified build remains `6224430`.
 
 See [audit state](docs/AUDIT_STATE.md) and [architecture](docs/ARCHITECTURE.md).
 
@@ -257,13 +254,14 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="$BUILD_FLAGS"
 * [x] **Automated In-WebUI Updates & Dual Tracks:** Instant release/dev update checks and one-click upgrades.
 * [x] **Cluster Mesh Synchronization:** Centralized AP configuration and binary propagation over SSH.
 
-### Parallel wireless-feature batch (source only)
+### Parallel wireless-feature batch (deployed to Main)
 
 The current dev batch adds semantic no-op settings saves (no bridge restart or
 node sync), bounded AP-local station-change history and passive RF trends in the
 Asus UI, host-resolved WLAN mapping refresh, default-off authenticated reboot
 dispatch, and an explicitly opted-in manual passive scan. These changes are
-**not deployed or live-accepted**; Main's accepted runtime remains `1f223432`.
+deployed to Main as `1fc317c`; runtime and passive metrics are verified. Browser
+acceptance, WLAN refresh setup and disruptive command/scan acceptance remain pending.
 See [the current feature batch](docs/AUDIT_STATE.md#20-parallel-wireless-feature-batch).
 
 WLAN discovery runs on a trusted host using `scripts/ops/wlan_mapping.py`.
