@@ -383,8 +383,9 @@ function initFormOnce(st) {
     if (document.form.unifibridge_interval) document.form.unifibridge_interval.value = String(st.interval_sec);
   }
 
-  if (st.controller_url) {
-    var isAuto = (st.controller_url === ("http://" + detectedGatewayIP + ":8080/inform"));
+  if (typeof st.auto_gateway === "boolean" || st.controller_url) {
+    var isAuto = typeof st.auto_gateway === "boolean" ? st.auto_gateway :
+      (st.controller_url === ("http://" + detectedGatewayIP + ":8080/inform"));
     var rad1 = document.getElementById("unifibridge_auto_1");
     var rad0 = document.getElementById("unifibridge_auto_0");
     if (rad1 && rad0) {
@@ -392,7 +393,7 @@ function initFormOnce(st) {
       rad0.checked = !isAuto;
       toggleControllerInput();
       if (!isAuto) {
-        document.getElementById("input_controller_url").value = st.controller_url;
+        document.getElementById("input_controller_url").value = st.controller_url || "";
       }
     }
   }

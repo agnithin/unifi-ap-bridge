@@ -10,7 +10,7 @@ import (
 
 func TestDisabledStatusPreservesInstalledIdentity(t *testing.T) {
 	dir := t.TempDir()
-	cfg := &Config{Enabled: false, Branch: "dev", Model: "U6IW", IntervalSec: 15, ControllerURL: "http://controller.test:8080/inform"}
+	cfg := &Config{Enabled: false, AutoGateway: true, Branch: "dev", Model: "U6IW", IntervalSec: 15, ControllerURL: "http://controller.test:8080/inform"}
 	if e := publishDisabledStatus(dir, cfg); e != nil {
 		t.Fatal(e)
 	}
@@ -20,7 +20,7 @@ func TestDisabledStatusPreservesInstalledIdentity(t *testing.T) {
 	if e := json.Unmarshal([]byte(body), &status); e != nil {
 		t.Fatal(e)
 	}
-	if status["enabled"] != false || status["running"] != false || status["branch"] != "dev" || status["model_code"] != "U6IW" || status["version"] != version {
+	if status["auto_gateway"] != true || status["enabled"] != false || status["running"] != false || status["branch"] != "dev" || status["model_code"] != "U6IW" || status["version"] != version {
 		t.Fatal("lost disabled configuration identity")
 	}
 }

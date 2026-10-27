@@ -32,6 +32,7 @@ type Config struct {
 	ControllerRebootEnabled bool              `json:"controller_reboot_enabled,omitempty"`
 	WlanMappingFile         string            `json:"wlan_mapping_file,omitempty"`
 	Enabled                 bool              `json:"enabled"`
+	AutoGateway             bool              `json:"auto_gateway"`
 	ControllerURL           string            `json:"controller_url"`
 	IntervalSec             int               `json:"interval_sec"`
 	Model                   string            `json:"model"`
@@ -137,6 +138,7 @@ func updateWebUIStatus(host *providers.HostInfo, modelProfile models.ModelProfil
 		"model_code":             modelProfile.ModelCode,
 		"firmware":               modelProfile.Firmware,
 		"controller_url":         cfg.ControllerURL,
+		"auto_gateway":           cfg.AutoGateway,
 		"interval_sec":           cfg.IntervalSec,
 		"adopted":                stateMgr.IsAdopted(),
 		"mode":                   string(stateMgr.GetMode()),

@@ -957,3 +957,16 @@ include text-only SSID rendering, actual driver bandwidth, mapping and disabled
 command status; backend fixtures pass 8/8, including no-op no-restart/no-sync.
 Final milestone/hosted status will be recorded below. Keep optional dangerous
 operations disabled pending concrete live acceptance decisions.
+
+**Settings follow-up:** status now publishes the configured `auto_gateway` boolean
+in running and disabled modes. The UI uses that explicit mode before legacy URL
+inference, so manual mode is preserved even when its URL equals the gateway URL.
+This prevents an apparently unchanged save from silently changing controller mode.
+Roaming scope includes both history and troubleshooting where firmware evidence
+supports them, per the operator's preference.
+
+**Published source checkpoint:** integrated milestone `1ba397237a113d2a7dea7d28dddc18fcf0c76e5e`
+passed hosted run [40435024311](https://github.com/agnithin/unifi-ap-bridge/actions/runs/40435024311),
+including dev publication. The controller-mode follow-up passed targeted Go race
+and UI regressions plus diff checks; its hosted result is tracked by the next dev
+commit. Neither milestone establishes live deployment or acceptance.

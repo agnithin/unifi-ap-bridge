@@ -119,6 +119,17 @@ context.initFormOnce({enabled:false,branch:'dev',model_code:'U6IW',interval_sec:
 assert.equal(node('unifibridge_enabled_1').checked,false);
 assert.equal(node('unifibridge_enabled_0').checked,true);
 console.log('Disabled UI regression passed: unrelated edits do not silently re-enable the service.');
+context.detectedGatewayIP='10.100.1.1';
+context.formInitialized=false;
+context.initFormOnce({auto_gateway:false,controller_url:'http://10.100.1.1:8080/inform'});
+assert.equal(node('unifibridge_auto_1').checked,false,'explicit manual mode must survive a URL matching the gateway');
+assert.equal(node('unifibridge_auto_0').checked,true);
+assert.equal(node('input_controller_url').value,'http://10.100.1.1:8080/inform');
+context.formInitialized=false;
+context.initFormOnce({auto_gateway:true,controller_url:''});
+assert.equal(node('unifibridge_auto_1').checked,true,'explicit auto mode must initialize even with an empty URL');
+console.log('Controller mode regression passed: explicit saved mode takes precedence over URL inference.');
+
 
 context.updateUI({running:true,pid:123,status_updated_at:1000,sample_fresh:false,sample_age_sec:12,enabled:true,branch:'dev',model_code:'U6IW',interval_sec:10});
 assert.match(node('bridge_status_text').textContent,/Telemetry sample stale \(12s old\)/);
