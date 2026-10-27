@@ -1,6 +1,6 @@
 # unifi-ap-bridge
 
-> **Current delivery status — 2026-10-27 PDT:** Both APs are accepted on `fe90aff` (v1.2.5 dev). Changed-settings/cluster save, Mac-only WLAN cache refresh and one real Main UniFi reboot passed. Three physical radios report20/40/80 MHz; the stale Auto row is resolved. Native radio utilization now reaches UniFi; bounded LAN packet capture passed a Main self-test. AirView now shows measured signal, airtime and retry averages for 2.4 GHz/lower 5 GHz. Upper 5 GHz history, interference and Locate remain pending. See [current audit state](docs/AUDIT_STATE.md).
+> **Current delivery status — 2026-10-27 PDT:** Main is accepted on `c5321a5` with compact radio naming; Node remains on `fe90aff` (v1.2.5 dev). Changed-settings/cluster save, Mac-only WLAN cache refresh and one real Main UniFi reboot passed. Three physical radios report20/40/80 MHz; the stale Auto row is resolved. Native radio utilization now reaches UniFi; bounded LAN packet capture passed a Main self-test. AirView now shows measured signal, airtime and retry averages for 2.4 GHz/lower 5 GHz. Main upper 5 GHz AirView history is now verified; Node migration, interference and Locate remain pending. See [current audit state](docs/AUDIT_STATE.md).
 
 A high-performance, ultra-lightweight standalone daemon and WebUI addon for **Asuswrt-Merlin** and Linux routers that bridges Broadcom Wi-Fi and switch telemetry into the **Ubiquiti UniFi Inform Protocol** (`:8080/inform`).
 
@@ -10,7 +10,7 @@ It emulates a genuine UniFi 6 Access Point—featuring native **UniFi 6 In-Wall 
 
 ## Current deployment
 
-Both APs are accepted on `fe90aff`, version `1.2.5 dev`, with protected state, fresh GCM, watchdogs and clean transactions. Main completed one real UniFi-triggered reboot and recovered its configuration, WLAN cache and daemon automatically. Reboot handling is enabled on both APs; Node's router was not rebooted for this test.
+Main is accepted on `c5321a5`, with `compact_radio_names: true`; Node remains accepted on `fe90aff`, version `1.2.5 dev`. Main was explicitly forgotten/re-adopted for the radio identity migration. Protected config/key/cache, fresh GCM, watchdog and clean transactions were verified; its old adoption state is retained privately. Main completed one real UniFi-triggered reboot and recovered its configuration, WLAN cache and daemon automatically. Reboot handling is enabled on both APs; Node's router was not rebooted for this test.
 
 Both APs report channels6/36/161 at20/40/80 MHz and the correct gateway ports. Main's extra Auto radio is gone after operator re-adoption. Passive scan retrieval passed, with driver result freshness explicitly unknown. Host tools correlate natural AP departure/arrival observations without claiming precise roaming latency. WLAN mapping refresh runs on demand from the Mac and both private caches are active; no new CT107 administrative access or timer is needed.
 
@@ -379,8 +379,8 @@ Asus **RF diagnostics & observed client changes** also separates neighboring WiF
 
 Run `python3 scripts/ops/radio_history.py --insecure` for this homelab's existing self-signed controller, or supply `--ca-file /path/on/CT107/ca.pem`. Certificate verification is the default. The helper uses the Mac's existing strict-host-verified SSH access through CT107, keeps the API key on CT107, and compares current radio measurements with UniFi's 24-hour history. It prints only per-AP aggregate radio summaries; it does not access the APs, change settings or run on a timer. `null` means unavailable. `history_summary_zero_with_active_clients` is an observation, not proof of its cause or a truly interference-free channel.
 
-### Prepared workaround for upper-radio AirView history
+### Accepted Main workaround for upper-radio AirView history
 
-The opt-in `compact_radio_names` config option uses `wifi-na1` for a second 5 GHz radio. It is **off by default** and remains off on both installed APs. UniFi 10.6.109 stores our existing upper-radio measurements, but its summary parser rejects metric names containing the extra hyphen in `wifi-na-1`. The compact identifier fits the observed parser contract.
+The opt-in `compact_radio_names` config option uses `wifi-na1` for a second 5 GHz radio. It is **off by default**, enabled and live-accepted on Main only; Node retains the legacy name. UniFi 10.6.109 stores our existing upper-radio measurements, but its summary parser rejects metric names containing the extra hyphen in `wifi-na-1`. The compact identifier fits the observed parser contract.
 
-Do not enable this on an adopted AP without a controlled controller identity migration: UniFi retains old radio rows, and an in-place rename API has not been established. This candidate has source/regression coverage, not live enabled acceptance. The option is local to each AP and is preserved by local settings saves and satellite synchronization. See the audit ledger for the prepared Main-only decision and history/restore limits.
+Do not enable this on an adopted AP without a controlled controller identity migration: UniFi retains old radio rows, and an in-place rename API has not been established. The approved Main-only forget/re-adoption produced exactly three radios and nonzero native upper-radio AirView traffic, signal and retry summaries. The option is local to each AP and is preserved by local settings saves and satellite synchronization. See the audit ledger for the accepted Main migration, retained backups and history/restore limits. Node requires its own migration decision; do not simply toggle the flag on its existing adoption.
