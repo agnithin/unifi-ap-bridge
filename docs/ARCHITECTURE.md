@@ -1,6 +1,6 @@
 # Architecture & Technical Reference
 
-> **Current delivery status — 2026-10-26 PDT:** Main is runtime-accepted on `c9eb275`, with fresh GCM and live passive RF metrics; Node remains untouched on last-verified `6224430`. Reboot dispatch is disabled and no scan was run. Asus diagnostics and unchanged-save acceptance passed; changed-save and controller display issues remain pending. See [the canonical live ledger](AUDIT_STATE.md#21-main-wireless-batch-deployment--2026-10-27-0403-utc).
+> **Current delivery status — 2026-10-26 PDT:** Main is runtime-accepted on `cd7bd64`, with fresh GCM and live passive RF metrics; Node remains untouched on last-verified `6224430`. Reboot dispatch is disabled and no scan was run. Asus diagnostics and unchanged-save acceptance passed; Main’s UniFi 80 MHz display is fixed; changed saves, stale-radio cleanup and Node rollout remain pending. See [the canonical live ledger](AUDIT_STATE.md#21-main-wireless-batch-deployment--2026-10-27-0403-utc).
 
 `unifi-ap-bridge` is a standalone, dependency-free daemon and WebUI extension engineered for Asuswrt-Merlin and Broadcom-based routers. It translates raw Linux and Broadcom wireless and switch telemetry into the Ubiquiti UniFi Inform protocol (`:8080/inform`).
 
@@ -243,3 +243,8 @@ passive-only flags, dwell/time/output caps and private results are enforced.
 Installed driver help supports the command syntax but not a reliable completion
 marker. Latest `scanresults` may predate the requested scan; source results retain
 that uncertainty. No capture utility was installed and no packet data collected.
+
+Radio capability reports include canonical `is_11ac` for 5 GHz radios, alongside
+legacy `has_vht`. Live Main acceptance proved this field enables UniFi’s 80 MHz
+control. The controller’s saved HT width still drives its overview display;
+operating driver telemetry alone does not overwrite that configured intent.

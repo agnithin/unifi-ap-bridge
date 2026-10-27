@@ -1,8 +1,8 @@
 # Audit State & Current Operations
 
-> **Current delivery status — 2026-10-26 PDT / 2026-10-27 04:03 UTC:** Main is deployed and runtime-accepted on `c9eb275995939b5e047edb22a38fe32cb8e69dc7` (v1.2.5 dev). Hosted validation and Main-only update passed; updater/SSH exited 0 in 17.777 seconds. Signed-in diagnostics and unchanged settings-save acceptance passed (Section 22). Fresh Active GCM, protected files, watchdog, clean transaction/locks, three physical radios at 20/40/80 MHz and a 2.5 GbE uplink were independently verified. Node was not accessed or changed; last verified build remains `6224430`. See Sections 21–22.
+> **Current delivery status — 2026-10-26 PDT / 2026-10-27 04:03 UTC:** Main is deployed and runtime-accepted on `cd7bd643280f8345377b2a36e4829716a09a6969` (v1.2.5 dev). Hosted validation and Main-only update passed; latest updater/SSH exited 0 in 17.690 seconds. Main's UniFi upper-band display is now accepted at 80 MHz (Section 23). Signed-in diagnostics and unchanged settings-save acceptance passed (Section 22). Fresh Active GCM, protected files, watchdog, clean transaction/locks, three physical radios at 20/40/80 MHz and a 2.5 GbE uplink were independently verified. Node was not accessed or changed; last verified build remains `6224430`. See Sections 21–22.
 
-**Pending:** Changed-settings apply/synchronization and controlled persistence checks; controller 40/80 display and stale Auto radio; operational WLAN refresh setup; live reboot/locate evidence and packet capture. Reboot handling remains disabled; no scan, router reboot, radio-setting or controller mutation was authorized or performed in this rollout.
+**Pending:** Changed-settings apply/synchronization and controlled persistence checks; stale Auto radio and Node's still-old capability/display behavior; operational WLAN refresh setup; live reboot/locate evidence and packet capture. Reboot handling remains disabled; no scan, router reboot, radio-setting or controller mutation was authorized or performed in this rollout.
 
 **Release track:** `dev`. No main merge or stable tag was created. Sections below preserve dated audit/recovery history; this header and the latest section describe current delivery.
 
@@ -934,7 +934,7 @@ capture. Existing live Main remains the accepted `1f223432`; Node was not touche
 
 | Requested item | New result | Remaining acceptance or evidence |
 |---|---|---|
-| UniFi 40/80 MHz display | Current read-only controller evidence still shows saved ht=40 and normalized bw=0 while physical driver/status says 80. Primary emulator protocol documents ht in radio_table but does not establish runtime bw ingestion. No speculative wire-field change was added. | Prepare a clearly scoped saved-controller-width change through supported UI/API and verify its readback separately. Do not call the earlier bw source addition a verified UniFi display fix. |
+| UniFi 40/80 MHz display | **Main resolved in Section 23:** canonical is_11ac reporting enabled UniFi’s normal 80 MHz control; saving upper-band width now displays 80 MHz in overview/detail and persists across informs. | Node still runs the old build and was not changed. Earlier bw-only source addition did not fix this UI path. |
 | Main extra Auto row | Read-only API/UI again confirm four configured groups, only three physical/runtime identities, and no UI per-radio delete affordance. | Removal semantics remain unknown after the prior ineffective PUT. No repeated write, database edit or forget/re-adopt is authorized. |
 | Asus settings save | Handler consumes a helper-local effective-change result and emits SAVED_NOOP without startup or peer sync on unchanged config. UI recognizes it. Integration caught and fixed a global-result race using per-call output instead. | Tests cover no-op side effects and custom-field preservation; live acceptance follows an approved deployment. Changed settings can still restart/synchronize as designed. |
 | Reboot/locate | Default-off cmd/reboot dispatcher is wired only to actual authenticated GCM replies for an adopted, non-bootstrap identity. It requires persistent hashed-ID deduplication before the fixed reboot executor; tests use fake executors. Sanitized command status is exposed. | Actual current controller command/XT8 reboot behavior is unverified. Locate/legacy shapes are observation-only; no known LED-control contract, firmware update or broad provisioning handler. |
@@ -1075,3 +1075,40 @@ cover the field. Live UI option and saved-width acceptance follow publication.
 The stale `wifi-ng-1` entry still has no supported per-radio delete control. The
 prior ineffective array-removal PUT has not been repeated. No database edit,
 forget/re-adoption, Node mutation or firmware scan is included in this work.
+
+### Published, deployed and accepted width correction — 2026-10-27 04:42–04:46 UTC
+
+Source `cd7bd643280f8345377b2a36e4829716a09a6969` passed provider/telemetry race
+tests and [hosted run 40451035925](https://github.com/agnithin/unifi-ap-bridge/actions/runs/40451035925).
+Verified ARMv7 archive SHA-256:
+`c110944b00d126ff1a9cea48fd2ed8e8d75d91dfe2e66c731b9c4fbd6ad422b6`.
+One exact-commit Main-only update exited 0 in 17.690 seconds. Private stage:
+`/tmp/unifi-main-radio-cap-1793076146037870000`; private local evidence:
+`/var/folders/94/c9cnfjw56nqby7p8y5h8s1s80000gn/T/unifi-main-radio-cap-okrop9u0/`.
+Updater checks verified config/state/key preservation and clean locks/journal.
+No recovery or Node update occurred.
+
+**Capability acceptance:** fresh controller reads show `is_11ac: true` on both
+5 GHz radios; the refreshed UniFi Settings panel now offers 20/40/80, previously
+only 20/40. This establishes that the missing canonical field caused the missing
+80 MHz control. Capability bitmaps remain unmodified.
+
+**Approved controller save:** after private 0700/0600 Main/Node radio baselines
+were created at `/run/unifi-main-width-d_6p4klv/` on identity-verified CT107, the
+normal Main Settings UI selected 80 only for the upper 5 GHz group and Apply
+Changes. Readback confirms `wifi-na-1.ht=80`; lower5 remains40 and both2.4 groups
+remain20. The UI also normalized HT strings to numbers and added its defaults
+`vwire_enabled:true`, `tx_power_mode:auto`, `min_rssi_enabled:false` on each row.
+These defaults were absent before; do not claim byte-for-byte table preservation.
+The save briefly entered normal provisioning (state5), then returned to state1,
+adopted and fresh. Subsequent informs retained the saved80. Main PID1237 remained
+healthy Active GCM on the exact candidate, physical radios 6/20,36/40,161/80 and
+uplink2500. Reboot handling is still disabled; no physical radio/mesh setting was
+applied by the bridge. Node's controller radio table matches its private baseline.
+
+**UI acceptance:** the device row and Main overview now show channel161 at80MHz.
+Screenshot `/tmp/unifi-main-80mhz-accepted.jpg` is local temporary evidence.
+The extra Auto2.4 row remains: four configured names vs three live identities.
+No second removal PUT, database edit, forget/re-adoption, AP reboot, scan or Node
+mutation was attempted. The supported stale-entry removal operation remains
+unproven; source reporting fixes must not be described as removing that record.

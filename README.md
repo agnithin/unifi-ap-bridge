@@ -1,6 +1,6 @@
 # unifi-ap-bridge
 
-> **Current delivery status — 2026-10-26 PDT:** Main is deployed and runtime-accepted on `c9eb275` (v1.2.5 dev), including the wireless diagnostics batch. Node remains untouched on last-verified `6224430`. Asus diagnostics and unchanged-save acceptance passed; changed-save and controller-display work remain pending. See [current audit state](docs/AUDIT_STATE.md).
+> **Current delivery status — 2026-10-26 PDT:** Main is deployed and runtime-accepted on `cd7bd64` (v1.2.5 dev), including the wireless diagnostics batch. Node remains untouched on last-verified `6224430`. Asus diagnostics and unchanged-save acceptance passed; changed-save, stale-radio cleanup and Node rollout remain pending. See [current audit state](docs/AUDIT_STATE.md).
 
 A high-performance, ultra-lightweight standalone daemon and WebUI addon for **Asuswrt-Merlin** and Linux routers that bridges Broadcom Wi-Fi and switch telemetry into the **Ubiquiti UniFi Inform Protocol** (`:8080/inform`).
 
@@ -10,14 +10,15 @@ It emulates a genuine UniFi 6 Access Point—featuring native **UniFi 6 In-Wall 
 
 ## Current deployment
 
-Main is accepted on `c9eb275`, version `1.2.5 dev`. The exact-commit updater
-and SSH runner exited 0 in 17.777 seconds. Independent checks verified protected
+Main is accepted on `cd7bd64`, version `1.2.5 dev`. The exact-commit updater
+and SSH runner exited 0 in 17.690 seconds. Independent checks verified protected
 config/adoption/key state, fresh GCM, watchdog, clean transaction/locks, physical
 radio widths 20/40/80 MHz and a 2.5 GbE Port 1 uplink. Noise/OBSS diagnostics are live.
 Reboot handling is disabled and no scan was run.
 
-UniFi's upper-5-GHz 40 MHz display and Main's extra configured Auto radio remain
-open. Signed-in diagnostics and unchanged-save acceptance passed without restart
+UniFi now displays Main's upper 5 GHz channel 161 at 80 MHz after canonical
+802.11ac capability reporting and a normal controller width save. Main's extra
+configured Auto radio remains open. Signed-in diagnostics and unchanged-save acceptance passed without restart
 or Node sync; changed-save acceptance remains pending. Node was
 not accessed or changed; its last verified build remains `6224430`.
 
@@ -261,7 +262,7 @@ The current dev batch adds semantic no-op settings saves (no bridge restart or
 node sync), bounded AP-local station-change history and passive RF trends in the
 Asus UI, host-resolved WLAN mapping refresh, default-off authenticated reboot
 dispatch, and an explicitly opted-in manual passive scan. These changes are
-deployed to Main as `c9eb275`; runtime, passive metrics, signed-in diagnostics and
+deployed to Main as `cd7bd64`; runtime, passive metrics, signed-in diagnostics and
 unchanged settings saves are verified. Changed saves, WLAN refresh setup and
 disruptive command/scan acceptance remain pending.
 See [the current feature batch](docs/AUDIT_STATE.md#20-parallel-wireless-feature-batch).
