@@ -1,7 +1,6 @@
 package inform
 
 import (
-	"crypto/sha256"
 	"sync"
 	"time"
 )
@@ -9,7 +8,6 @@ import (
 const (
 	rebootCommandCooldown   = 60 * time.Second
 	maxRememberedCommandIDs = 64
-	maxCommandIDLength      = 128
 )
 
 // RebootExecutor is called only for the fixed, allowlisted reboot action. A
@@ -36,25 +34,35 @@ type CommandDispatchResult struct {
 // RebootDispatcher supports only the current documented `cmd: reboot` action.
 // It is disabled by default and has no generic remote-execution path.
 type RebootDispatcher struct {
-	mu      sync.Mutex
-	enabled bool
-	execute RebootExecutor
-	lastRun time.Time
-	ids     map[[32]byte]struct{}
-	idOrder [][32]byte
+	mu          sync.Mutex
+	enabled     bool
+	execute     RebootExecutor
+	statePath   string
+	stateLoaded bool
+	stateErr    error
+	ids         map[[32]byte]struct{}
+	idOrder     [][32]byte
+	saveIDs     func(string, [][32]byte) error
+	lastRun     time.Time
 }
 
 // NewRebootDispatcher configures the opt-in, fixed reboot dispatcher. Pass
 // enabled=false by default. The executor is dependency-injected for safe tests.
-func NewRebootDispatcher(enabled bool, execute RebootExecutor) *RebootDispatcher {
-	return &RebootDispatcher{enabled: enabled, execute: execute, ids: make(map[[32]byte]struct{})}
+func NewRebootDispatcher(enabled bool, execute RebootExecutor, statePath ...string) *RebootDispatcher {
+	d := &RebootDispatcher{enabled: enabled, execute: execute, ids: make(map[[32]byte]struct{}), saveIDs: writeCommandIDState}
+	if len(statePath) == 1 {
+		d.statePath = statePath[0]
+	} else if enabled {
+		d.stateErr = errCommandIDStorePathRequired
+	}
+	return d
 }
 
 // Dispatch inspects a successfully decoded controller response. It never
 // handles locate or unknown commands. now is injectable for deterministic tests.
 func (d *RebootDispatcher) Dispatch(payload map[string]any, eligibility CommandEligibility, now time.Time) CommandDispatchResult {
 	result := CommandDispatchResult{Type: "cmd", Action: "reboot", Status: "ignored"}
-	if payload == nil || payload["_type"] != "cmd" || payload["cmd"] != "reboot" {
+	if payload == nil || payloadString(payload, "_type") != "cmd" || payloadString(payload, "cmd") != "reboot" {
 		return CommandDispatchResult{}
 	}
 	if !d.enabled {
@@ -68,12 +76,18 @@ func (d *RebootDispatcher) Dispatch(payload map[string]any, eligibility CommandE
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	requestID, hasID := boundedRequestID(payload["_id"])
-	if hasID {
-		if _, seen := d.ids[requestID]; seen {
-			result.Status = "duplicate"
-			return result
-		}
+	if err := d.loadIDs(); err != nil {
+		result.Status = "state_error"
+		return result
+	}
+	requestID, hasID := commandRequestID(payload["_id"])
+	if !hasID {
+		result.Status = "missing_id"
+		return result
+	}
+	if _, seen := d.ids[requestID]; seen {
+		result.Status = "duplicate"
+		return result
 	}
 	if !d.lastRun.IsZero() && now.Sub(d.lastRun) < rebootCommandCooldown {
 		result.Status = "cooldown"
@@ -84,12 +98,22 @@ func (d *RebootDispatcher) Dispatch(payload map[string]any, eligibility CommandE
 		return result
 	}
 
-	// Reserve before invoking the executor so a repeated response cannot start
-	// a second reboot if the first invocation returns an error or races a retry.
-	d.lastRun = now
-	if hasID {
-		d.rememberID(requestID)
+	// Persist before invoking the executor so a physical reboot cannot erase
+	// the deduplication record while the controller still has this reply queued.
+	nextOrder := append(append([][32]byte(nil), d.idOrder...), requestID)
+	if len(nextOrder) > maxRememberedCommandIDs {
+		nextOrder = nextOrder[len(nextOrder)-maxRememberedCommandIDs:]
 	}
+	if err := d.saveIDs(d.statePath, nextOrder); err != nil {
+		result.Status = "state_error"
+		return result
+	}
+	d.idOrder = nextOrder
+	d.ids = make(map[[32]byte]struct{}, len(nextOrder))
+	for _, id := range nextOrder {
+		d.ids[id] = struct{}{}
+	}
+	d.lastRun = now
 	if err := d.execute(); err != nil {
 		result.Status = "failed"
 		return result
@@ -98,19 +122,7 @@ func (d *RebootDispatcher) Dispatch(payload map[string]any, eligibility CommandE
 	return result
 }
 
-func boundedRequestID(value any) ([32]byte, bool) {
-	s, ok := value.(string)
-	if !ok || len(s) == 0 || len(s) > maxCommandIDLength {
-		return [32]byte{}, false
-	}
-	return sha256.Sum256([]byte(s)), true
-}
-
-func (d *RebootDispatcher) rememberID(id [32]byte) {
-	if len(d.idOrder) == maxRememberedCommandIDs {
-		delete(d.ids, d.idOrder[0])
-		d.idOrder = d.idOrder[1:]
-	}
-	d.ids[id] = struct{}{}
-	d.idOrder = append(d.idOrder, id)
+func payloadString(payload map[string]any, key string) string {
+	value, _ := payload[key].(string)
+	return value
 }
