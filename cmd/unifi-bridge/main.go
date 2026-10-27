@@ -400,6 +400,7 @@ func main() {
 		}
 
 		telemetry.AssignRadioStationCounts(radioStats, vaps)
+		telemetry.AttachRadioDriverStats(radios, radioStats)
 		stationTimeline.Observe(vaps, sample.CompletedAt, true)
 		health.StationEvents = stationTimeline.Events()
 		_, radioFailed := sample.StageErrors["radio_stats"]

@@ -59,23 +59,34 @@ type VAP struct {
 	StaTable      []Station `json:"sta_table"`
 }
 
+// RadioDriverStats is the native radio_table[].athstats wire projection.
+// Only measured utilization/noise is included; no Atheros counters are invented.
+type RadioDriverStats struct {
+	Name       string `json:"name"`
+	CuTotal    int    `json:"cu_total"`
+	CuSelfRx   int    `json:"cu_self_rx"`
+	CuSelfTx   int    `json:"cu_self_tx"`
+	NoiseFloor *int   `json:"noise_floor,omitempty"`
+}
+
 type Radio struct {
-	Name           string `json:"name"`
-	Radio          string `json:"radio"` // "ng" or "na"
-	Channel        int    `json:"channel"`
-	HT             string `json:"ht,omitempty"`
-	Nss            int    `json:"nss,omitempty"`
-	MaxTxPower     int    `json:"max_txpower,omitempty"`
-	MinTxPower     int    `json:"min_txpower,omitempty"`
-	BuiltinAntenna bool   `json:"builtin_antenna"`
-	Is11ax         bool   `json:"is_11ax"`
-	Is11ac         bool   `json:"is_11ac,omitempty"`
-	HasHE          bool   `json:"has_he"`
-	HasVHT         bool   `json:"has_vht,omitempty"`
-	TxPowerMode    string `json:"tx_power_mode,omitempty"`
-	CuTotal        int    `json:"cu_total"`   // Total channel utilization % (0-100)
-	CuSelfRx       int    `json:"cu_self_rx"` // AP receive airtime % (0-100)
-	CuSelfTx       int    `json:"cu_self_tx"` // AP transmit airtime % (0-100)
+	DriverStats    *RadioDriverStats `json:"athstats,omitempty"`
+	Name           string            `json:"name"`
+	Radio          string            `json:"radio"` // "ng" or "na"
+	Channel        int               `json:"channel"`
+	HT             string            `json:"ht,omitempty"`
+	Nss            int               `json:"nss,omitempty"`
+	MaxTxPower     int               `json:"max_txpower,omitempty"`
+	MinTxPower     int               `json:"min_txpower,omitempty"`
+	BuiltinAntenna bool              `json:"builtin_antenna"`
+	Is11ax         bool              `json:"is_11ax"`
+	Is11ac         bool              `json:"is_11ac,omitempty"`
+	HasHE          bool              `json:"has_he"`
+	HasVHT         bool              `json:"has_vht,omitempty"`
+	TxPowerMode    string            `json:"tx_power_mode,omitempty"`
+	CuTotal        int               `json:"cu_total"`   // Total channel utilization % (0-100)
+	CuSelfRx       int               `json:"cu_self_rx"` // AP receive airtime % (0-100)
+	CuSelfTx       int               `json:"cu_self_tx"` // AP transmit airtime % (0-100)
 }
 
 type RadioStat struct {

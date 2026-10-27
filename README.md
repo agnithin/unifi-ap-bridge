@@ -277,7 +277,7 @@ Reboot support requires `controller_reboot_enabled: true` and an adopted,
 non-bootstrap authenticated GCM session. Only the observed top-level `reboot` and supported `cmd/reboot` shapes
 with a request ID can run the fixed `/sbin/reboot` operation. A private command-ID
 state file alongside adoption state prevents repeated IDs across process/AP
-restarts. Default is off; live command/firmware acceptance is pending. Locate
+restarts. Default is off in source; the feature is enabled on both installed APs and Main's real UniFi reboot passed. Locate
 and legacy command shapes can be observed as sanitized metadata but do not
 control LEDs or execute arbitrary commands.
 
@@ -292,9 +292,7 @@ The operation uses 100 ms passive/home dwell, an explicit channel list, a
 10-second command deadline and a 16 KiB output cap. It prints only the path to a
 mode-0600 JSON result in RAM. The driver starts scans asynchronously, so the
 deadline bounds command execution, not proven firmware completion; returned
-scan-results freshness is explicitly unknown. No scan or packet capture has
-been run for acceptance. Packet capture remains unavailable without a supported
-capture tool; Main's read-only inventory did not find `tcpdump`.
+scan-results freshness is explicitly unknown. Main scan retrieval passed, with result age still unknown. No live packet capture has been performed; inspected firmware has no `tcpdump`.
 
 ### Host roaming correlation and bounded command diagnostics
 
