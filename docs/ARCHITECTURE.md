@@ -1,6 +1,6 @@
 # Architecture & Technical Reference
 
-> **Current delivery status — 2026-10-26 PDT:** Main is runtime-accepted on `1fc317c`, with fresh GCM and live passive RF metrics; Node remains untouched on last-verified `6224430`. Reboot dispatch is disabled and no scan was run. Asus browser/settings acceptance and controller display issues remain pending. See [the canonical live ledger](AUDIT_STATE.md#21-main-wireless-batch-deployment--2026-10-27-0403-utc).
+> **Current delivery status — 2026-10-26 PDT:** Main is runtime-accepted on `c9eb275`, with fresh GCM and live passive RF metrics; Node remains untouched on last-verified `6224430`. Reboot dispatch is disabled and no scan was run. Asus diagnostics and unchanged-save acceptance passed; changed-save and controller display issues remain pending. See [the canonical live ledger](AUDIT_STATE.md#21-main-wireless-batch-deployment--2026-10-27-0403-utc).
 
 `unifi-ap-bridge` is a standalone, dependency-free daemon and WebUI extension engineered for Asuswrt-Merlin and Broadcom-based routers. It translates raw Linux and Broadcom wireless and switch telemetry into the Ubiquiti UniFi Inform protocol (`:8080/inform`).
 

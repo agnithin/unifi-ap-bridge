@@ -1,8 +1,8 @@
 # Audit State & Current Operations
 
-> **Current delivery status — 2026-10-26 PDT / 2026-10-27 04:03 UTC:** Main is deployed and runtime-accepted on `1fc317ce6a1fa3b17ff31820452c787002bf932c` (v1.2.5 dev). The exact-SHA hosted build passed. Main-only updater/SSH exit was 0 in 17.664 seconds. Fresh Active GCM, protected files, watchdog, clean transaction/locks, three physical radios at 20/40/80 MHz and a 2.5 GbE uplink were independently verified. Node was not accessed or changed; last verified build remains `6224430`. See Section 21.
+> **Current delivery status — 2026-10-26 PDT / 2026-10-27 04:03 UTC:** Main is deployed and runtime-accepted on `c9eb275995939b5e047edb22a38fe32cb8e69dc7` (v1.2.5 dev). Hosted validation and Main-only update passed; updater/SSH exited 0 in 17.777 seconds. Signed-in diagnostics and unchanged settings-save acceptance passed (Section 22). Fresh Active GCM, protected files, watchdog, clean transaction/locks, three physical radios at 20/40/80 MHz and a 2.5 GbE uplink were independently verified. Node was not accessed or changed; last verified build remains `6224430`. See Sections 21–22.
 
-**Pending:** Asus signed-in settings-save/browser acceptance; controlled persistence checks; controller 40/80 display and stale Auto radio; operational WLAN refresh setup; live reboot/locate evidence and packet capture. Reboot handling remains disabled; no scan, router reboot, radio-setting or controller mutation was authorized or performed in this rollout.
+**Pending:** Changed-settings apply/synchronization and controlled persistence checks; controller 40/80 display and stale Auto radio; operational WLAN refresh setup; live reboot/locate evidence and packet capture. Reboot handling remains disabled; no scan, router reboot, radio-setting or controller mutation was authorized or performed in this rollout.
 
 **Release track:** `dev`. No main merge or stable tag was created. Sections below preserve dated audit/recovery history; this header and the latest section describe current delivery.
 
@@ -1022,3 +1022,34 @@ retest follows exact-SHA publication/deployment; no success is claimed yet.
 The page's intermittent partial-telemetry indicator corresponded to
 `lldp: unavailable`; serving-radio telemetry and GCM remained healthy. This is a
 separate diagnostic limitation, not a reason to restart or alter radios.
+
+## 22. Settings Transport Fix and Live No-op Acceptance — 2026-10-27 04:17–04:20 UTC
+
+Candidate `c9eb275995939b5e047edb22a38fe32cb8e69dc7` passed
+[hosted run 40448738294](https://github.com/agnithin/unifi-ap-bridge/actions/runs/40448738294)
+and published exact-SHA bundles. ARMv7 archive SHA-256:
+`3865593da77ff9e3bb739209a4b39c091fb2224a3ae1b2a9a7233371e81ee88f`.
+Archive digest, release metadata, sidecar and unchanged candidate updater bytes
+were verified locally. One exact-commit Main-only deployment exited 0 in 17.777
+seconds, with private backup stage `/tmp/unifi-main-settings-1793074649122565000`.
+No recovery, Node deployment or propagation occurred. Local private evidence:
+`/var/folders/94/c9cnfjw56nqby7p8y5h8s1s80000gn/T/unifi-main-settings-9byn631u/`.
+
+After reloading the signed-in page, its unchanged configuration was submitted
+through Apply Settings. The UI returned **Settings already match; no service or
+node changes were needed**, then re-enabled the button. PID stayed 17889 before
+and after, the cluster-sync log remained absent, protected config/state/key bytes
+matched private predeployment copies, and mutation/update/start locks and the
+transaction journal remained absent. Fresh Active GCM and radio widths 20/40/80
+were independently reconfirmed. No software rollback or extra retry was needed.
+
+**Accepted:** signed-in diagnostics render the three real radio widths, noise,
+OBSS, recent RF trends, AP-local client-change history, mapping mode and disabled
+reboot state. The firmware-compatible settings transport and semantic no-op save
+now have live acceptance. Screenshot: `/tmp/unifi-asus-settings-accepted.jpg`
+(local temporary evidence, not committed). **Still pending:** a changed save
+and its restart/sync outcomes, controlled persistence/recovery, the UniFi width
+and phantom-radio issues, automatic WLAN publication and disruptive features.
+Node was not directly accessed or changed; the page displayed its existing
+`6224430` build. No scan, packet capture, physical reboot, controller write or
+Asus radio-setting change was performed.
