@@ -294,6 +294,18 @@ mode-0600 JSON result in RAM. The driver starts scans asynchronously, so the
 deadline bounds command execution, not proven firmware completion; returned
 scan-results freshness is explicitly unknown. Main scan retrieval passed, with result age still unknown. No live packet capture has been performed; inspected firmware has no `tcpdump`.
 
+### Optional LAN packet capture
+
+The dev CLI can write a short Ethernet PCAP without `tcpdump`. It requires Linux root/CAP_NET_RAW, the existing `br0` bridge and an explicit exact client MAC. It never enables promiscuous or wireless monitor mode. Visibility is limited to Ethernet frames the existing bridge/socket exposes; hardware offload or forwarded traffic may bypass it. This is not an RF scan or a full Wi-Fi management-frame capture.
+
+```sh
+/tmp/unifi-bridge/unifi-bridge -packet-capture-client AA:BB:CC:DD:EE:02 \
+  -packet-capture-seconds 5 -packet-capture-packets 100 \
+  -packet-capture-snaplen 128 -allow-packet-capture
+```
+
+Replace the example with the intended device's unicast MAC. Maximums are10 seconds,100 matching packets,128 bytes per packet and32KiB per file. The result is a private0600 `/tmp/unifi-bridge-packet-*.pcap`; stdout prints its path only. The file can contain packet contents, so keep it private. Truncated PCAP records retain their original wire length. Nothing runs automatically in the daemon, and no capture is uploaded. Source tests and ARMv7/ARM64 compile checks passed; live acceptance is tracked separately in the ledger.
+
 ### Host roaming correlation and bounded command diagnostics
 
 `go run ./cmd/roam-correlator -ap Main=/private/main-status.js -ap Node=/private/node-status.js -window 90s`

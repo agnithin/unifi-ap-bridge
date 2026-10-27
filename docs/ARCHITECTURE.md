@@ -243,3 +243,9 @@ Radio capability reports include canonical `is_11ac` for 5 GHz radios, alongside
 legacy `has_vht`. Live Main acceptance proved this field enables UniFi’s 80 MHz
 control. The controller’s saved HT width still drives its overview display;
 operating driver telemetry alone does not overwrite that configured intent.
+
+### Native radio utilization and optional LAN PCAP
+
+Native inform utilization is projected into `radio_table[].athstats` with exact physical identity/channel matching; REST-shaped top-level tables alone were ignored by the live controller for these measurements. Main canary ingestion now retains nonzero `cu_total/cu_self_rx/cu_self_tx`; historical AirView averages and retry denominators are separate acceptance gates. No interference or Atheros retry counters are fabricated.
+
+The optional capture CLI uses Linux AF_PACKET bound only to existing `br0`, with a mandatory exact unicast MAC source/destination filter. It makes no promiscuous/monitor-mode or radio changes. A bounded receive timeout enforces cancellation/deadline; packet/time/snaplen/file caps constrain memory and disk use. MSG_TRUNC preserves original lengths in Ethernet PCAP records. Files are private0600 RAM artifacts; failures remove the partial artifact. The non-Linux implementation returns unsupported. Bridge visibility/hardware-offload limits mean a valid empty PCAP does not prove a client sent no traffic. No automatic capture or upload exists.

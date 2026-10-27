@@ -218,6 +218,11 @@ func main() {
 	rfScanInterface := flag.String("rf-scan-interface", "", "Run one manual passive RF scan on this wireless interface")
 	rfScanChannels := flag.String("rf-scan-channels", "", "Explicit comma-separated channels for the manual passive scan")
 	rfScanAllowed := flag.Bool("allow-disruptive-rf-scan", false, "Explicitly allow a serving-radio scan that may interrupt clients")
+	packetCaptureClient := flag.String("packet-capture-client", "", "Capture bounded Ethernet frames for this exact client MAC on br0")
+	packetCaptureSeconds := flag.Int("packet-capture-seconds", 5, "Packet capture duration (maximum 10 seconds)")
+	packetCapturePackets := flag.Int("packet-capture-packets", 100, "Maximum matching packets (maximum 100)")
+	packetCaptureSnapLen := flag.Int("packet-capture-snaplen", 128, "Maximum bytes per packet (maximum 128)")
+	packetCaptureAllowed := flag.Bool("allow-packet-capture", false, "Explicitly allow a short private LAN packet capture")
 
 	dumpFlag := flag.Bool("dump", false, "Dump rendered inform JSON payload to stdout")
 	versionFlag := flag.Bool("version", false, "Print version information and exit")
@@ -226,6 +231,31 @@ func main() {
 
 	if *versionFlag {
 		fmt.Printf("unifi-bridge %s (commit: %s, built: %s)\n", version, commit, buildDate)
+		return
+	}
+
+	packetCaptureRequested := false
+	flag.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "packet-capture-client", "packet-capture-seconds", "packet-capture-packets", "packet-capture-snaplen", "allow-packet-capture":
+			packetCaptureRequested = true
+		}
+	})
+	if packetCaptureRequested {
+		if *applySettingsFlag || *syncSettingsFlag || *onceFlag || *dumpFlag || *rfScanInterface != "" || *rfScanChannels != "" || *rfScanAllowed {
+			log.Fatal("LAN packet capture cannot be combined with daemon, settings or RF-scan actions")
+		}
+		if *packetCaptureClient == "" {
+			log.Fatal("-packet-capture-client is required")
+		}
+		if *packetCaptureSeconds < 1 || *packetCaptureSeconds > 10 {
+			log.Fatal("-packet-capture-seconds must be between 1 and 10")
+		}
+		path, err := runPacketCaptureCLI(*packetCaptureClient, time.Duration(*packetCaptureSeconds)*time.Second, *packetCapturePackets, *packetCaptureSnapLen, *packetCaptureAllowed, nil)
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("packet_capture_result=%s\n", path)
 		return
 	}
 
