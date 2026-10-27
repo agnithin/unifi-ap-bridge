@@ -1053,3 +1053,25 @@ and phantom-radio issues, automatic WLAN publication and disruptive features.
 Node was not directly accessed or changed; the page displayed its existing
 `6224430` build. No scan, packet capture, physical reboot, controller write or
 Asus radio-setting change was performed.
+
+## 23. UniFi Width Capability and Stale Radio Follow-up
+
+Operator approved correcting Main's upper-5-GHz saved width and investigating
+supported stale-radio removal. Fresh controller reads still show four configured
+names but three live radios. Both configured 5 GHz widths are 40, all reported
+capability bitmaps are zero, and the signed-in UI offers only 20/40 MHz for both
+5 GHz groups. The bridge already sends actual HT80 from the driver without a
+controller-table override; no extra packet capture is necessary to establish
+that source path.
+
+A concrete schema omission is fixed: `radio_table.is_11ac` is now emitted from
+the existing 5 GHz VHT capability determination (false on 2.4 GHz, true on both
+5 GHz radios). Existing `has_vht` remains for compatibility. The recognized field
+is present in [Unpoller's primary schema](https://github.com/unpoller/unifi/blob/master/uap.go).
+No capability bitmap was guessed, no 160 MHz capability was added, and no physical
+radio setting is changed by this reporting addition. Provider and wire regressions
+cover the field. Live UI option and saved-width acceptance follow publication.
+
+The stale `wifi-ng-1` entry still has no supported per-radio delete control. The
+prior ineffective array-removal PUT has not been repeated. No database edit,
+forget/re-adoption, Node mutation or firmware scan is included in this work.

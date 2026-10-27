@@ -69,6 +69,7 @@ type Radio struct {
 	MinTxPower     int    `json:"min_txpower,omitempty"`
 	BuiltinAntenna bool   `json:"builtin_antenna"`
 	Is11ax         bool   `json:"is_11ax"`
+	Is11ac         bool   `json:"is_11ac,omitempty"`
 	HasHE          bool   `json:"has_he"`
 	HasVHT         bool   `json:"has_vht,omitempty"`
 	TxPowerMode    string `json:"tx_power_mode,omitempty"`

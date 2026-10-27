@@ -879,7 +879,8 @@ func TestTriBandParentIdentityAndWidth(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if len(radios) != 3 || radios[1].HT != "40" || radios[2].HT != "80" || radios[1].Nss != 2 || radios[2].Nss != 4 {
+	if len(radios) != 3 || radios[1].HT != "40" || radios[2].HT != "80" || radios[1].Nss != 2 || radios[2].Nss != 4 ||
+		radios[0].Is11ac || !radios[1].Is11ac || !radios[2].Is11ac {
 		t.Fatalf("bad radio inventory: %+v", radios)
 	}
 	vaps, e := p.GetVAPs(nil)

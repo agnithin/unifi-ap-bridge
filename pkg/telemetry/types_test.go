@@ -24,7 +24,7 @@ func TestUnknownVAPCountersAndVLANAreOmitted(t *testing.T) {
 // Runtime bw must remain a numeric driver measurement in the inform payload.
 func TestOperatingWidthIsIndependentOfConfiguredWidth(t *testing.T) {
 	payload := InformPayload{
-		RadioTable:      []Radio{{Name: "wifi-na-1", Radio: "na", Channel: 161, HT: "40"}},
+		RadioTable:      []Radio{{Name: "wifi-na-1", Radio: "na", Channel: 161, HT: "40", Is11ac: true}},
 		RadioTableStats: []RadioStat{{Name: "wifi-na-1", Channel: 161, Bandwidth: 80}},
 	}
 	data, err := json.Marshal(payload)
@@ -33,7 +33,8 @@ func TestOperatingWidthIsIndependentOfConfiguredWidth(t *testing.T) {
 	}
 	var decoded struct {
 		Radios []struct {
-			HT string `json:"ht"`
+			HT     string `json:"ht"`
+			Is11ac bool   `json:"is_11ac"`
 		} `json:"radio_table"`
 		Stats []struct {
 			Bandwidth int `json:"bw"`
@@ -44,7 +45,7 @@ func TestOperatingWidthIsIndependentOfConfiguredWidth(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(decoded.Radios) != 1 || len(decoded.Stats) != 1 ||
-		decoded.Radios[0].HT != "40" || decoded.Stats[0].Bandwidth != 80 || decoded.Stats[0].Channel != 161 {
+		decoded.Radios[0].HT != "40" || !decoded.Radios[0].Is11ac || decoded.Stats[0].Bandwidth != 80 || decoded.Stats[0].Channel != 161 {
 		t.Fatalf("configured width replaced or runtime width missing: %s", data)
 	}
 	data, err = json.Marshal(RadioStat{Name: "unavailable"})
