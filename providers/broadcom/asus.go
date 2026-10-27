@@ -210,6 +210,12 @@ func (p *AsusProvider) Collect(ctx context.Context, mapping map[string]string) (
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	// Enrich local diagnostics only after every required sample stage has
+	// completed, so optional driver commands cannot starve core telemetry.
+	p.enrichCCAInterferenceContext(ctx, sample.RadioStats)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	sample.CompletedAt = time.Now()
 	return sample, nil
 }

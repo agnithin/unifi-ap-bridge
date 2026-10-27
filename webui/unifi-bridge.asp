@@ -459,7 +459,8 @@ function updateDiagnosticsUI(st) {
       appendDiagnosticRow(radioBody, [diagnosticCellText(radio.name), diagnosticNumber(radio.channel, ""),
         diagnosticNumber(radio.bw, " MHz"), diagnosticNumber(radio.cu_total, "%"),
         diagnosticNumber(radio.cu_obss, "%"), diagnosticNumber(radio.cu_nocat, "%"),
-        diagnosticNumber(radio.cu_nopkt, "%"), diagnosticNumber(radio.noise_dbm, " dBm"),
+        diagnosticNumber(radio.cu_nopkt, "%"), diagnosticNumber(radio.cca_interference, "%"),
+        diagnosticNumber(radio.noise_dbm, " dBm"),
         mean === null ? "Collecting samples" : diagnosticNumber(mean, "%")]);
     }
     if (!radios.length) appendDiagnosticRow(radioBody, ["Waiting for a successful radio sample"]);
@@ -1027,9 +1028,9 @@ function initial(){
 
                     <details style="margin-bottom:12px; padding:10px; background:#263238; border-radius:6px;">
                       <summary style="cursor:pointer; font-weight:bold;">RF diagnostics &amp; observed client changes</summary>
-                      <p style="color:#bdc3c7; font-size:11px;">Passive serving-radio measurements. Other WiFi is traffic from neighboring WiFi networks. Bad-frame/control activity includes damaged frames and some control traffic; noise-like activity is reported separately by the radio. These measurements are not additive and do not identify the source of interference. UniFi Avg. Interference is unavailable; 0% there does not mean no interference. Missing measurements appear as dashes. Trends cover recent successful samples.</p>
+                      <p style="color:#bdc3c7; font-size:11px;">Passive serving-radio measurements. Other WiFi is traffic from neighboring WiFi networks. Bad-frame/control activity includes damaged frames and some control traffic; noise-like activity and the driver-reported non-WiFi CCA interference sample are separate measurements. CCA sample age is unknown. These measurements are not additive and do not identify the source of interference. This CCA value is not UniFi Avg. Interference; equivalence is unproven. A 0% UniFi value does not mean no interference. Missing measurements appear as dashes. Trends cover recent successful samples.</p>
                       <table width="100%" style="font-size:11px; text-align:left;">
-                        <thead><tr><th>Radio</th><th>Channel</th><th>Actual width</th><th>Busy</th><th>Other WiFi (OBSS)</th><th>Bad frames / control</th><th>Noise-like activity</th><th>Noise floor</th><th>Mean busy</th></tr></thead>
+                        <thead><tr><th>Radio</th><th>Channel</th><th>Actual width</th><th>Busy</th><th>Other WiFi (OBSS)</th><th>Bad frames / control</th><th>Noise-like activity</th><th>Non-WiFi CCA interference (age unknown)</th><th>Noise floor</th><th>Mean busy</th></tr></thead>
                         <tbody id="rf_diagnostics_rows"></tbody>
                       </table>
                       <p style="color:#bdc3c7; font-size:11px;">AP-local observations, held in RAM. Times and gaps reflect polling; departures do not identify the next AP or a disconnect reason.</p>

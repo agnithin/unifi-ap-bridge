@@ -485,7 +485,7 @@ func main() {
 			DefaultKey:      !adopted,
 			CfgVersion:      stateMgr.GetCfgVersion(),
 			RadioTable:      radios,
-			RadioTableStats: radioStats,
+			RadioTableStats: telemetry.RadioStatsForInform(radioStats),
 			VAPTable:        vaps,
 			EthernetTable:   ethTable,
 			InterfaceTable:  telemetry.BuildInterfaceTable(ports, ethTable, uplink),

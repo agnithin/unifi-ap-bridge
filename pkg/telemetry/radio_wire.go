@@ -1,5 +1,20 @@
 package telemetry
 
+// RadioStatsForInform removes fields that are local diagnostics and must not
+// be sent to the controller. The returned slice is a copy so local status
+// retains the complete sample.
+func RadioStatsForInform(stats []RadioStat) []RadioStat {
+	if stats == nil {
+		return nil
+	}
+	result := make([]RadioStat, len(stats))
+	copy(result, stats)
+	for i := range result {
+		result[i].CCAInterference = nil
+	}
+	return result
+}
+
 // AttachRadioDriverStats supplies the native nested inform location consumed
 // by the controller, in addition to radio_table_stats used by local status.
 // Identity matching is exact: two 5 GHz radios must never share measurements.

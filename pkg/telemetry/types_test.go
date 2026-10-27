@@ -76,3 +76,47 @@ func TestOperatingWidthIsIndependentOfConfiguredWidth(t *testing.T) {
 		t.Fatalf("unknown bandwidth reported as a measurement: %s", data)
 	}
 }
+
+func TestCCAInterferenceStaysInLocalStatusAndIsOmittedFromInform(t *testing.T) {
+	measured := 4
+	stats := []RadioStat{{Name: "wifi-ng", Channel: 6, CCAInterference: &measured}}
+	local, err := json.Marshal(map[string]any{"radio_stats": stats})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(local), `"cca_interference":4`) {
+		t.Fatalf("local status omitted measured CCA interference: %s", local)
+	}
+	payload, err := json.Marshal(InformPayload{RadioTableStats: RadioStatsForInform(stats)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(payload), "cca_interference") || strings.Contains(string(payload), "cu_interf") {
+		t.Fatalf("local CCA diagnostic leaked into inform payload: %s", payload)
+	}
+	if stats[0].CCAInterference == nil || *stats[0].CCAInterference != measured {
+		t.Fatal("inform projection mutated local status sample")
+	}
+}
+
+func TestRadioStatsForInformPreservesNilAndEmptySlices(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		input []RadioStat
+		want  string
+	}{
+		{name: "nil", input: nil, want: `"radio_table_stats":null`},
+		{name: "empty", input: []RadioStat{}, want: `"radio_table_stats":[]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := InformPayload{RadioTableStats: RadioStatsForInform(tc.input)}
+			data, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(data), tc.want) {
+				t.Fatalf("payload = %s, want %s", data, tc.want)
+			}
+		})
+	}
+}

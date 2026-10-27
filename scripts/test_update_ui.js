@@ -208,7 +208,7 @@ console.log('Action UI regressions passed: request IDs, background settings/sync
 
 // Diagnostic data is rendered as text, including untrusted SSIDs/client labels.
 context.updateDiagnosticsUI({
- radio_stats:[{name:"wifi-na-1",channel:161,bw:80,cu_total:35,cu_obss:12,cu_nocat:8,cu_nopkt:6,noise_dbm:-91}],
+ radio_stats:[{name:"wifi-na-1",channel:161,bw:80,cu_total:35,cu_obss:12,cu_nocat:8,cu_nopkt:6,cca_interference:0,noise_dbm:-91}],
  passive_rf_trends:[{radio:"wifi-na-1",mean_busy_percent:30}],
  station_events:[{type:"observed_radio_change",observed_at:"2026-10-26T00:00:00Z",mac:"fixture-client",essid:"<img onerror=1>",physical_radio:"wifi-na-1",previous_physical_radio:"wifi-na",signal:-65,signal_known:true,poll_gap_seconds:10}],
  wlan_mapping:{entries:2,file_enabled:true},
@@ -217,10 +217,12 @@ context.updateDiagnosticsUI({
 assert.equal(node("rf_diagnostics_rows").children[0].children[2].textContent,"80 MHz");
 assert.equal(node("rf_diagnostics_rows").children[0].children[5].textContent,"8%");
 assert.equal(node("rf_diagnostics_rows").children[0].children[6].textContent,"6%");
+assert.equal(node("rf_diagnostics_rows").children[0].children[7].textContent,"0%","measured zero CCA interference must remain visible");
 assert.equal(node("station_event_rows").children[0].children[3].textContent,"<img onerror=1>");
 assert.equal(node("station_event_rows").children[0].children[3].children.length,0);
 assert.match(node("controller_command_status").textContent,/Disabled/);
 assert.match(node("wlan_mapping_status").textContent,/2 SSID mappings/);
 context.updateDiagnosticsUI({radio_stats:[{name:"wifi-na-1",channel:161,bw:80,cu_total:35}]});
 assert.equal(node("rf_diagnostics_rows").children[0].children[5].textContent,"-","unknown CCA category must not render as zero");
+assert.equal(node("rf_diagnostics_rows").children[0].children[7].textContent,"-","unknown CCA interference must render as dash");
 console.log("RF and station diagnostic rendering passed: actual width, bounded text-only rows and opt-in command status.");

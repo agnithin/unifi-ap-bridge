@@ -258,7 +258,7 @@ Native `avg_client_signal` is a rounded arithmetic dBm mean of a complete curren
 
 ### Separate passive CCA categories
 
-The optional local `radio_stats` fields `cu_nocat` and `cu_nopkt` preserve the firmware's named, validated 0–100 percent columns. Broadcom defines `nocat` as bad-FCS plus some control-frame activity and `nopkt` as invalid-PLCP/CRS noise-like activity. They remain separate from OBSS and noise-floor dBm; no sum, inferred non-Wi-Fi classification or native UniFi interference mapping is supplied. Asus RF diagnostics display unavailable fields as dashes.
+The optional local `radio_stats` fields `cu_nocat` and `cu_nopkt` preserve the firmware's named, validated 0–100 percent columns. Broadcom defines `nocat` as bad-FCS plus some control-frame activity and `nopkt` as invalid-PLCP/CRS noise-like activity. They remain separate from OBSS and noise-floor dBm; no sum or native UniFi interference mapping is supplied. Asus RF diagnostics display unavailable fields as dashes. A separate source-only diagnostic reads the Broadcom `cca_get_stats -n -s 1` summary for each matching channel and reports its non-802.11 `interf` percentage with sample age explicitly unknown. Optional reads are bounded and occur after core sample stages. This CCA field is local to the Asus status page and is omitted from the UniFi inform payload; no equivalence to UniFi `cu_interf` is claimed. The source feature is not yet deployed.
 
 ### Optional compact radio identities (migration required)
 

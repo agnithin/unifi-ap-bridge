@@ -102,17 +102,18 @@ type Radio struct {
 }
 
 type RadioStat struct {
-	Bandwidth int    `json:"bw,omitempty"` // Actual operating width in MHz, independent of controller intent.
-	Name      string `json:"name"`
-	Channel   int    `json:"channel"`
-	NumSta    int    `json:"num_sta"`
-	CuTotal   int    `json:"cu_total"`            // Total channel utilization % (0-100)
-	CuSelfRx  int    `json:"cu_self_rx"`          // AP receive airtime % (0-100)
-	CuSelfTx  int    `json:"cu_self_tx"`          // AP transmit airtime % (0-100)
-	CuOBSS    *int   `json:"cu_obss,omitempty"`   // Driver-reported overlapping-BSS airtime, when available.
-	CuNoCat   *int   `json:"cu_nocat,omitempty"`  // Driver CCA no-category activity: bad-FCS frames and some control frames, %.
-	CuNoPkt   *int   `json:"cu_nopkt,omitempty"`  // Driver CCA invalid-PLCP/CRS noise-like activity, %; not a non-Wi-Fi classification.
-	NoiseDBm  *int   `json:"noise_dbm,omitempty"` // Driver-reported channel noise floor, when available.
+	Bandwidth       int    `json:"bw,omitempty"` // Actual operating width in MHz, independent of controller intent.
+	Name            string `json:"name"`
+	Channel         int    `json:"channel"`
+	NumSta          int    `json:"num_sta"`
+	CuTotal         int    `json:"cu_total"`                   // Total channel utilization % (0-100)
+	CuSelfRx        int    `json:"cu_self_rx"`                 // AP receive airtime % (0-100)
+	CuSelfTx        int    `json:"cu_self_tx"`                 // AP transmit airtime % (0-100)
+	CuOBSS          *int   `json:"cu_obss,omitempty"`          // Driver-reported overlapping-BSS airtime, when available.
+	CuNoCat         *int   `json:"cu_nocat,omitempty"`         // Driver CCA no-category activity: bad-FCS frames and some control frames, %.
+	CuNoPkt         *int   `json:"cu_nopkt,omitempty"`         // Driver CCA invalid-PLCP/CRS noise-like activity, %; not a non-Wi-Fi classification.
+	CCAInterference *int   `json:"cca_interference,omitempty"` // Broadcom measured CCA interference; not UniFi cu_interf.
+	NoiseDBm        *int   `json:"noise_dbm,omitempty"`        // Driver-reported channel noise floor, when available.
 }
 
 type PortMacEntry struct {
