@@ -16,8 +16,8 @@ import (
 func TestRunCorrelatesAndRedactsClientIdentifiers(t *testing.T) {
 	dir := t.TempDir()
 	base := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
-	mainPath := writeSnapshotFixture(t, dir, "main.json", []telemetry.StationEvent{{Type: "observed_disassociation", MAC: "02:11:22:33:44:55", ObservedAt: base.Add(20 * time.Second), PreviousObserved: base.Add(10 * time.Second), PollGapSeconds: 10}})
-	nodePath := writeSnapshotFixture(t, dir, "node.json", []telemetry.StationEvent{{Type: "observed_association", MAC: "02:11:22:33:44:55", ObservedAt: base.Add(15 * time.Second), PreviousObserved: base, PollGapSeconds: 15}})
+	mainPath := writeSnapshotFixture(t, dir, "main.json", []telemetry.StationEvent{{Type: "observed_disassociation", MAC: "02:11:22:33:44:55", ObservedAt: base.Add(20 * time.Second), PreviousObserved: base.Add(10 * time.Second), PollGapSeconds: 10, Radio: "na", PhysicalRadio: "wifi-na", Band: "5GHz", BSSID: "source-bssid"}})
+	nodePath := writeSnapshotFixture(t, dir, "node.json", []telemetry.StationEvent{{Type: "observed_association", MAC: "02:11:22:33:44:55", ObservedAt: base.Add(15 * time.Second), PreviousObserved: base, PollGapSeconds: 15, Radio: "na", PhysicalRadio: "wifi-na-1", Band: "5GHz", BSSID: "destination-bssid"}})
 	var stdout, stderr bytes.Buffer
 	if err := run([]string{"-window", "30s", "-ap", "main=" + mainPath, "-ap", "node=" + nodePath}, &stdout, &stderr); err != nil {
 		t.Fatalf("run failed: %v stderr=%s", err, stderr.String())
@@ -28,14 +28,22 @@ func TestRunCorrelatesAndRedactsClientIdentifiers(t *testing.T) {
 	var output struct {
 		EvidenceScope string `json:"evidence_scope"`
 		Pairs         []struct {
-			Type                  string    `json:"type"`
-			ClientTag             string    `json:"client_tag"`
-			SourceAP              string    `json:"source_ap"`
-			DestinationAP         string    `json:"destination_ap"`
-			DepartureObservedAt   time.Time `json:"departure_observed_at"`
-			ArrivalObservedAt     time.Time `json:"arrival_observed_at"`
-			SourcePollGapSeconds  int64     `json:"source_poll_gap_seconds"`
-			DestinationPollGapSec int64     `json:"destination_poll_gap_seconds"`
+			Type                     string    `json:"type"`
+			ClientTag                string    `json:"client_tag"`
+			SourceAP                 string    `json:"source_ap"`
+			DestinationAP            string    `json:"destination_ap"`
+			SourceRadio              string    `json:"source_radio"`
+			DestinationRadio         string    `json:"destination_radio"`
+			SourcePhysicalRadio      string    `json:"source_physical_radio"`
+			DestinationPhysicalRadio string    `json:"destination_physical_radio"`
+			SourceBand               string    `json:"source_band"`
+			DestinationBand          string    `json:"destination_band"`
+			SourceBSSID              string    `json:"source_bssid"`
+			DestinationBSSID         string    `json:"destination_bssid"`
+			DepartureObservedAt      time.Time `json:"departure_observed_at"`
+			ArrivalObservedAt        time.Time `json:"arrival_observed_at"`
+			SourcePollGapSeconds     int64     `json:"source_poll_gap_seconds"`
+			DestinationPollGapSec    int64     `json:"destination_poll_gap_seconds"`
 		} `json:"pairs"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
@@ -45,7 +53,7 @@ func TestRunCorrelatesAndRedactsClientIdentifiers(t *testing.T) {
 		t.Fatalf("expected one correlation, got %+v", output.Pairs)
 	}
 	pair := output.Pairs[0]
-	if pair.Type != "correlated_ap_observations" || !strings.HasPrefix(pair.ClientTag, "c_") || pair.SourceAP != "main" || pair.DestinationAP != "node" || pair.DepartureObservedAt != base.Add(20*time.Second) || pair.ArrivalObservedAt != base.Add(15*time.Second) || pair.SourcePollGapSeconds != 10 || pair.DestinationPollGapSec != 15 {
+	if pair.Type != "correlated_ap_observations" || !strings.HasPrefix(pair.ClientTag, "c_") || pair.SourceAP != "main" || pair.DestinationAP != "node" || pair.SourceRadio != "na" || pair.DestinationRadio != "na" || pair.SourcePhysicalRadio != "wifi-na" || pair.DestinationPhysicalRadio != "wifi-na-1" || pair.SourceBand != "5GHz" || pair.DestinationBand != "5GHz" || pair.SourceBSSID != "source-bssid" || pair.DestinationBSSID != "destination-bssid" || pair.DepartureObservedAt != base.Add(20*time.Second) || pair.ArrivalObservedAt != base.Add(15*time.Second) || pair.SourcePollGapSeconds != 10 || pair.DestinationPollGapSec != 15 {
 		t.Fatalf("incorrect redacted correlation: %+v", pair)
 	}
 	if !strings.Contains(output.EvidenceScope, "does not prove a roam") {

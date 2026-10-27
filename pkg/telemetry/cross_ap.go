@@ -11,16 +11,24 @@ import (
 // from different APs. It records correlated snapshots only; it cannot prove
 // that one caused the other or measure client interruption/roam latency.
 type CrossAPObservation struct {
-	Type                  string    `json:"type"` // correlated_ap_observations
-	ClientMAC             string    `json:"client_mac"`
-	SourceAP              string    `json:"source_ap"`
-	DestinationAP         string    `json:"destination_ap"`
-	DepartureObservedAt   time.Time `json:"departure_observed_at"`
-	DeparturePreviousAt   time.Time `json:"departure_previous_observed_at,omitempty"`
-	ArrivalObservedAt     time.Time `json:"arrival_observed_at"`
-	ArrivalPreviousAt     time.Time `json:"arrival_previous_observed_at,omitempty"`
-	SourcePollGapSeconds  int64     `json:"source_poll_gap_seconds,omitempty"`
-	DestinationPollGapSec int64     `json:"destination_poll_gap_seconds,omitempty"`
+	Type                     string    `json:"type"` // correlated_ap_observations
+	ClientMAC                string    `json:"client_mac"`
+	SourceAP                 string    `json:"source_ap"`
+	DestinationAP            string    `json:"destination_ap"`
+	SourceRadio              string    `json:"source_radio,omitempty"`
+	DestinationRadio         string    `json:"destination_radio,omitempty"`
+	SourcePhysicalRadio      string    `json:"source_physical_radio,omitempty"`
+	DestinationPhysicalRadio string    `json:"destination_physical_radio,omitempty"`
+	SourceBand               string    `json:"source_band,omitempty"`
+	DestinationBand          string    `json:"destination_band,omitempty"`
+	SourceBSSID              string    `json:"source_bssid,omitempty"`
+	DestinationBSSID         string    `json:"destination_bssid,omitempty"`
+	DepartureObservedAt      time.Time `json:"departure_observed_at"`
+	DeparturePreviousAt      time.Time `json:"departure_previous_observed_at,omitempty"`
+	ArrivalObservedAt        time.Time `json:"arrival_observed_at"`
+	ArrivalPreviousAt        time.Time `json:"arrival_previous_observed_at,omitempty"`
+	SourcePollGapSeconds     int64     `json:"source_poll_gap_seconds,omitempty"`
+	DestinationPollGapSec    int64     `json:"destination_poll_gap_seconds,omitempty"`
 }
 
 type apStationObservation struct {
@@ -191,16 +199,24 @@ func appendBounded(items []apStationObservation, observation apStationObservatio
 
 func makeCrossAPPair(departure, arrival apStationObservation) CrossAPObservation {
 	return CrossAPObservation{
-		Type:                  "correlated_ap_observations",
-		ClientMAC:             departure.event.MAC,
-		SourceAP:              departure.ap,
-		DestinationAP:         arrival.ap,
-		DepartureObservedAt:   departure.event.ObservedAt,
-		DeparturePreviousAt:   departure.event.PreviousObserved,
-		ArrivalObservedAt:     arrival.event.ObservedAt,
-		ArrivalPreviousAt:     arrival.event.PreviousObserved,
-		SourcePollGapSeconds:  departure.event.PollGapSeconds,
-		DestinationPollGapSec: arrival.event.PollGapSeconds,
+		Type:                     "correlated_ap_observations",
+		ClientMAC:                departure.event.MAC,
+		SourceAP:                 departure.ap,
+		DestinationAP:            arrival.ap,
+		SourceRadio:              departure.event.Radio,
+		DestinationRadio:         arrival.event.Radio,
+		SourcePhysicalRadio:      departure.event.PhysicalRadio,
+		DestinationPhysicalRadio: arrival.event.PhysicalRadio,
+		SourceBand:               departure.event.Band,
+		DestinationBand:          arrival.event.Band,
+		SourceBSSID:              departure.event.BSSID,
+		DestinationBSSID:         arrival.event.BSSID,
+		DepartureObservedAt:      departure.event.ObservedAt,
+		DeparturePreviousAt:      departure.event.PreviousObserved,
+		ArrivalObservedAt:        arrival.event.ObservedAt,
+		ArrivalPreviousAt:        arrival.event.PreviousObserved,
+		SourcePollGapSeconds:     departure.event.PollGapSeconds,
+		DestinationPollGapSec:    arrival.event.PollGapSeconds,
 	}
 }
 

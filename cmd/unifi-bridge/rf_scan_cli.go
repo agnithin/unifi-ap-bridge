@@ -19,14 +19,18 @@ const (
 )
 
 type passiveRFScanArtifact struct {
-	Interface        string    `json:"interface"`
-	Channels         []int     `json:"channels"`
-	StartedAt        time.Time `json:"started_at"`
-	CompletedAt      time.Time `json:"completed_at"`
-	ScanOutput       string    `json:"scan_output"`
-	ResultsOutput    string    `json:"results_output"`
-	OutputTruncated  bool      `json:"output_truncated"`
-	ResultsFreshness string    `json:"results_freshness"`
+	Interface              string    `json:"interface"`
+	Channels               []int     `json:"channels"`
+	StartedAt              time.Time `json:"started_at"`
+	CompletedAt            time.Time `json:"completed_at"`
+	ScanCommandStartedAt   time.Time `json:"scan_command_started_at"`
+	ScanCommandReturnedAt  time.Time `json:"scan_command_returned_at"`
+	ResultsReadCompletedAt time.Time `json:"results_read_completed_at"`
+	ResultsReadAttempts    int       `json:"results_read_attempts"`
+	ScanOutput             string    `json:"scan_output"`
+	ResultsOutput          string    `json:"results_output"`
+	OutputTruncated        bool      `json:"output_truncated"`
+	ResultsFreshness       string    `json:"results_freshness"`
 }
 
 // runPassiveScanCLI runs one explicit passive scan only after the caller has
@@ -62,7 +66,20 @@ func runPassiveScanCLI(interfaceName, channelList string, allow bool, outputDir 
 	if err != nil {
 		return "", err
 	}
-	artifact := passiveRFScanArtifact{Interface: result.Interface, Channels: result.Channels, StartedAt: result.StartedAt, CompletedAt: result.CompletedAt, ScanOutput: result.ScanOutput, ResultsOutput: result.ResultsOutput, OutputTruncated: result.OutputTruncated, ResultsFreshness: result.ResultsFreshness}
+	artifact := passiveRFScanArtifact{
+		Interface:              result.Interface,
+		Channels:               result.Channels,
+		StartedAt:              result.StartedAt,
+		CompletedAt:            result.CompletedAt,
+		ScanCommandStartedAt:   result.ScanCommandStartedAt,
+		ScanCommandReturnedAt:  result.ScanCommandReturnedAt,
+		ResultsReadCompletedAt: result.ResultsReadCompletedAt,
+		ResultsReadAttempts:    result.ResultsReadAttempts,
+		ScanOutput:             result.ScanOutput,
+		ResultsOutput:          result.ResultsOutput,
+		OutputTruncated:        result.OutputTruncated,
+		ResultsFreshness:       result.ResultsFreshness,
+	}
 	data, err := json.MarshalIndent(artifact, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("encode passive RF scan result: %w", err)

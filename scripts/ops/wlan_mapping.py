@@ -21,6 +21,7 @@ from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_ope
 
 MAX_RESPONSE_BYTES = 512 * 1024
 MAX_RECORDS = 512
+MAX_REQUESTED_SSIDS = 32
 TIMEOUT_SECONDS = 8
 SITE_RE = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
 
@@ -34,11 +35,36 @@ def valid_legacy_id(value: Any) -> bool:
     return isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{24}", value) is not None
 
 
+def normalize_ssids(requested_ssids: list[str]) -> list[str]:
+    """Validate, deduplicate, and bound an explicit exact-name allowlist."""
+    if not isinstance(requested_ssids, list) or not requested_ssids:
+        raise ValueError("at least one non-empty SSID is required")
+    if len(requested_ssids) > MAX_REQUESTED_SSIDS * 4:
+        raise ValueError("SSID argument count exceeds the input bound")
+    unique: list[str] = []
+    seen: set[str] = set()
+    for name in requested_ssids:
+        if not isinstance(name, str) or not name:
+            raise ValueError("SSID must contain 1 to 32 UTF-8 bytes")
+        try:
+            encoded_length = len(name.encode("utf-8"))
+        except UnicodeEncodeError as exc:
+            raise ValueError("SSID is not valid UTF-8 text") from exc
+        if encoded_length > 32:
+            raise ValueError("SSID must contain 1 to 32 UTF-8 bytes")
+        if any(ord(char) < 32 or ord(char) == 127 for char in name):
+            raise ValueError("SSID contains a control character")
+        if name not in seen:
+            unique.append(name)
+            seen.add(name)
+    if len(unique) > MAX_REQUESTED_SSIDS:
+        raise ValueError(f"SSID allowlist exceeds {MAX_REQUESTED_SSIDS} unique names")
+    return unique
+
+
 def resolve_mapping(payload: Any, requested_ssids: list[str]) -> dict[str, str]:
     """Resolve an explicit exact-name allowlist to classic `_id` values."""
-    wanted = set(requested_ssids)
-    if not wanted or any(not isinstance(name, str) or not name for name in wanted):
-        raise ValueError("at least one non-empty SSID is required")
+    wanted = set(normalize_ssids(requested_ssids))
     if isinstance(payload, dict):
         meta = payload.get("meta")
         if not isinstance(meta, dict) or meta.get("rc") != "ok":
@@ -62,7 +88,10 @@ def resolve_mapping(payload: Any, requested_ssids: list[str]) -> dict[str, str]:
 
     if any(len(ids) != 1 for ids in matched.values()):
         raise ValueError("each requested SSID must match exactly one WLAN")
-    return {name: ids[0] for name, ids in sorted(matched.items())}
+    resolved = {name: ids[0] for name, ids in sorted(matched.items())}
+    if len(set(resolved.values())) != len(resolved):
+        raise ValueError("requested WLANs returned duplicate legacy ObjectIds")
+    return resolved
 
 
 def credential(path: Path) -> str:
@@ -100,6 +129,7 @@ def fetch_mapping(
     requested_ssids: list[str],
     context: ssl.SSLContext,
 ) -> dict[str, str]:
+    requested = normalize_ssids(requested_ssids)
     if not SITE_RE.fullmatch(site):
         raise ValueError("site contains unsupported characters")
     root = base_url(controller)
@@ -119,7 +149,7 @@ def fetch_mapping(
         payload = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise RuntimeError("UniFi returned invalid JSON") from exc
-    return resolve_mapping(payload, requested_ssids)
+    return resolve_mapping(payload, requested)
 
 
 def parse_args() -> argparse.Namespace:
@@ -127,7 +157,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--controller", required=True, help="UniFi controller HTTPS origin")
     parser.add_argument("--credential-file", required=True, type=Path, help="Private host-side file containing the API key")
     parser.add_argument("--site", default="default", help="Classic UniFi site name; default: default")
-    parser.add_argument("--ssid", action="append", required=True, dest="ssids", help="Exact SSID to include; repeat for each allowed name")
+    parser.add_argument("--ssid", action="append", dest="ssids", help="Exact SSID to include; repeat for each allowed name (maximum 32 unique names)")
     tls = parser.add_mutually_exclusive_group()
     tls.add_argument("--ca-file", type=Path, help="CA bundle for controller TLS verification")
     tls.add_argument("--insecure", action="store_true", help="Disable TLS verification for a local controller with a self-signed certificate")
@@ -137,8 +167,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     try:
+        ssids = normalize_ssids(args.ssids or [])
         api_key = credential(args.credential_file)
-        mapping = fetch_mapping(args.controller, args.site, api_key, args.ssids, tls_context(args.ca_file, args.insecure))
+        mapping = fetch_mapping(args.controller, args.site, api_key, ssids, tls_context(args.ca_file, args.insecure))
     except (ValueError, RuntimeError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

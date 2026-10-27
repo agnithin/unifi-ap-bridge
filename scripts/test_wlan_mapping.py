@@ -65,6 +65,21 @@ class WlanMappingTests(unittest.TestCase):
         uuid_row = {"meta": {"rc": "ok"}, "data": [{"name": "allowed", "_id": "550e8400-e29b-41d4-a716-446655440000"}]}
         with self.assertRaisesRegex(ValueError, "legacy ObjectId"):
             wlan_mapping.resolve_mapping(uuid_row, ["allowed"])
+        duplicate_id = {"meta": {"rc": "ok"}, "data": [
+            {"name": "allowed", "_id": "0123456789abcdef01234567"},
+            {"name": "other", "_id": "0123456789abcdef01234567"},
+        ]}
+        with self.assertRaisesRegex(ValueError, "duplicate legacy ObjectIds"):
+            wlan_mapping.resolve_mapping(duplicate_id, ["allowed", "other"])
+
+    def test_explicit_allowlist_is_deduplicated_and_bounded(self) -> None:
+        self.assertEqual(wlan_mapping.normalize_ssids(["allowed", "allowed"]), ["allowed"])
+        for invalid in ([], [""], ["x" * 33], ["\nname"]):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                wlan_mapping.normalize_ssids(invalid)
+        too_many = [f"ssid-{i}" for i in range(wlan_mapping.MAX_REQUESTED_SSIDS + 1)]
+        with self.assertRaisesRegex(ValueError, "exceeds"):
+            wlan_mapping.normalize_ssids(too_many)
 
     def test_fetch_uses_fixed_get_endpoint_and_api_key_header(self) -> None:
         fake = FakeOpener(self.rows)

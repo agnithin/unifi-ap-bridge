@@ -262,12 +262,14 @@ See [the current feature batch](docs/AUDIT_STATE.md#20-parallel-wireless-feature
 Run `python3 -B scripts/ops/mac_wlan_mapping.py` from the trusted Mac when the
 controller WLANs change. It streams the bounded resolver to CT107 through the
 existing PVE SSH route (the API key remains on CT107), then publishes only the
-two allowlisted IDs to both APs through the Mac's existing SSH access. The AP
-cache is private and persistent, and writes only when its content changes. A
+requested exact SSID set (defaulting to `blueberry` and `blueberry-prime`) to
+both APs through the Mac's existing SSH access. Up to 32 unique SSIDs may be
+listed with repeated `--ssid` options; unrequested WLANs are never enumerated
+into the cache. The AP cache is private and persistent, and writes only when its content changes. A
 one-time AP configuration change must point `wlan_mapping_file` to
 `/jffs/addons/unifi-bridge/config/wlan-mapping.json`; manual `wlan_mapping`
-entries take precedence, so remove only the matching `blueberry` and
-`blueberry-prime` keys after a successful publish and preserve other entries.
+entries take precedence, so remove only the manual keys matching the requested
+SSIDs after a successful publish and preserve other entries.
 The tool does not edit AP configuration or schedule refreshes. See
 [`scripts/ops/WLAN_MAPPING_SETUP.md`](scripts/ops/WLAN_MAPPING_SETUP.md) for
 the on-demand workflow, trust requirements, and rollback steps. No controller
@@ -303,9 +305,11 @@ ssh -o BatchMode=yes nithin@10.100.1.10 'cat /tmp/unifi-bridge-rf-scan-EXAMPLE.j
 
 The result can contain nearby network names and identifiers; keep it private.
 The JSON's `results_output` holds the driver's latest scan results, while
-`output_truncated` tells you whether the output limit was reached. Its
-`completed_at` records when the helper finished reading, **not** when the
-radio completed a scan. `results_freshness` is `unknown`: the data can predate
+`output_truncated` tells you whether the output limit was reached. The artifact
+records scan-command start/return times, results-read completion time, and
+read-attempt count; these describe the host helper only. `completed_at` records
+when the helper finished, **not** when the radio completed a scan.
+`results_freshness` is `unknown`: the data can predate
 the requested scan, even when the command succeeds. This is a list of observed
 Wi-Fi networks, not a spectrum-analyzer measurement.
 
@@ -339,7 +343,9 @@ The accepted dev build reports measured per-network signal and matched host-unic
 `go run ./cmd/roam-correlator -ap Main=/private/main-status.js -ap Node=/private/node-status.js -window 90s`
 correlates bounded AP-local status snapshots on a trusted host. It uses temporary
 client pseudonyms, sorts observations across APs, and reports polling windows;
-paired observations do not establish exact roam timing or disconnect reasons.
+paired observations include each side's observed logical/physical radio, band
+and BSSID when available, but do not establish exact roam timing, causality or
+disconnect reasons.
 The tool performs no network collection or AP configuration changes.
 
 `controller_response_capture_count` defaults to zero. A temporary value of 1–3

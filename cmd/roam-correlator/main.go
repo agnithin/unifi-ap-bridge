@@ -61,16 +61,24 @@ type outputDocument struct {
 }
 
 type redactedPair struct {
-	Type                  string    `json:"type"`
-	ClientTag             string    `json:"client_tag"`
-	SourceAP              string    `json:"source_ap"`
-	DestinationAP         string    `json:"destination_ap"`
-	DepartureObservedAt   time.Time `json:"departure_observed_at"`
-	DeparturePreviousAt   time.Time `json:"departure_previous_observed_at,omitempty"`
-	ArrivalObservedAt     time.Time `json:"arrival_observed_at"`
-	ArrivalPreviousAt     time.Time `json:"arrival_previous_observed_at,omitempty"`
-	SourcePollGapSeconds  int64     `json:"source_poll_gap_seconds,omitempty"`
-	DestinationPollGapSec int64     `json:"destination_poll_gap_seconds,omitempty"`
+	Type                     string    `json:"type"`
+	ClientTag                string    `json:"client_tag"`
+	SourceAP                 string    `json:"source_ap"`
+	DestinationAP            string    `json:"destination_ap"`
+	SourceRadio              string    `json:"source_radio,omitempty"`
+	DestinationRadio         string    `json:"destination_radio,omitempty"`
+	SourcePhysicalRadio      string    `json:"source_physical_radio,omitempty"`
+	DestinationPhysicalRadio string    `json:"destination_physical_radio,omitempty"`
+	SourceBand               string    `json:"source_band,omitempty"`
+	DestinationBand          string    `json:"destination_band,omitempty"`
+	SourceBSSID              string    `json:"source_bssid,omitempty"`
+	DestinationBSSID         string    `json:"destination_bssid,omitempty"`
+	DepartureObservedAt      time.Time `json:"departure_observed_at"`
+	DeparturePreviousAt      time.Time `json:"departure_previous_observed_at,omitempty"`
+	ArrivalObservedAt        time.Time `json:"arrival_observed_at"`
+	ArrivalPreviousAt        time.Time `json:"arrival_previous_observed_at,omitempty"`
+	SourcePollGapSeconds     int64     `json:"source_poll_gap_seconds,omitempty"`
+	DestinationPollGapSec    int64     `json:"destination_poll_gap_seconds,omitempty"`
 }
 
 func main() {
@@ -271,15 +279,23 @@ func redactPair(salt []byte, pair telemetry.CrossAPObservation) redactedPair {
 	_, _ = macHash.Write([]byte(mac))
 	tag := "c_" + hex.EncodeToString(macHash.Sum(nil)[:8])
 	return redactedPair{
-		Type:                  pair.Type,
-		ClientTag:             tag,
-		SourceAP:              pair.SourceAP,
-		DestinationAP:         pair.DestinationAP,
-		DepartureObservedAt:   pair.DepartureObservedAt,
-		DeparturePreviousAt:   pair.DeparturePreviousAt,
-		ArrivalObservedAt:     pair.ArrivalObservedAt,
-		ArrivalPreviousAt:     pair.ArrivalPreviousAt,
-		SourcePollGapSeconds:  pair.SourcePollGapSeconds,
-		DestinationPollGapSec: pair.DestinationPollGapSec,
+		Type:                     pair.Type,
+		ClientTag:                tag,
+		SourceAP:                 pair.SourceAP,
+		DestinationAP:            pair.DestinationAP,
+		SourceRadio:              pair.SourceRadio,
+		DestinationRadio:         pair.DestinationRadio,
+		SourcePhysicalRadio:      pair.SourcePhysicalRadio,
+		DestinationPhysicalRadio: pair.DestinationPhysicalRadio,
+		SourceBand:               pair.SourceBand,
+		DestinationBand:          pair.DestinationBand,
+		SourceBSSID:              pair.SourceBSSID,
+		DestinationBSSID:         pair.DestinationBSSID,
+		DepartureObservedAt:      pair.DepartureObservedAt,
+		DeparturePreviousAt:      pair.DeparturePreviousAt,
+		ArrivalObservedAt:        pair.ArrivalObservedAt,
+		ArrivalPreviousAt:        pair.ArrivalPreviousAt,
+		SourcePollGapSeconds:     pair.SourcePollGapSeconds,
+		DestinationPollGapSec:    pair.DestinationPollGapSec,
 	}
 }

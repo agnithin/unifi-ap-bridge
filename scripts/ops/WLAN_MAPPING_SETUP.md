@@ -3,8 +3,12 @@
 Run `python3 -B scripts/ops/mac_wlan_mapping.py` from the trusted Mac after a
 UniFi WLAN is renamed or replaced. It streams the bounded resolver source to
 CT107 using the existing strict-known-host PVE SSH route. The resolver reads
-`/etc/ops-broker/unifi-api-key` inside CT107 and returns only the exact
-`blueberry` and `blueberry-prime` names with validated legacy 24-hex ObjectIds.
+`/etc/ops-broker/unifi-api-key` inside CT107 and returns only the explicitly
+requested exact SSID names with validated legacy 24-hex ObjectIds. With no
+`--ssid` options, the existing `blueberry` and `blueberry-prime` pair remains
+the default. A caller may provide up to 32 unique SSIDs explicitly; repeated
+names are deduplicated, and each requested name must match exactly one WLAN.
+The tool does not enumerate or publish unrequested WLANs.
 The Mac then uses its existing strict-known-host SSH access to publish that
 small mapping to Main and Node. No API key is read or stored on the Mac or APs.
 
@@ -23,8 +27,9 @@ The AP cache is `/jffs/addons/unifi-bridge/config/wlan-mapping.json`, mode
 `0600`, atomically replaced only when the mapping changes. The publisher checks
 the remote SHA-256 and mode before and after a write. First run the command to publish and verify both caches. Then
 activate this path in the AP bridge configuration as `wlan_mapping_file`. The
-current manual `wlan_mapping` entries take precedence, so remove only the two
-target SSID keys in the same reviewed settings change; retain unrelated entries.
+current manual `wlan_mapping` entries take precedence, so remove only the
+matching target SSID keys in the same reviewed settings change; retain
+unrelated entries.
 Changing `wlan_mapping_file` is a one-time settings operation that may restart
 the bridge and sync its Node. Once configured, later cache-content updates are
 read without restart, and invalid refreshes preserve the last valid mapping.
@@ -35,11 +40,23 @@ cache update per AP only if needed. If one AP publish fails, the other may
 already have the same valid mapping; rerunning is safe and skips identical
 content.
 
+For a different explicit set, repeat `--ssid`; the request replaces the
+published file contents with exactly that set. The running bridge cache merges
+valid file entries into its last-known-good set, so names removed from a later
+file may remain in memory until the bridge restarts; use a reviewed settings
+change/restart if an old dynamic entry must be evicted. Invalid or unreadable
+files preserve the last valid cache:
+
+```sh
+python3 -B scripts/ops/mac_wlan_mapping.py \
+  --ssid 'blueberry' --ssid 'blueberry-prime' --ssid 'guest-iot'
+```
+
 ## Rollback
 
 Disable automatic file use by removing `wlan_mapping_file` from the reviewed AP
-configuration. Restore only the two manual target entries from the private
-configuration backup if their previous behavior is wanted. Remove the cache
+configuration. Restore only the manual entries for the selected SSIDs from the
+private configuration backup if their previous behavior is wanted. Remove the cache
 file over the existing Mac SSH route if cleanup is needed:
 
 ```sh

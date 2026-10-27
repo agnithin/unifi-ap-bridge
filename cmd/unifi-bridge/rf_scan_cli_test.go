@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRunPassiveScanCLIRequiresOptInAndValidChannelsBeforeRunner(t *testing.T) {
@@ -68,17 +69,29 @@ func TestRunPassiveScanCLIWritesCappedPrivateJSONArtifact(t *testing.T) {
 		t.Fatal(err)
 	}
 	var result struct {
-		Channels         []int  `json:"channels"`
-		ResultsFreshness string `json:"results_freshness"`
-		OutputTruncated  bool   `json:"output_truncated"`
-		ScanOutput       string `json:"scan_output"`
-		ResultsOutput    string `json:"results_output"`
+		Channels               []int     `json:"channels"`
+		StartedAt              time.Time `json:"started_at"`
+		CompletedAt            time.Time `json:"completed_at"`
+		ScanCommandStartedAt   time.Time `json:"scan_command_started_at"`
+		ScanCommandReturnedAt  time.Time `json:"scan_command_returned_at"`
+		ResultsReadCompletedAt time.Time `json:"results_read_completed_at"`
+		ResultsReadAttempts    int       `json:"results_read_attempts"`
+		ResultsFreshness       string    `json:"results_freshness"`
+		OutputTruncated        bool      `json:"output_truncated"`
+		ScanOutput             string    `json:"scan_output"`
+		ResultsOutput          string    `json:"results_output"`
 	}
 	if err := json.Unmarshal(data, &result); err != nil {
 		t.Fatalf("invalid JSON artifact: %v", err)
 	}
 	if len(result.Channels) != 3 || result.ResultsFreshness != "unknown" || !result.OutputTruncated || result.ScanOutput != "accepted" || len(result.ScanOutput)+len(result.ResultsOutput) != rfScanOutputLimit {
 		t.Fatalf("incorrect bounded artifact content: %+v", result)
+	}
+	if result.ResultsReadAttempts != 1 || result.StartedAt.IsZero() || result.ScanCommandStartedAt.IsZero() || result.ScanCommandReturnedAt.IsZero() || result.ResultsReadCompletedAt.IsZero() || result.CompletedAt.IsZero() {
+		t.Fatalf("artifact omitted scan diagnostic timestamps/attempt count: %+v", result)
+	}
+	if result.ScanCommandStartedAt.Before(result.StartedAt) || result.ScanCommandReturnedAt.Before(result.ScanCommandStartedAt) || result.ResultsReadCompletedAt.Before(result.ScanCommandReturnedAt) || result.CompletedAt.Before(result.ResultsReadCompletedAt) {
+		t.Fatalf("artifact timestamps are out of order: %+v", result)
 	}
 	if len(calls) != 2 || calls[0][4] != "passive" || calls[0][len(calls[0])-1] != "1,6,36" {
 		t.Fatalf("unexpected passive command calls: %#v", calls)

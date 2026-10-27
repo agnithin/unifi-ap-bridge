@@ -8,8 +8,8 @@ import (
 func TestCrossAPCorrelatorPairsObservedDepartureAndArrivalInEitherOrder(t *testing.T) {
 	correlator := NewCrossAPCorrelator(30*time.Second, 8, 8)
 	t0 := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
-	arrival := StationEvent{Type: "observed_association", MAC: "AA:BB", ObservedAt: t0.Add(12 * time.Second), PreviousObserved: t0, PollGapSeconds: 12}
-	departure := StationEvent{Type: "observed_disassociation", MAC: "aa:bb", ObservedAt: t0.Add(20 * time.Second), PreviousObserved: t0.Add(10 * time.Second), PollGapSeconds: 10}
+	arrival := StationEvent{Type: "observed_association", MAC: "AA:BB", ObservedAt: t0.Add(12 * time.Second), PreviousObserved: t0, PollGapSeconds: 12, Radio: "na", PhysicalRadio: "wifi-na-1", Band: "5GHz", BSSID: "dest-bssid"}
+	departure := StationEvent{Type: "observed_disassociation", MAC: "aa:bb", ObservedAt: t0.Add(20 * time.Second), PreviousObserved: t0.Add(10 * time.Second), PollGapSeconds: 10, Radio: "na", PhysicalRadio: "wifi-na", Band: "5GHz", BSSID: "source-bssid"}
 	if pairs := correlator.Observe("node", arrival); len(pairs) != 0 {
 		t.Fatalf("arrival without departure should not pair yet: %+v", pairs)
 	}
@@ -18,7 +18,7 @@ func TestCrossAPCorrelatorPairsObservedDepartureAndArrivalInEitherOrder(t *testi
 		t.Fatalf("expected one cross-AP observation pair: %+v", pairs)
 	}
 	got := pairs[0]
-	if got.Type != "correlated_ap_observations" || got.ClientMAC != "aa:bb" || got.SourceAP != "main" || got.DestinationAP != "node" || got.DeparturePreviousAt != t0.Add(10*time.Second) || got.ArrivalPreviousAt != t0 || got.SourcePollGapSeconds != 10 || got.DestinationPollGapSec != 12 {
+	if got.Type != "correlated_ap_observations" || got.ClientMAC != "aa:bb" || got.SourceAP != "main" || got.DestinationAP != "node" || got.SourceRadio != "na" || got.DestinationRadio != "na" || got.SourcePhysicalRadio != "wifi-na" || got.DestinationPhysicalRadio != "wifi-na-1" || got.SourceBand != "5GHz" || got.DestinationBand != "5GHz" || got.SourceBSSID != "source-bssid" || got.DestinationBSSID != "dest-bssid" || got.DeparturePreviousAt != t0.Add(10*time.Second) || got.ArrivalPreviousAt != t0 || got.SourcePollGapSeconds != 10 || got.DestinationPollGapSec != 12 {
 		t.Fatalf("unexpected cross-AP evidence: %+v", got)
 	}
 	if got.DepartureObservedAt != t0.Add(20*time.Second) || got.ArrivalObservedAt != t0.Add(12*time.Second) {

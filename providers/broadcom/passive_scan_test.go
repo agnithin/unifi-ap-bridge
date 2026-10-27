@@ -100,7 +100,10 @@ func TestRunPassiveScanUsesExplicitPassiveChannelsAndUnknownFreshness(t *testing
 	if result.ResultsFreshness != "unknown" || result.OutputTruncated || !strings.Contains(result.ResultsOutput, "neighbor") {
 		t.Fatalf("unexpected result contract: %+v", result)
 	}
-	if !result.CompletedAt.After(result.StartedAt) {
+	if result.ResultsReadAttempts != 1 || result.ScanCommandStartedAt.IsZero() || result.ScanCommandReturnedAt.IsZero() || result.ResultsReadCompletedAt.IsZero() {
+		t.Fatalf("missing command/read diagnostics: %+v", result)
+	}
+	if result.ScanCommandStartedAt.Before(result.StartedAt) || result.ScanCommandReturnedAt.Before(result.ScanCommandStartedAt) || result.ResultsReadCompletedAt.Before(result.ScanCommandReturnedAt) || result.CompletedAt.Before(result.ResultsReadCompletedAt) {
 		t.Fatalf("missing timestamps: %+v", result)
 	}
 }
@@ -122,7 +125,7 @@ func TestRunPassiveScanRetriesOnlyReadOnlyResults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if starts != 1 || reads != 2 || result.ScanOutput != "accepted" || result.ResultsOutput != "latest results" || result.ResultsFreshness != "unknown" {
+	if starts != 1 || reads != 2 || result.ResultsReadAttempts != 2 || result.ScanOutput != "accepted" || result.ResultsOutput != "latest results" || result.ResultsFreshness != "unknown" {
 		t.Fatalf("unexpected retry behavior: starts=%d reads=%d result=%+v", starts, reads, result)
 	}
 }

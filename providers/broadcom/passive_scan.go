@@ -44,14 +44,18 @@ type PassiveScanRequest struct {
 // does not know a reliable completion marker, so result freshness stays
 // "unknown" and the data may predate the requested scan.
 type PassiveScanResult struct {
-	Interface        string
-	Channels         []int
-	StartedAt        time.Time
-	CompletedAt      time.Time
-	ScanOutput       string
-	ResultsOutput    string
-	OutputTruncated  bool
-	ResultsFreshness string // "unknown"
+	Interface              string
+	Channels               []int
+	StartedAt              time.Time
+	CompletedAt            time.Time
+	ScanCommandStartedAt   time.Time
+	ScanCommandReturnedAt  time.Time
+	ResultsReadCompletedAt time.Time
+	ResultsReadAttempts    int
+	ScanOutput             string
+	ResultsOutput          string
+	OutputTruncated        bool
+	ResultsFreshness       string // "unknown"
 }
 
 // PassiveScanRunner is injectable for offline tests. A production runner
@@ -81,7 +85,9 @@ func RunPassiveScan(ctx context.Context, req PassiveScanRequest, runner PassiveS
 	if limit <= 0 {
 		limit = defaultScanOutputLimit
 	}
+	scanCommandStarted := time.Now()
 	scanOutput, truncated, err := runner(ctx, limit, "wl", args...)
+	scanCommandReturned := time.Now()
 	if err != nil {
 		return nil, fmt.Errorf("start passive scan: %w", err)
 	}
@@ -94,9 +100,13 @@ func RunPassiveScan(ctx context.Context, req PassiveScanRequest, runner PassiveS
 	var results string
 	var resultsTruncated bool
 	var readErr error
+	var resultsReadCompleted time.Time
+	readAttempts := 0
 	for attempt := 0; attempt < resultsReadAttempts; attempt++ {
+		readAttempts++
 		results, resultsTruncated, readErr = runner(resultsCtx, remaining, "wl", "-i", req.Interface, "scanresults")
 		if readErr == nil {
+			resultsReadCompleted = time.Now()
 			break
 		}
 		if resultsCtx.Err() != nil {
@@ -128,7 +138,20 @@ func RunPassiveScan(ctx context.Context, req PassiveScanRequest, runner PassiveS
 		}
 	}
 	completed := time.Now()
-	return &PassiveScanResult{Interface: req.Interface, Channels: append([]int(nil), req.Channels...), StartedAt: started, CompletedAt: completed, ScanOutput: scanOutput, ResultsOutput: results, OutputTruncated: truncated, ResultsFreshness: "unknown"}, nil
+	return &PassiveScanResult{
+		Interface:              req.Interface,
+		Channels:               append([]int(nil), req.Channels...),
+		StartedAt:              started,
+		CompletedAt:            completed,
+		ScanCommandStartedAt:   scanCommandStarted,
+		ScanCommandReturnedAt:  scanCommandReturned,
+		ResultsReadCompletedAt: resultsReadCompleted,
+		ResultsReadAttempts:    readAttempts,
+		ScanOutput:             scanOutput,
+		ResultsOutput:          results,
+		OutputTruncated:        truncated,
+		ResultsFreshness:       "unknown",
+	}, nil
 }
 
 func validatePassiveScanRequest(req PassiveScanRequest) error {
