@@ -1112,3 +1112,75 @@ The extra Auto2.4 row remains: four configured names vs three live identities.
 No second removal PUT, database edit, forget/re-adoption, AP reboot, scan or Node
 mutation was attempted. The supported stale-entry removal operation remains
 unproven; source reporting fixes must not be described as removing that record.
+
+## 24. Authorized Parallel Completion Batch — 2026-10-27
+
+The operator requested completion of Main verification, Node rollout, automatic
+WLAN mapping, roaming enrichment, reboot/locate and bounded RF tests, using
+subagents in parallel. Live writers are serialized; source preparation and
+read-only evidence may run in parallel. Firmware upgrades, direct database edits,
+additional forget/re-adoption and arbitrary controller provisioning remain outside
+this batch. Keep all source work on dev.
+
+**Post-user re-adoption:** the operator reports Main radios now look correct.
+Independent controller read confirms exactly three configured/live identities
+`wifi-ng`, `wifi-na`, `wifi-na-1`; the stale `wifi-ng-1` entry is absent. Main is
+adopted/online on gateway Port1 at2500 Mbps. Re-adoption reset its saved upper-band
+width to40; restoring80 is included alongside Node's display correction. Runtime
+GCM/watchdog checks and final acceptance will be recorded below.
+
+| Track | Owner | Current scope |
+|---|---|---|
+| Main/Node | controller worker; orchestrator for controller UI | Fresh Main verification; exact cd7bd64 Node update with private backups and no propagation; verify fresh GCM, watchdog, physical radios and HomeBase1G; save correct controller widths. |
+| WLAN refresh | settings worker | Server-held API credential, exact SSID allowlist, validated private atomic AP mapping caches and tracked host scheduler; avoid stale manual overrides masking refreshed mappings. |
+| Roaming/RF/commands | roaming worker; orchestrator for live commands | Bounded useful host correlation with polling uncertainty; observe real authenticated command before enabling execution; verify firmware support before bounded tests. No invented reason/latency or capture capability. |
+
+This section records authorization and in-progress work, not completion. Earlier
+source-versus-deployed records above remain dated history.
+
+### Batch checkpoint: Node rollout, display and host tools
+
+Node updated exactly once to `cd7bd643280f8345377b2a36e4829716a09a6969` using
+the verified ARMv7 archive `c110944b00d126ff1a9cea48fd2ed8e8d75d91dfe2e66c731b9c4fbd6ad422b6`.
+The worker reported exit0, installed checksum/runtime/fresh GCM, preserved config,
+effective state and active `/jffs/.ssh/dropbear_ed25519_host_key` bytes/modes,
+watchdog and clean locks/journal. Private Node stage:
+`/tmp/unifi-node-radio-cap-20261027163448` (handoff sibling retained). Fresh
+postcheck PID3801, inform age6s. Main post-re-adoption PID6471 is healthy with
+watchdog. Both have exactly three configured radios and no phantom row.
+
+Root saved upper5 width80 through normal UniFi controls on Main and Node after
+private controller baselines at `/run/unifi-batch-width-hkehj2ne/` on CT107.
+Subsequent controller reads show both online/adopted, widths20/40/80 and fresh
+informs. Physical channels remain6/36/161; Node gateway Port3 is2.5GbE and local
+Port4 HomeBase link1GbE. Normal UI writes may normalize types/default fields;
+no Asus radio settings were applied.
+
+Host cross-AP correlator passed tests and processed private live Main/Node
+snapshots. It found one naturally observed Main departure/Node arrival pair in
+a90-second window with10-second polling gaps, using per-run pseudonyms. This
+supports cross-AP correlation, not causal roam proof or subsecond latency.
+Snapshots remain private under
+`/var/folders/94/c9cnfjw56nqby7p8y5h8s1s80000gn/T/unifi-batch-acceptance-ce406z46/`.
+
+One authorized Main channel6 passive scan started once, but the immediate results
+query returned211 and the helper exited1 in0.479s. A later read-only results query
+returned0 with4136bytes; no second scan was started. PID/GCM/channels remained
+healthy/unchanged. Result freshness is unknown. The source fix bounds retries to
+read-only results (max5,250ms apart,2-second/request deadline); it awaits updated
+live acceptance. `tcpdump` and Entware `opkg` were absent at the inspected fixed
+paths. No packet capture was performed.
+
+A single default-off Locate UI request produced no recognized existing command
+observation. This does not prove no controller delivery. Opt-in bounded private
+GCM response capture is added for evidence; execution handlers remain unchanged.
+All raw captures stay private RAM; count defaults0 and must be reverted after
+probing. Full integrated Go race checks, mapping publisher fixtures and literal
+secret guard pass locally; publication/live diagnostic acceptance follow.
+
+WLAN publisher packet and tests are complete. CT107 identity and strict existing
+SSH probes verified: existing key is rejected by both APs at authentication.
+No key/trust was changed. The operator was asked about a dedicated automation key,
+then requested an explanation of purpose/cadence. Decision is pending; on-demand
+refresh is recommended for two rarely recreated SSIDs and can reuse existing
+access without a new key. No unattended host timer has been installed.

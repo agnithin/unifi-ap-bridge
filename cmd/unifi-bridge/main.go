@@ -29,18 +29,19 @@ var (
 )
 
 type Config struct {
-	ControllerRebootEnabled bool              `json:"controller_reboot_enabled,omitempty"`
-	WlanMappingFile         string            `json:"wlan_mapping_file,omitempty"`
-	Enabled                 bool              `json:"enabled"`
-	AutoGateway             bool              `json:"auto_gateway"`
-	ControllerURL           string            `json:"controller_url"`
-	IntervalSec             int               `json:"interval_sec"`
-	Model                   string            `json:"model"`
-	StatePath               string            `json:"state_path"`
-	Branch                  string            `json:"branch,omitempty"`
-	UplinkMAC               string            `json:"uplink_mac,omitempty"`
-	UplinkRemotePort        int               `json:"uplink_remote_port,omitempty"`
-	WlanMapping             map[string]string `json:"wlan_mapping"`
+	ControllerResponseCaptureCount int               `json:"controller_response_capture_count,omitempty"`
+	ControllerRebootEnabled        bool              `json:"controller_reboot_enabled,omitempty"`
+	WlanMappingFile                string            `json:"wlan_mapping_file,omitempty"`
+	Enabled                        bool              `json:"enabled"`
+	AutoGateway                    bool              `json:"auto_gateway"`
+	ControllerURL                  string            `json:"controller_url"`
+	IntervalSec                    int               `json:"interval_sec"`
+	Model                          string            `json:"model"`
+	StatePath                      string            `json:"state_path"`
+	Branch                         string            `json:"branch,omitempty"`
+	UplinkMAC                      string            `json:"uplink_mac,omitempty"`
+	UplinkRemotePort               int               `json:"uplink_remote_port,omitempty"`
+	WlanMapping                    map[string]string `json:"wlan_mapping"`
 }
 
 func loadConfig(path string) (*Config, error) {
@@ -74,6 +75,9 @@ func loadConfig(path string) (*Config, error) {
 	}
 	if cfg.IntervalSec <= 0 {
 		cfg.IntervalSec = 10
+	}
+	if cfg.ControllerResponseCaptureCount < 0 || cfg.ControllerResponseCaptureCount > maxControllerResponseCaptures {
+		return nil, fmt.Errorf("controller_response_capture_count must be between 0 and %d", maxControllerResponseCaptures)
 	}
 	return cfg, nil
 }
@@ -341,6 +345,7 @@ func main() {
 	defer ticker.Stop()
 
 	health := &exchangeHealth{}
+	responseCapture := &controllerResponseCapture{dir: controllerResponseCaptureDir, remaining: cfg.ControllerResponseCaptureCount}
 	rebootDispatcher := inform.NewRebootDispatcher(cfg.ControllerRebootEnabled, startPlatformReboot, filepath.Join(filepath.Dir(cfg.StatePath), "controller-command-state.json"))
 	wlanMappingCache := telemetry.NewWLANMappingCache(cfg.WlanMappingFile)
 	stationTimeline := telemetry.NewStationTimeline(64, 512)
@@ -499,6 +504,10 @@ func main() {
 		respPacket, err := inform.UnpackInform(respRaw, key, host.MAC)
 		if err != nil {
 			return fmt.Errorf("failed to unpack controller response: %w", err)
+		}
+
+		if err := responseCapture.capture(adopted, key, mode, respPacket.Mode, respPacket.Payload["_type"], respPacket.RawJSON); err != nil {
+			logEvent("[unifi-bridge] Controller response capture unavailable")
 		}
 
 		observation, commandResult := authenticatedControllerCommand(respPacket, key, adopted, rebootDispatcher, time.Now())

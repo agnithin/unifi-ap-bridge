@@ -304,6 +304,27 @@ scan-results freshness is explicitly unknown. No scan or packet capture has
 been run for acceptance. Packet capture remains unavailable without a supported
 capture tool; Main's read-only inventory did not find `tcpdump`.
 
+### Host roaming correlation and bounded command diagnostics
+
+`go run ./cmd/roam-correlator -ap Main=/private/main-status.js -ap Node=/private/node-status.js -window 90s`
+correlates bounded AP-local status snapshots on a trusted host. It uses temporary
+client pseudonyms, sorts observations across APs, and reports polling windows;
+paired observations do not establish exact roam timing or disconnect reasons.
+The tool performs no network collection or AP configuration changes.
+
+`controller_response_capture_count` defaults to zero. A temporary value of 1–3
+captures at most that many authenticated non-noop GCM replies per daemon start
+under `/tmp/unifi-bridge/controller-probe/` (0700 directory,0600 files,64KiB each).
+This is a diagnostic, not a command handler. Raw replies may contain credentials;
+keep them private, never commit/paste them, and restore the count to zero after
+probing. CBC, bootstrap identities, unknown/invalid keys and noop replies are not
+captured. No capture is enabled by installing an update.
+
+The passive-scan helper starts a scan once and retries only the read-only
+`scanresults` query, at most five times within two seconds and the request
+deadline. Result freshness remains unknown because firmware completion is not
+proven by a successful results read.
+
 ### Prioritized backlog and operator decisions
 
 Use [the current feature batch](docs/AUDIT_STATE.md#20-parallel-wireless-feature-batch) for the newly prioritized wireless features and [the audit follow-up queue](docs/AUDIT_STATE.md#17-audit-reconciliation-and-accepted-follow-up-tasks) for the remaining operational/evidence gaps. Earlier worker packets remain dated history; the Main rollout is accepted and no further live operation is implicitly authorized.
