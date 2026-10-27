@@ -1,6 +1,6 @@
 # unifi-ap-bridge
 
-> **Current delivery status — 2026-10-27 PDT:** Both APs are accepted on `54c35db` (v1.2.5 dev). Changed-settings/cluster save, Mac-only WLAN cache refresh and one real Main UniFi reboot passed. Three physical radios report20/40/80 MHz; the stale Auto row is resolved. Native radio utilization now reaches UniFi; bounded LAN packet capture passed a Main self-test. AirView historical averages/TX retries and Locate remain pending. See [current audit state](docs/AUDIT_STATE.md).
+> **Current delivery status — 2026-10-27 PDT:** Both APs are accepted on `d9c91f9` (v1.2.5 dev). Changed-settings/cluster save, Mac-only WLAN cache refresh and one real Main UniFi reboot passed. Three physical radios report20/40/80 MHz; the stale Auto row is resolved. Native radio utilization now reaches UniFi; bounded LAN packet capture passed a Main self-test. AirView now shows measured signal, airtime and retry averages for 2.4 GHz/lower 5 GHz. Upper 5 GHz history, interference and Locate remain pending. See [current audit state](docs/AUDIT_STATE.md).
 
 A high-performance, ultra-lightweight standalone daemon and WebUI addon for **Asuswrt-Merlin** and Linux routers that bridges Broadcom Wi-Fi and switch telemetry into the **Ubiquiti UniFi Inform Protocol** (`:8080/inform`).
 
@@ -10,11 +10,11 @@ It emulates a genuine UniFi 6 Access Point—featuring native **UniFi 6 In-Wall 
 
 ## Current deployment
 
-Both APs are accepted on `54c35db`, version `1.2.5 dev`, with protected state, fresh GCM, watchdogs and clean transactions. Main completed one real UniFi-triggered reboot and recovered its configuration, WLAN cache and daemon automatically. Reboot handling is enabled on both APs; Node's router was not rebooted for this test.
+Both APs are accepted on `d9c91f9`, version `1.2.5 dev`, with protected state, fresh GCM, watchdogs and clean transactions. Main completed one real UniFi-triggered reboot and recovered its configuration, WLAN cache and daemon automatically. Reboot handling is enabled on both APs; Node's router was not rebooted for this test.
 
 Both APs report channels6/36/161 at20/40/80 MHz and the correct gateway ports. Main's extra Auto radio is gone after operator re-adoption. Passive scan retrieval passed, with driver result freshness explicitly unknown. Host tools correlate natural AP departure/arrival observations without claiming precise roaming latency. WLAN mapping refresh runs on demand from the Mac and both private caches are active; no new CT107 administrative access or timer is needed.
 
-Asus diagnostics, unchanged saves and changed-save/cluster propagation passed. Locate is observation-only pending a reliable firmware LED restoration contract; bounded LAN packet capture is implemented and self-tested on Main. Historical AirView average/display and TX-retry acceptance remain pending.
+Asus diagnostics, unchanged saves and changed-save/cluster propagation passed. Locate is observation-only pending a reliable firmware LED restoration contract; bounded LAN packet capture is implemented and self-tested on Main. AirView signal/airtime/retry display is accepted for 2.4 GHz/lower 5 GHz; upper 5 GHz historical summaries and interference remain pending.
 
 See [audit state](docs/AUDIT_STATE.md) and [architecture](docs/ARCHITECTURE.md).
 
@@ -256,7 +256,7 @@ The current dev batch adds semantic no-op settings saves (no bridge restart or
 node sync), bounded AP-local station-change history and passive RF trends in the
 Asus UI, Mac-triggered host-resolved WLAN mapping, default-off authenticated reboot
 dispatch, and an explicitly opted-in manual passive scan. These changes are
-deployed to both APs as `54c35db`. Runtime, passive metrics, changed and unchanged saves, WLAN cache activation, one Main router reboot and passive scan retrieval are verified. Locate execution and full wireless-monitor capture remain pending; bounded LAN PCAP is implemented.
+deployed to both APs as `d9c91f9`. Runtime, passive metrics, changed and unchanged saves, WLAN cache activation, one Main router reboot and passive scan retrieval are verified. Locate execution and full wireless-monitor capture remain pending; bounded LAN PCAP is implemented.
 See [the current feature batch](docs/AUDIT_STATE.md#20-parallel-wireless-feature-batch).
 
 Run `python3 -B scripts/ops/mac_wlan_mapping.py` from the trusted Mac when the
@@ -308,7 +308,7 @@ Replace the example with the intended device's unicast MAC. Maximums are10 secon
 
 ### Native VAP signal and retry telemetry
 
-The next source batch reports measured per-network signal and matched host-unicast retry intervals to UniFi. It prioritizes the canonical Broadcom retry counter when the firmware prints multiple counter types. VAP signal is the mean of complete current dBm samples; retry attempts combine matching success, exhausted-frame and retry deltas. First samples, association changes, resets and missing measurements remain unknown. These are measured client-unicast statistics, not all-radio PHY counters; UniFi computes its historical percentages. Deployment/visible AirView acceptance is recorded in the audit ledger.
+The accepted dev build reports measured per-network signal and matched host-unicast retry intervals to UniFi. It prioritizes the canonical Broadcom retry counter when the firmware prints multiple counter types. VAP signal is the mean of complete current dBm samples; retry attempts combine matching success, exhausted-frame and retry deltas. First samples, association changes, resets and missing measurements remain unknown. These are measured client-unicast statistics, not all-radio PHY counters; UniFi computes its historical percentages. Deployment/visible AirView acceptance is recorded in the audit ledger.
 
 ### Host roaming correlation and bounded command diagnostics
 

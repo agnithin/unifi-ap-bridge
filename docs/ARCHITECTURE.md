@@ -1,6 +1,6 @@
 # Architecture & Technical Reference
 
-> **Current delivery status — 2026-10-27 PDT:** Both APs are accepted on `54c35db`, with fresh GCM, watchdogs, protected state and physical20/40/80 MHz radios. Changed-save/cluster propagation, both Mac-published WLAN caches and one Main UniFi reboot/persistence test passed. Native radio utilization ingestion and a Main LAN PCAP self-test passed. Historical AirView averages/retries, Locate and RF monitor capture remain pending. See [the canonical live ledger](AUDIT_STATE.md).
+> **Current delivery status — 2026-10-27 PDT:** Both APs are accepted on `d9c91f9`, with fresh GCM, watchdogs, protected state and physical20/40/80 MHz radios. Changed-save/cluster propagation, both Mac-published WLAN caches and one Main UniFi reboot/persistence test passed. Native radio utilization ingestion and a Main LAN PCAP self-test passed. AirView signal/airtime/retries are visible for 2.4 GHz/lower 5 GHz. Upper 5 GHz history, interference, Locate and RF monitor capture remain pending. See [the canonical live ledger](AUDIT_STATE.md).
 
 `unifi-ap-bridge` is a standalone, dependency-free daemon and WebUI extension engineered for Asuswrt-Merlin and Broadcom-based routers. It translates raw Linux and Broadcom wireless and switch telemetry into the Ubiquiti UniFi Inform protocol (`:8080/inform`).
 
@@ -246,7 +246,7 @@ operating driver telemetry alone does not overwrite that configured intent.
 
 ### Native radio utilization and optional LAN PCAP
 
-Native inform utilization is projected into `radio_table[].athstats` with exact physical identity/channel matching; REST-shaped top-level tables alone were ignored by the live controller for these measurements. Both accepted APs now retain nonzero `cu_total/cu_self_rx/cu_self_tx`; historical AirView averages and retry denominators are separate acceptance gates. No interference or Atheros retry counters are fabricated.
+Native inform utilization is projected into `radio_table[].athstats` with exact physical identity/channel matching; REST-shaped top-level tables alone were ignored by the live controller for these measurements. Both accepted APs now retain nonzero `cu_total/cu_self_rx/cu_self_tx`; AirView airtime is visible for 2.4 GHz/lower 5 GHz; upper 5 GHz history remains pending. Matched VAP retry counts are described below. No interference or Atheros retry counters are fabricated.
 
 The optional capture CLI uses Linux AF_PACKET bound only to existing `br0`, with a mandatory exact unicast MAC source/destination filter. It makes no promiscuous/monitor-mode or radio changes. A bounded receive timeout enforces cancellation/deadline; packet/time/snaplen/file caps constrain memory and disk use. MSG_TRUNC preserves original lengths in Ethernet PCAP records. Files are private0600 RAM artifacts; failures remove the partial artifact. The non-Linux implementation returns unsupported. Bridge visibility/hardware-offload limits mean a valid empty PCAP does not prove a client sent no traffic. No automatic capture or upload exists.
 
