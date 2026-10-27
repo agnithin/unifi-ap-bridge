@@ -262,13 +262,25 @@ The detailed evidence and acceptance criteria are in [the project audit/backlog]
 | B5: Accurate tri-band telemetry | Separate physical radio/VAP identities, actual channel widths and per-radio counts implemented and tested in dev. Three-radio rendering under U6IW passed in the actual UniFi overview on both APs; other diagnostic/control surfaces remain outside that check. |
 | B6: Exposed controller key | Resolved: replacement installed privately in CT107 and verified; exposed key revoked (old 401, new 200). Temporary secret copies removed. Historical exposure remains documented without key values. |
 | B7–B10: Health and telemetry correctness | CPU deltas, unknown noise/experience handling, topology/FDB corrections, UI freshness/unverified labels and watchdog log cap implemented and tested in dev. Sampling deadlines/caching, stable traffic counters, rollback, structured config verification and remaining form transport work stay open. |
-| F1: WLAN discovery | Resolve/cache exact SSID-to-legacy-ObjectId mapping; handle duplicate names and modern UUID differences. Keep broad API credentials off the AP. |
+| F1: WLAN discovery | `scripts/ops/wlan_mapping.py` now reads the fixed classic WLAN-list endpoint from a host, requires an exact SSID allowlist, rejects duplicate/missing names and UUIDs, and prints only SSID→legacy-ObjectId JSON. Keep the API key on the host; review/export is separate from applying settings to an AP. |
 | F2: Guest/VLAN classification | Report actual VAP bridge/VLAN/isolation metadata first. Classification does not enforce network policy. |
 | F3: Roaming | Already visible in UniFi per operator. No replacement roam-event implementation planned without a demonstrated gap; optional future detail is timing, reason codes and transitions shorter than sampling. |
 | F4: RF diagnostics | Passive statistics only for now. Continuous spectrum/scanning-radio parity requires supported hardware; active off-channel scans/captures and proprietary AirView/Channel AI parity are deferred. |
 | F5: Simple UniFi device commands | Reboot and other small commands are eligible for an explicit typed allowlist and controlled tests. Reboot interrupts service; no arbitrary command execution or automatic live reboot tests. |
 | F6: UniFi provisioning / firmware | **Deferred by operator:** firmware updates, UniFi-triggered bridge upgrades and broad SSID/security/radio/VLAN provisioning. Asus remains the configuration authority. Existing GitHub bridge-addon updater correctness is a separate maintenance fix. |
 | F7: Community distribution | amtm/SNBForums submission after installation, release integrity and compatibility gaps are closed. |
+
+Run the WLAN resolver from a trusted host with controller access and a private API-key file. For a local controller using its self-signed certificate, pass `--insecure` explicitly; otherwise provide the controller CA with `--ca-file`.
+
+```sh
+python3 scripts/ops/wlan_mapping.py \
+  --controller https://10.100.1.1 \
+  --credential-file /path/to/private/unifi-api-key \
+  --insecure \
+  --ssid 'example-2g' --ssid 'example-5g'
+```
+
+The command prints only the requested exact-name mappings as JSON. It performs one GET and does not update `wlan_mapping` or write to the controller.
 
 
 ---
