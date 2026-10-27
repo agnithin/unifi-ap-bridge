@@ -14,7 +14,7 @@ Both APs are accepted on `c5321a5`, version `1.2.5 dev`, with `compact_radio_nam
 
 Both APs report channels6/36/161 at20/40/80 MHz and the correct gateway ports. Main's extra Auto radio is gone after operator re-adoption. Passive scan retrieval passed, with driver result freshness explicitly unknown. Host tools correlate natural AP departure/arrival observations without claiming precise roaming latency. WLAN mapping refresh runs on demand from the Mac and both private caches are active; no new CT107 administrative access or timer is needed.
 
-Asus diagnostics, unchanged saves and changed-save/cluster propagation passed. Locate is observation-only pending a reliable firmware LED restoration contract; bounded LAN packet capture is implemented and self-tested on Main. AirView signal/airtime/retry display is accepted for 2.4 GHz/lower 5 GHz; upper 5 GHz historical summaries and interference remain pending.
+Asus diagnostics, unchanged saves and changed-save/cluster propagation passed. Locate is observation-only pending a reliable firmware LED restoration contract; bounded LAN packet capture is implemented and self-tested on Main. AirView signal, airtime and retry display is accepted for 2.4 GHz/lower 5 GHz, and upper 5 GHz traffic and signal history is verified on both APs. UniFi interference remains unavailable.
 
 See [audit state](docs/AUDIT_STATE.md) and [architecture](docs/ARCHITECTURE.md).
 
@@ -288,11 +288,33 @@ authorization for a potentially disruptive serving-radio scan, its command is:
 unifi-bridge -rf-scan-interface eth4 -rf-scan-channels 6 -allow-disruptive-rf-scan
 ```
 
+For example, from the Mac, the following runs a scan on Main's 2.4 GHz radio:
+
+```sh
+ssh -o BatchMode=yes nithin@10.100.1.10 '/tmp/unifi-bridge/unifi-bridge -rf-scan-interface eth4 -rf-scan-channels 6 -allow-disruptive-rf-scan'
+```
+
+The command prints an `rf_scan_result` path. To inspect the result, replace the
+example path below with the exact path printed by the command:
+
+```sh
+ssh -o BatchMode=yes nithin@10.100.1.10 'cat /tmp/unifi-bridge-rf-scan-EXAMPLE.json'
+```
+
+The result can contain nearby network names and identifiers; keep it private.
+The JSON's `results_output` holds the driver's latest scan results, while
+`output_truncated` tells you whether the output limit was reached. Its
+`completed_at` records when the helper finished reading, **not** when the
+radio completed a scan. `results_freshness` is `unknown`: the data can predate
+the requested scan, even when the command succeeds. This is a list of observed
+Wi-Fi networks, not a spectrum-analyzer measurement.
+
 The operation uses 100 ms passive/home dwell, an explicit channel list, a
-10-second command deadline and a 16 KiB output cap. It prints only the path to a
-mode-0600 JSON result in RAM. The driver starts scans asynchronously, so the
-deadline bounds command execution, not proven firmware completion; returned
-scan-results freshness is explicitly unknown. Main scan retrieval passed, with result age still unknown. A bounded Main LAN capture self-test passed using the built-in helper; no tcpdump is required.
+10-second command deadline and a 16 KiB output cap. The result is mode 0600 in
+RAM. The driver starts scans asynchronously, so the deadline bounds command
+execution, not proven firmware completion. Main scan retrieval passed, with
+result age still unknown. A bounded Main LAN capture self-test passed using the
+built-in helper; no tcpdump is required.
 
 ### Optional LAN packet capture
 
@@ -348,8 +370,8 @@ Main deployment and its preserved wrapper result are documented in [Section 19](
 | F1: WLAN mapping | `scripts/ops/mac_wlan_mapping.py` runs on demand from the Mac, streams the fixed classic WLAN resolver through PVE to CT107, then atomically updates the AP cache over existing Mac SSH. The API key remains on CT107; both AP private caches are activated and verified. Future refreshes need no restart. |
 | F2: Guest/VLAN classification | Report actual VAP bridge/VLAN/isolation metadata first. Classification does not enforce network policy. |
 | F3: Roaming | AP-local client/radio/BSSID timeline is deployed. The host correlator matched a natural Main→Node transition using private snapshots. Polling bounds are explicit; precise event time, reason and causal roam proof remain unavailable. |
-| F4: RF diagnostics | Passive noise/OBSS/trends are deployed; bounded opt-in passive scan retrieval passed on Main. Native utilization ingestion is fixed on both APs. Bounded LAN PCAP passed a Main self-test; driver scan age, historical AirView averages/retries and proprietary spectrum parity remain unresolved. |
-| F5: Simple UniFi device commands | Default-off authenticated GCM cmd/reboot dispatcher, fixed executor and persistent request-ID deduplication are source-tested. Real command/firmware acceptance is pending. Locate is observation-only; no firmware/provisioning handler. |
+| F4: RF diagnostics | Passive noise/OBSS/trends are deployed; bounded opt-in passive scan retrieval passed on Main. Native utilization ingestion is fixed on both APs. Bounded LAN PCAP passed a Main self-test. Upper-radio traffic/signal history is verified on both APs; driver scan age, native interference and spectrum parity remain unresolved. |
+| F5: Simple UniFi device commands | Authenticated GCM reboot dispatch with persistent request-ID deduplication passed a real Main reboot and is enabled on both APs; Node reboot was not tested. Locate is observation-only; no firmware/provisioning handler. |
 | F6: UniFi provisioning / firmware | **Deferred by operator:** firmware updates, UniFi-triggered bridge upgrades and broad SSID/security/radio/VLAN provisioning. Asus remains the configuration authority. Existing GitHub bridge-addon updater correctness is a separate maintenance fix. |
 | F7: Community distribution | amtm/SNBForums submission after installation, release integrity and compatibility gaps are closed. |
 
@@ -386,4 +408,4 @@ The opt-in `compact_radio_names` config option uses `wifi-na1` for a second 5 GH
 Do not enable this on an adopted AP without a controlled controller identity migration: UniFi retains old radio rows, and an in-place rename API has not been established. The separately authorized migrations produced exactly three radios on each AP and measured upper-radio AirView traffic/signal summaries; retries and airtime remain measurements and may legitimately be zero in a sample. The option is local to each AP and is preserved by local settings saves and satellite synchronization. See the audit ledger for the accepted migrations, retained backups and history/restore limits. Do not toggle the flag on another existing adoption without a controlled identity migration.
 
 
-UniFi's **Avg. Interference** currently shows 0% because the bridge does not supply its `cu_interf` input. This is unavailable telemetry, not evidence of interference-free operation. The Asus RF diagnostics show measured OBSS, bad-frame/control and noise-like activity separately; their equivalence to UniFi interference has not been established.
+The repository RF diagnostics page now explains the UniFi interference limitation; this text is not yet deployed. UniFi's **Avg. Interference** currently shows 0% because the bridge does not supply its `cu_interf` input. This is unavailable telemetry, not evidence of interference-free operation. The Asus RF diagnostics show measured OBSS, bad-frame/control and noise-like activity separately; their equivalence to UniFi interference has not been established.
