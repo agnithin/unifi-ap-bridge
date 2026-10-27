@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -17,6 +18,7 @@ const (
 	defaultScanOutputLimit = 16 * 1024
 	maximumScanOutputLimit = 64 * 1024
 	maximumScanTimeout     = 30 * time.Second
+	scanCommandOverhead    = 2 * time.Second
 )
 
 var scanInterfacePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,15}$`)
@@ -124,7 +126,7 @@ func validatePassiveScanRequest(req PassiveScanRequest) error {
 	if req.Timeout <= 0 || req.Timeout > maximumScanTimeout {
 		return fmt.Errorf("scan timeout must be between 1 ms and %s", maximumScanTimeout)
 	}
-	if len(req.Channels) > 0 && time.Duration(len(req.Channels))*req.PassiveDwell > req.Timeout {
+	if time.Duration(len(req.Channels))*(req.PassiveDwell+req.HomeDwell)+scanCommandOverhead > req.Timeout {
 		return errors.New("requested dwell budget exceeds scan timeout")
 	}
 	if req.MaxOutputBytes < 0 || req.MaxOutputBytes > maximumScanOutputLimit {
@@ -152,15 +154,22 @@ func runBoundedScanCommand(ctx context.Context, limit int, name string, args ...
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.WaitDelay = 300 * time.Millisecond
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return err
+	}
 	writer := &boundedScanWriter{limit: limit}
 	cmd.Stdout = writer
 	cmd.Stderr = writer
 	err := cmd.Run()
 	if ctx.Err() != nil {
 		return writer.buf.String(), writer.truncated, ctx.Err()
-	}
-	if cmd.Process != nil {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}
 	return writer.buf.String(), writer.truncated, err
 }

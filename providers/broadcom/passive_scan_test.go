@@ -3,14 +3,17 @@ package broadcom
 import (
 	"context"
 	"errors"
+	"os/exec"
 	"reflect"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
 
 func validPassiveScanRequest() PassiveScanRequest {
-	return PassiveScanRequest{Interface: "eth4", Channels: []int{1, 6, 36}, PassiveDwell: 100 * time.Millisecond, HomeDwell: 50 * time.Millisecond, Timeout: time.Second, AllowDisruption: true}
+	return PassiveScanRequest{Interface: "eth4", Channels: []int{1, 6, 36}, PassiveDwell: 100 * time.Millisecond, HomeDwell: 50 * time.Millisecond, Timeout: 5 * time.Second, AllowDisruption: true}
 }
 
 func TestRunPassiveScanRequiresOptInAndBoundsRequest(t *testing.T) {
@@ -31,6 +34,12 @@ func TestRunPassiveScanRequiresOptInAndBoundsRequest(t *testing.T) {
 		func(r *PassiveScanRequest) { r.Channels = []int{6, 200} },
 		func(r *PassiveScanRequest) { r.PassiveDwell = 2 * time.Second },
 		func(r *PassiveScanRequest) { r.Timeout = maximumScanTimeout + time.Second },
+		func(r *PassiveScanRequest) {
+			r.Channels = []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 32, 36}
+			r.PassiveDwell = time.Second
+			r.HomeDwell = time.Second
+			r.Timeout = maximumScanTimeout
+		},
 		func(r *PassiveScanRequest) { r.MaxOutputBytes = maximumScanOutputLimit + 1 },
 	} {
 		bad := validPassiveScanRequest()
@@ -42,6 +51,30 @@ func TestRunPassiveScanRequiresOptInAndBoundsRequest(t *testing.T) {
 	if called {
 		t.Fatal("invalid requests must not invoke runner")
 	}
+}
+
+func TestRunBoundedScanCommandKillsOwnedProcessGroupOnTimeout(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	output, _, err := runBoundedScanCommand(ctx, 100, "sh", "-c", "sleep 10 & echo $!; wait")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected deadline, output=%q err=%v", output, err)
+	}
+	childPID, err := strconv.Atoi(strings.TrimSpace(output))
+	if err != nil || childPID <= 0 {
+		t.Fatalf("test child pid missing from %q: %v", output, err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		err = syscall.Kill(childPID, 0)
+		if errors.Is(err, syscall.ESRCH) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	// `ps` is only used to produce useful failure detail; no external system is touched.
+	ps, _ := exec.Command("ps", "-o", "pid=,stat=,command=", "-p", strconv.Itoa(childPID)).Output()
+	t.Fatalf("timed-out scan left child process alive: %s", ps)
 }
 
 func TestRunPassiveScanUsesExplicitPassiveChannelsAndUnknownFreshness(t *testing.T) {
