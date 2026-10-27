@@ -8,8 +8,10 @@ import (
 // ChanimDetails contains optional passive fields reported by Broadcom
 // chanim_stats. Nil means the firmware did not provide a valid field.
 type ChanimDetails struct {
-	OBSSPercent *int
-	NoiseDBm    *int
+	OBSSPercent  *int
+	NoiseDBm     *int
+	NoCatPercent *int
+	NoPktPercent *int
 }
 
 // ParseChanimDetails reads only named optional fields from a chanim_stats
@@ -34,6 +36,8 @@ func ParseChanimDetails(raw string) ChanimDetails {
 		}
 		details.OBSSPercent = optionalIntField(fields, header, "obss", 0, 100)
 		details.NoiseDBm = optionalIntField(fields, header, "knoise", -150, 0)
+		details.NoCatPercent = optionalIntField(fields, header, "nocat", 0, 100)
+		details.NoPktPercent = optionalIntField(fields, header, "nopkt", 0, 100)
 		return details
 	}
 	return details

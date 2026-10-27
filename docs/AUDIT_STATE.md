@@ -1301,3 +1301,11 @@ Refreshed AirView visibly accepts signal and retry reporting for both 2.4 GHz an
 Both upper 5 GHz rows still show missing historical signal/traffic and zero averages despite populated current native VAP measurements. Public UI source keys its summaries by exact physical radio name; the read-only backend request contract has not been established. No speculative radio rename/model switch/re-adoption or invented interference/averages was applied. Upper-band history and interference remain the next reporting investigation; Locate and RF limitations remain as listed in the current header.
 
 Private deployment evidence: `/tmp/main-metrics-1793125382533637000/` and `/tmp/node-metrics-1793125423680818000/`. Existing unrelated Python caches are preserved. This documentation checkpoint does not rebuild or retarget the accepted artifacts.
+
+## 27. Passive RF categories and upper-band history investigation — source checkpoint
+
+Focused source review found consistent exact physical identities across Radio, VAP, station counts and nested driver stats. No supported naming/BSSID fix was found for the upper 5 GHz historical summary. The next discriminator is an actual controller `radio_details` response for `wifi-na-1`; no working request contract is yet established. No speculative rename, model change or re-adoption is justified.
+
+Read-only Main chanim samples expose separate measured categories, e.g. 2.4 GHz `obss=14`, `nocat=6`, `nopkt=7`, `knoise=-91`. Broadcom's WLAN Client Utility manual, section `msglevel chanim`, defines OBSS as outside-BSS reception, nocat as bad-FCS/some control traffic, and nopkt as invalid-PLCP/CRS noise-like activity ([manufacturer manual, mirrored PDF](https://device.report/m/5c3ed7d305b4daedef930e21ef5dd21b227ca8d12244ac3402955f45f0fd7c4a.pdf)). None establishes a source-specific non-Wi-Fi interference percentage or UniFi's native interference contract.
+
+Source now adds separately labeled optional bad-frame/control and noise-like activity fields to the Asus passive RF diagnostics for all three physical radios. Named headers, 0–100 validation, unknown omission and dash rendering are preserved; no counter sum or native interference value is invented. No additional scan is started. Publication and live acceptance remain required for this source checkpoint.

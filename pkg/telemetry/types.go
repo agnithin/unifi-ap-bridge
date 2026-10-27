@@ -110,6 +110,8 @@ type RadioStat struct {
 	CuSelfRx  int    `json:"cu_self_rx"`          // AP receive airtime % (0-100)
 	CuSelfTx  int    `json:"cu_self_tx"`          // AP transmit airtime % (0-100)
 	CuOBSS    *int   `json:"cu_obss,omitempty"`   // Driver-reported overlapping-BSS airtime, when available.
+	CuNoCat   *int   `json:"cu_nocat,omitempty"`  // Driver CCA no-category activity: bad-FCS frames and some control frames, %.
+	CuNoPkt   *int   `json:"cu_nopkt,omitempty"`  // Driver CCA invalid-PLCP/CRS noise-like activity, %; not a non-Wi-Fi classification.
 	NoiseDBm  *int   `json:"noise_dbm,omitempty"` // Driver-reported channel noise floor, when available.
 }
 

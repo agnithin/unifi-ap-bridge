@@ -255,3 +255,7 @@ The optional capture CLI uses Linux AF_PACKET bound only to existing `br0`, with
 The provider prioritizes exact canonical `tx pkts retries` over the firmware's separate `tx data pkts retried` counter. `tx total pkts sent`, canonical retries and retry-exhausted frames form the matched host-requested unicast source set. A process-local bounded tracker joins exact VAP/BSSID and station identities; it emits native `tx_success`, `tx_total`, `tx_retries`, `wifi_tx_attempts`, `wifi_tx_dropped` interval counts only with complete stable membership, known source/uptime, monotonic counters and a maximum120-second gap. Checked arithmetic and baseline invalidation prevent wraps/resets/unknowns being reported as real zero. No netdev or unrelated aggregate counter is used as a retry denominator.
 
 Native `avg_client_signal` is a rounded arithmetic dBm mean of a complete current VAP station set, omitted when empty or ambiguous. These current per-VAP values feed controller history; they are not presented as precomputed24-hour means or proprietary scoring.
+
+### Separate passive CCA categories
+
+The optional local `radio_stats` fields `cu_nocat` and `cu_nopkt` preserve the firmware's named, validated 0–100 percent columns. Broadcom defines `nocat` as bad-FCS plus some control-frame activity and `nopkt` as invalid-PLCP/CRS noise-like activity. They remain separate from OBSS and noise-floor dBm; no sum, inferred non-Wi-Fi classification or native UniFi interference mapping is supplied. Asus RF diagnostics display unavailable fields as dashes.

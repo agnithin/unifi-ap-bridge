@@ -813,6 +813,8 @@ func (p *AsusProvider) GetRadioStatsContext(ctx context.Context) ([]telemetry.Ra
 			CuSelfRx:  cuSelfRx,
 			CuSelfTx:  cuSelfTx,
 			CuOBSS:    rfDetails.OBSSPercent,
+			CuNoCat:   rfDetails.NoCatPercent,
+			CuNoPkt:   rfDetails.NoPktPercent,
 			NoiseDBm:  rfDetails.NoiseDBm,
 		})
 	}

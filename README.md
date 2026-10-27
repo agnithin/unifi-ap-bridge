@@ -372,3 +372,5 @@ The command prints only the requested exact-name mappings as JSON. It performs o
 
 GNU General Public License v3.0 (GPL-3.0) — see [LICENSE](LICENSE) for details.  
 Copyright (C) 2026 Nithin. All rights reserved.
+
+Asus **RF diagnostics & observed client changes** also separates neighboring WiFi occupancy, bad-frame/control activity, noise-like activity and noise floor. These are passive driver measurements for each physical radio; they do not identify a particular interfering device or supply UniFi's proprietary interference average.
