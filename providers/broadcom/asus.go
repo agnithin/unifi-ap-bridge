@@ -588,7 +588,7 @@ func (p *AsusProvider) GetVAPsContext(ctx context.Context, wlanMapping map[strin
 			StaTable:      stations,
 		}
 
-		if wlanID, ok := wlanMapping[ssid]; ok && len(wlanID) == 24 {
+		if wlanID, ok := wlanMapping[ssid]; ok && telemetry.ValidLegacyWlanID(wlanID) {
 			vap.WlanID = wlanID
 		}
 

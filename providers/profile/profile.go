@@ -165,7 +165,7 @@ func (p *ProfileProvider) GetVAPs(wlanMapping map[string]string) ([]telemetry.VA
 		}
 
 		wlanID := vc.WlanID
-		if mapped, ok := wlanMapping[vc.SSID]; ok && len(mapped) == 24 {
+		if mapped, ok := wlanMapping[vc.SSID]; ok && telemetry.ValidLegacyWlanID(mapped) {
 			wlanID = mapped
 		}
 
