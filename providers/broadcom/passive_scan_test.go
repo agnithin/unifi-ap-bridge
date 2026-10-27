@@ -105,6 +105,60 @@ func TestRunPassiveScanUsesExplicitPassiveChannelsAndUnknownFreshness(t *testing
 	}
 }
 
+func TestRunPassiveScanRetriesOnlyReadOnlyResults(t *testing.T) {
+	var starts, reads int
+	runner := func(_ context.Context, _ int, _ string, args ...string) (string, bool, error) {
+		if len(args) >= 3 && args[2] == "scan" {
+			starts++
+			return "accepted", false, nil
+		}
+		reads++
+		if reads == 1 {
+			return "", false, errors.New("results not ready")
+		}
+		return "latest results", false, nil
+	}
+	result, err := RunPassiveScan(context.Background(), validPassiveScanRequest(), runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if starts != 1 || reads != 2 || result.ScanOutput != "accepted" || result.ResultsOutput != "latest results" || result.ResultsFreshness != "unknown" {
+		t.Fatalf("unexpected retry behavior: starts=%d reads=%d result=%+v", starts, reads, result)
+	}
+}
+
+func TestRunPassiveScanBoundsReadRetriesAndCancellation(t *testing.T) {
+	var starts, reads int
+	runner := func(_ context.Context, _ int, _ string, args ...string) (string, bool, error) {
+		if len(args) >= 3 && args[2] == "scan" {
+			starts++
+			return "accepted", false, nil
+		}
+		reads++
+		return "", false, errors.New("not ready")
+	}
+	_, err := RunPassiveScan(context.Background(), validPassiveScanRequest(), runner)
+	if err == nil || starts != 1 || reads != resultsReadAttempts || !strings.Contains(err.Error(), "after 5 attempts") {
+		t.Fatalf("read retries were not capped: starts=%d reads=%d err=%v", starts, reads, err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	starts, reads = 0, 0
+	cancelRunner := func(_ context.Context, _ int, _ string, args ...string) (string, bool, error) {
+		if len(args) >= 3 && args[2] == "scan" {
+			starts++
+			return "accepted", false, nil
+		}
+		reads++
+		cancel()
+		return "", false, errors.New("not ready")
+	}
+	_, err = RunPassiveScan(ctx, validPassiveScanRequest(), cancelRunner)
+	if !errors.Is(err, context.Canceled) || starts != 1 || reads != 1 {
+		t.Fatalf("cancelled result wait was not prompt: starts=%d reads=%d err=%v", starts, reads, err)
+	}
+}
+
 func TestRunPassiveScanCapsCombinedOutputAndHonorsRunnerErrors(t *testing.T) {
 	req := validPassiveScanRequest()
 	req.MaxOutputBytes = 12

@@ -19,6 +19,9 @@ const (
 	maximumScanOutputLimit = 64 * 1024
 	maximumScanTimeout     = 30 * time.Second
 	scanCommandOverhead    = 2 * time.Second
+	resultsReadAttempts    = 5
+	resultsReadInterval    = 250 * time.Millisecond
+	resultsReadBudget      = 2 * time.Second
 )
 
 var scanInterfacePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,15}$`)
@@ -86,9 +89,37 @@ func RunPassiveScan(ctx context.Context, req PassiveScanRequest, runner PassiveS
 	if remaining < 0 {
 		remaining = 0
 	}
-	results, resultsTruncated, err := runner(ctx, remaining, "wl", "-i", req.Interface, "scanresults")
-	if err != nil {
-		return nil, fmt.Errorf("read scan results: %w", err)
+	resultsCtx, cancelResults := context.WithTimeout(ctx, resultsReadBudget)
+	defer cancelResults()
+	var results string
+	var resultsTruncated bool
+	var readErr error
+	for attempt := 0; attempt < resultsReadAttempts; attempt++ {
+		results, resultsTruncated, readErr = runner(resultsCtx, remaining, "wl", "-i", req.Interface, "scanresults")
+		if readErr == nil {
+			break
+		}
+		if resultsCtx.Err() != nil {
+			return nil, fmt.Errorf("read scan results: %w", resultsCtx.Err())
+		}
+		if attempt+1 == resultsReadAttempts {
+			break
+		}
+		timer := time.NewTimer(resultsReadInterval)
+		select {
+		case <-resultsCtx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return nil, fmt.Errorf("read scan results: %w", resultsCtx.Err())
+		case <-timer.C:
+		}
+	}
+	if readErr != nil {
+		return nil, fmt.Errorf("read scan results after %d attempts: %w", resultsReadAttempts, readErr)
 	}
 	if truncated || resultsTruncated || len(results) > remaining {
 		truncated = true
