@@ -999,3 +999,26 @@ The Asus browser session is logged out; signed-in settings-save and visual
 acceptance remain pending. Deployment establishes live metric collection, not
 cross-AP roaming correlation, scan completion, reboot interoperability, locate,
 packet capture or resolution of the two controller display defects.
+
+### Signed-in Asus acceptance and transport correction
+
+The signed-in Main page renders all three actual widths (20/40/80 MHz), live
+noise/OBSS/trends and an AP-local observed client timeline. The first unchanged
+save was rejected safely: PID 23137 stayed unchanged and no sync log was created.
+The real firmware consumes `amng_custom` into `/jffs/addons/custom_settings.txt`;
+NVRAM was empty, while the generic submitted keys were present in that file.
+The handler's prior NVRAM expectation therefore could not accept this submission.
+No generic persisted keys were removed, since they might belong to another addon.
+
+The corrected form sends one namespaced `unifibridge_payload` JSON string, per
+[Merlin's Addons API](https://github.com/RMerl/asuswrt-merlin/wiki/Addons-API).
+The handler snapshots that matching line once before waiting on locks and uses it
+only for an ID-bound submission with empty NVRAM. Missing/duplicate payloads fail
+closed; the helper still verifies the exact request ID. Legacy no-ID behavior is
+preserved. Integrated UI regressions and 13 backend tests pass, including the
+firmware-like file transport, no-op side effects and superseded requests. Live
+retest follows exact-SHA publication/deployment; no success is claimed yet.
+
+The page's intermittent partial-telemetry indicator corresponded to
+`lldp: unavailable`; serving-radio telemetry and GCM remained healthy. This is a
+separate diagnostic limitation, not a reason to restart or alter radios.

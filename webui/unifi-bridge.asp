@@ -919,7 +919,7 @@ function applySettings() {
 
   var amng = document.getElementById("amng_custom");
   if (amng) {
-    amng.value = JSON.stringify({
+    var settingsPatch = JSON.stringify({
       enabled: isEnabled === "1",
       auto_gateway: isAutoGw === "1",
       controller_url: ctrlUrl,
@@ -928,6 +928,9 @@ function applySettings() {
       branch: branch,
       request_id: requestId
     });
+    // Asuswrt-Merlin persists namespaced custom settings as lines in
+    // custom_settings.txt instead of retaining arbitrary amng_custom JSON.
+    amng.value = JSON.stringify({unifibridge_payload: settingsPatch});
   }
 
   startActionRequest("settings", requestId, "start_unifi_bridge_apply_" + requestId);

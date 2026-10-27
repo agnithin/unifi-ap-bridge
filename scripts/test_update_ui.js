@@ -16,6 +16,13 @@ function makeNode() {
  return n;
 }
 function node(id) { return nodes[id] ||= makeNode(); }
+function submittedSettings() {
+ const envelope=JSON.parse(node('amng_custom').value);
+ assert.deepEqual(Object.keys(envelope),['unifibridge_payload']);
+ assert.ok(envelope.unifibridge_payload.length < 2999,'custom setting value must fit Merlin storage');
+ assert.ok('unifibridge_payload'.length <= 29,'custom setting key must fit Merlin storage');
+ return JSON.parse(envelope.unifibridge_payload);
+}
 const form = {action:'/start_apply.htm', elements:[], submit() {throw new Error('native iframe submit is forbidden for update checks');}};
 for (const name of ['action_script','action_mode','action_wait','current_page','next_page','unifibridge_branch','amng_custom']) {
  const field = {name, value:'', type:'hidden'}; form[name]=field; form.elements.push(field);
@@ -110,7 +117,7 @@ node('input_controller_url').value='http://controller.test:8080/inform';
 node('select_model').value='U6IW';node('select_interval').value='10';
 node('select_branch').value='main';context.currentBranch='dev';
 context.applySettings();
-assert.equal(JSON.parse(node('amng_custom').value).branch,'dev');
+assert.equal(submittedSettings().branch,'dev');
 context.finishActionRequest();
 console.log('Settings track regression passed: checking main does not change installed dev on save.');
 
@@ -162,7 +169,7 @@ console.log('Gateway fallback regression passed: missing gateway stays unknown.'
 
 context.applySettings();
 assert.equal(form.unifibridge_controller_url.value,'','saving auto mode without a detected gateway must preserve unknown');
-assert.equal(JSON.parse(node('amng_custom').value).controller_url,'');
+assert.equal(submittedSettings().controller_url,'');
 context.finishActionRequest();
 console.log('Gateway settings regression passed: auto mode does not invent an endpoint.');
 
@@ -170,7 +177,7 @@ clock=70000;context.applySettings();
 const settingsRequest=context.activeActionRequest;
 assert.ok(settingsRequest);
 assert.match(form.action_script.value,new RegExp('start_unifi_bridge_apply_'+settingsRequest.id));
-assert.equal(JSON.parse(node('amng_custom').value).request_id,settingsRequest.id);
+assert.equal(submittedSettings().request_id,settingsRequest.id);
 assert.equal(requests.at(-1).async,true,'settings must use background POST');
 assert.equal(form.submit(),undefined,'background settings must not submit the page iframe');
 context.syncClusterNow();

@@ -164,6 +164,28 @@ if [ -n "$REQUEST_ID" ]; then
     write_action_status RUNNING "Validating settings submission"
 fi
 AMNG=$(nvram get amng_custom 2>/dev/null)
+# Merlin may consume amng_custom into custom_settings.txt, leaving no NVRAM
+# value for the service-event handler. Capture only this addon's single
+# namespaced JSON value before waiting on the mutation lock.
+SETTINGS_PAYLOAD=""
+if [ -n "$REQUEST_ID" ] && [ -z "$AMNG" ] && [ -f "$SETTINGS_FILE" ]; then
+    SETTINGS_PAYLOAD_LINES=$(sed -n '/^unifibridge_payload[[:space:]]/p' "$SETTINGS_FILE")
+    SETTINGS_PAYLOAD_COUNT=0
+    if [ -n "$SETTINGS_PAYLOAD_LINES" ]; then
+        SETTINGS_PAYLOAD_COUNT=$(printf '%s\n' "$SETTINGS_PAYLOAD_LINES" | wc -l | tr -d '[:space:]')
+    fi
+    case "$SETTINGS_PAYLOAD_COUNT" in ''|*[!0-9]*) SETTINGS_PAYLOAD_COUNT=0 ;; esac
+    if [ "$SETTINGS_PAYLOAD_COUNT" -gt 1 ]; then
+        echo "Multiple settings payloads found for ID-bound submission" >&2
+        exit 1
+    fi
+    if [ "$SETTINGS_PAYLOAD_COUNT" -eq 1 ]; then
+        SETTINGS_PAYLOAD=$(printf '%s\n' "$SETTINGS_PAYLOAD_LINES" | sed 's/^unifibridge_payload[[:space:]][[:space:]]*//')
+    fi
+fi
+if [ -n "$REQUEST_ID" ] && [ -z "$AMNG" ] && [ -n "$SETTINGS_PAYLOAD" ]; then
+    AMNG=$SETTINGS_PAYLOAD
+fi
 
 # Parse and merge JSON using the daemon's dependency-free settings helper.
 # Never reconstruct config with grep/sed: node lists, mappings and unknown fields

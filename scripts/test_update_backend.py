@@ -88,15 +88,25 @@ class UpdateBackendTests(unittest.TestCase):
         self.assertEqual(settings.read_text(), original)
         self.assertEqual(json.loads((self.install / 'config/config.json').read_text())["branch"], "dev")
 
-    def settings_fixture(self, *, payload_id="123456", startup_rc=0, settings_result="SETTINGS_CHANGED=1"):
+    def settings_fixture(self, *, payload_id="123456", startup_rc=0, settings_result="SETTINGS_CHANGED=1",
+                         nvram_payload="", include_custom_payload=True, duplicate_custom_payload=False):
         self.install.mkdir(exist_ok=True)
         conf = self.install / "config"
         conf.mkdir(exist_ok=True)
         status_dir = self.root / "tmp/var/wwwext/unifi-bridge"
         status_dir.mkdir(parents=True, exist_ok=True)
-        self.env.update({"AMNG": json.dumps({"request_id": payload_id, "enabled": True,
+        patch = {"request_id": payload_id, "enabled": True,
             "auto_gateway": False, "controller_url": "http://controller.test:8080/inform",
-            "model": "U6IW", "interval": 10, "branch": "dev"}), "START_RC": str(startup_rc),
+            "model": "U6IW", "interval": 10, "branch": "dev"}
+        settings_file = self.root / "custom_settings.txt"
+        custom_lines = ["unifibridge_enabled 1", "other_addon keep"]
+        if include_custom_payload:
+            payload_line = "unifibridge_payload " + json.dumps(patch, separators=(",", ":"))
+            custom_lines.append(payload_line)
+            if duplicate_custom_payload:
+                custom_lines.append(payload_line)
+        settings_file.write_text("\n".join(custom_lines) + "\n")
+        self.env.update({"AMNG": nvram_payload, "START_RC": str(startup_rc),
             "CAPTURE": str(self.root / "helper.json"), "HELPER_ARGS": str(self.root / "helper-args"),
             "SYNC_ARGS": str(self.root / "sync-args"), "SETTINGS_RESULT": settings_result,
             "START_CAPTURE": str(self.root / "start-args")})
@@ -105,7 +115,7 @@ class UpdateBackendTests(unittest.TestCase):
         nvram.chmod(0o755)
         bridge = self.root / "tmp/unifi-bridge/unifi-bridge"
         bridge.parent.mkdir(parents=True, exist_ok=True)
-        bridge.write_text('#!/usr/bin/env python3\nimport json,os,sys\na=sys.argv[1:]; payload=sys.stdin.read(); cfg=a[a.index("-config")+1]\nexpected=a[a.index("-request-id")+1] if "-request-id" in a else ""\ndata=json.loads(payload)\nopen(os.environ["HELPER_ARGS"],"w").write(repr((a, data)))\nif expected and data.get("request_id") != expected: sys.exit(31)\ndata.pop("request_id",None)\nopen(os.environ["CAPTURE"],"w").write(json.dumps(data))\nopen(cfg,"w").write(json.dumps(data))\nprint(os.environ["SETTINGS_RESULT"])\n')
+        bridge.write_text('#!/usr/bin/env python3\nimport json,os,sys\na=sys.argv[1:]; payload=sys.stdin.read(); cfg=a[a.index("-config")+1]\nif "-settings-format" in a:\n open(os.environ["HELPER_ARGS"],"w").write(repr((a, payload)))\n open(os.environ["CAPTURE"],"w").write(payload)\n print(os.environ["SETTINGS_RESULT"]); sys.exit(0)\nexpected=a[a.index("-request-id")+1] if "-request-id" in a else ""\ndata=json.loads(payload)\nopen(os.environ["HELPER_ARGS"],"w").write(repr((a, data)))\nif expected and data.get("request_id") != expected: sys.exit(31)\ndata.pop("request_id",None)\nopen(os.environ["CAPTURE"],"w").write(json.dumps(data))\nopen(cfg,"w").write(json.dumps(data))\nprint(os.environ["SETTINGS_RESULT"])\n')
         bridge.chmod(0o755)
         (self.install / "start.sh").write_text('#!/bin/sh\ntouch "$START_CAPTURE"\nexit "$START_RC"\n')
         (self.install / "start.sh").chmod(0o755)
@@ -114,12 +124,15 @@ class UpdateBackendTests(unittest.TestCase):
         source = (ROOT / "scripts/apply_config.sh").read_text()
         source = source.replace('/tmp/', str(self.root / 'tmp') + '/')
         source = source.replace('/jffs/addons/unifi-bridge', str(self.install))
+        source = source.replace('/jffs/addons/custom_settings.txt', str(settings_file))
         handler = self.root / "settings-handler.sh"
         handler.write_text(source)
         return handler, status_dir
 
-    def run_settings(self, *, action_id="123456", payload_id="123456", startup_rc=0, settings_result="SETTINGS_CHANGED=1"):
-        handler, status_dir = self.settings_fixture(payload_id=payload_id, startup_rc=startup_rc, settings_result=settings_result)
+    def run_settings(self, *, action_id="123456", payload_id="123456", startup_rc=0,
+                     settings_result="SETTINGS_CHANGED=1", nvram_payload=""):
+        handler, status_dir = self.settings_fixture(payload_id=payload_id, startup_rc=startup_rc,
+            settings_result=settings_result, nvram_payload=nvram_payload)
         result = subprocess.run(["sh", str(handler), "start", "start_unifi_bridge_apply_" + action_id],
             env=self.env, capture_output=True, text=True, timeout=5)
         status_path = status_dir / ("action_status_" + action_id + ".js")
@@ -138,12 +151,63 @@ class UpdateBackendTests(unittest.TestCase):
         self.assertNotIn("request_id", json.loads((self.root / "helper.json").read_text()))
         self.assertEqual((self.root / "sync-args").read_text().splitlines(), ["sync", "", "", "123456"])
 
+    def test_firmware_custom_settings_payload_is_captured_and_unwrapped(self):
+        result, status = self.run_settings()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(status["status"], "SAVED")
+        helper_args, helper_payload = eval((self.root / "helper-args").read_text(), {"__builtins__": {}})
+        self.assertIn("-request-id", helper_args)
+        self.assertEqual(helper_payload["request_id"], "123456")
+        self.assertEqual(json.loads((self.root / "helper.json").read_text()), {
+            "enabled": True, "auto_gateway": False, "controller_url": "http://controller.test:8080/inform",
+            "model": "U6IW", "interval": 10, "branch": "dev"})
+        self.assertIn("unifibridge_enabled 1", (self.root / "custom_settings.txt").read_text())
+
+    def test_legacy_non_id_custom_settings_fallback_is_retained(self):
+        handler, _ = self.settings_fixture(include_custom_payload=True)
+        result = subprocess.run(["sh", str(handler), "start", "legacy_unifi_bridge_apply"],
+            env=self.env, capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        helper_args, captured = eval((self.root / "helper-args").read_text(), {"__builtins__": {}})
+        self.assertIn("-settings-format", helper_args)
+        self.assertIn("unifibridge_enabled 1", captured)
+        self.assertTrue((self.root / "start-args").exists())
+
+    def test_direct_nvram_payload_remains_supported(self):
+        payload = json.dumps({"request_id": "123456", "enabled": False})
+        result, status = self.run_settings(nvram_payload=payload)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(status["status"], "SAVED")
+        self.assertEqual(json.loads((self.root / "helper.json").read_text()), {"enabled": False})
+
     def test_superseded_settings_payload_is_rejected_without_config_write(self):
         prior_config = (self.install / "config/config.json").read_text()
         result, status = self.run_settings(action_id="123456", payload_id="654321")
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(status["status"], "REJECTED")
         self.assertEqual((self.install / "config/config.json").read_text(), prior_config)
+        self.assertFalse((self.root / "sync-args").exists())
+
+    def test_missing_custom_settings_payload_fails_closed(self):
+        prior_config = (self.install / "config/config.json").read_text()
+        self.settings_fixture(include_custom_payload=False)
+        result = subprocess.run(["sh", str(self.root / "settings-handler.sh"), "start", "start_unifi_bridge_apply_123456"],
+            env=self.env, capture_output=True, text=True, timeout=5)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual((self.install / "config/config.json").read_text(), prior_config)
+        self.assertFalse((self.root / "start-args").exists())
+        self.assertFalse((self.root / "sync-args").exists())
+
+    def test_duplicate_custom_settings_payload_fails_closed(self):
+        prior_config = (self.install / "config/config.json").read_text()
+        handler, _ = self.settings_fixture(duplicate_custom_payload=True)
+        result = subprocess.run(["sh", str(handler), "start", "start_unifi_bridge_apply_123456"],
+            env=self.env, capture_output=True, text=True, timeout=5)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Multiple settings payloads", result.stderr)
+        self.assertEqual((self.install / "config/config.json").read_text(), prior_config)
+        self.assertFalse((self.root / "helper-args").exists())
+        self.assertFalse((self.root / "start-args").exists())
         self.assertFalse((self.root / "sync-args").exists())
 
     def test_semantic_noop_save_does_not_start_service_or_sync_nodes(self):
