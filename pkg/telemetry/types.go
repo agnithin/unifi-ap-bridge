@@ -20,43 +20,55 @@ type Station struct {
 	Is11ac     bool   `json:"is_11ac,omitempty"`
 	Is11n      bool   `json:"is_11n,omitempty"`
 	// Traffic & Airtime Telemetry
-	TxBytes               int64  `json:"tx_bytes"`
-	RxBytes               int64  `json:"rx_bytes"`
-	TxPackets             int64  `json:"tx_packets"`
-	RxPackets             int64  `json:"rx_packets"`
-	TxRetries             int64  `json:"tx_retries,omitempty"`
-	TxRate                int    `json:"tx_rate,omitempty"`      // in kbps (e.g. 58500)
-	RxRate                int    `json:"rx_rate,omitempty"`      // in kbps (e.g. 54000)
-	Uptime                int64  `json:"uptime,omitempty"`       // seconds connected
-	IdleTime              int64  `json:"idletime,omitempty"`     // seconds idle
-	Satisfaction          int    `json:"satisfaction,omitempty"` // WiFi Experience score (0-100)
-	TxPacketsPresent      bool   `json:"-"`
-	TxPacketCounterSource string `json:"-"`
-	TxRetriesPresent      bool   `json:"-"`
-	RetryCounterSource    string `json:"-"`
-	UptimePresent         bool   `json:"-"`
+	TxBytes                  int64  `json:"tx_bytes"`
+	RxBytes                  int64  `json:"rx_bytes"`
+	TxPackets                int64  `json:"tx_packets"`
+	RxPackets                int64  `json:"rx_packets"`
+	TxRetries                int64  `json:"tx_retries,omitempty"`
+	TxSuccessPackets         int64  `json:"-"`
+	TxRetryExhausted         int64  `json:"-"`
+	TxSuccessPacketsPresent  bool   `json:"-"`
+	TxSuccessCounterSource   string `json:"-"`
+	TxRetryExhaustedPresent  bool   `json:"-"`
+	TxExhaustedCounterSource string `json:"-"`
+	TxRate                   int    `json:"tx_rate,omitempty"`      // in kbps (e.g. 58500)
+	RxRate                   int    `json:"rx_rate,omitempty"`      // in kbps (e.g. 54000)
+	Uptime                   int64  `json:"uptime,omitempty"`       // seconds connected
+	IdleTime                 int64  `json:"idletime,omitempty"`     // seconds idle
+	Satisfaction             int    `json:"satisfaction,omitempty"` // WiFi Experience score (0-100)
+	TxPacketsPresent         bool   `json:"-"`
+	TxPacketCounterSource    string `json:"-"`
+	TxRetriesPresent         bool   `json:"-"`
+	RetryCounterSource       string `json:"-"`
+	UptimePresent            bool   `json:"-"`
 }
 
 type VAP struct {
-	Name          string    `json:"name"`
-	InterfaceName string    `json:"-"`
-	Radio         string    `json:"radio"`
-	RadioName     string    `json:"radio_name"`
-	MAC           string    `json:"mac"`
-	BSSID         string    `json:"bssid"`
-	ESSID         string    `json:"essid"`
-	Channel       int       `json:"channel"`
-	State         string    `json:"state"` // "RUN"
-	Up            bool      `json:"up"`
-	CountersKnown bool      `json:"counters_known,omitempty"`
-	IsGuest       bool      `json:"is_guest"`
-	NumSta        int       `json:"num_sta"`
-	WlanID        string    `json:"id,omitempty"` // Legacy 24-hex controller ObjectId
-	TxBytes       *int64    `json:"tx_bytes,omitempty"`
-	RxBytes       *int64    `json:"rx_bytes,omitempty"`
-	TxPackets     *int64    `json:"tx_packets,omitempty"`
-	RxPackets     *int64    `json:"rx_packets,omitempty"`
-	StaTable      []Station `json:"sta_table"`
+	AvgClientSignal *int      `json:"avg_client_signal,omitempty"`
+	Name            string    `json:"name"`
+	InterfaceName   string    `json:"-"`
+	Radio           string    `json:"radio"`
+	RadioName       string    `json:"radio_name"`
+	MAC             string    `json:"mac"`
+	BSSID           string    `json:"bssid"`
+	ESSID           string    `json:"essid"`
+	Channel         int       `json:"channel"`
+	State           string    `json:"state"` // "RUN"
+	Up              bool      `json:"up"`
+	CountersKnown   bool      `json:"counters_known,omitempty"`
+	IsGuest         bool      `json:"is_guest"`
+	NumSta          int       `json:"num_sta"`
+	WlanID          string    `json:"id,omitempty"` // Legacy 24-hex controller ObjectId
+	TxBytes         *int64    `json:"tx_bytes,omitempty"`
+	RxBytes         *int64    `json:"rx_bytes,omitempty"`
+	TxPackets       *int64    `json:"tx_packets,omitempty"`
+	RxPackets       *int64    `json:"rx_packets,omitempty"`
+	TxSuccess       *int64    `json:"tx_success,omitempty"`
+	TxTotal         *int64    `json:"tx_total,omitempty"`
+	TxRetries       *int64    `json:"tx_retries,omitempty"`
+	WiFiTxAttempts  *int64    `json:"wifi_tx_attempts,omitempty"`
+	WiFiTxDropped   *int64    `json:"wifi_tx_dropped,omitempty"`
+	StaTable        []Station `json:"sta_table"`
 }
 
 // RadioDriverStats is the native radio_table[].athstats wire projection.

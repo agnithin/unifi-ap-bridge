@@ -15,8 +15,28 @@ func TestUnknownVAPCountersAndVLANAreOmitted(t *testing.T) {
 		t.Fatal(err)
 	}
 	encoded := string(data)
-	if strings.Contains(encoded, "tx_bytes") || strings.Contains(encoded, "rx_bytes") || strings.Contains(encoded, "vlan") {
+	if strings.Contains(encoded, "tx_bytes") || strings.Contains(encoded, "rx_bytes") || strings.Contains(encoded, "tx_success") || strings.Contains(encoded, "tx_total") || strings.Contains(encoded, "wifi_tx_attempts") || strings.Contains(encoded, "wifi_tx_dropped") || strings.Contains(encoded, "vlan") {
 		t.Fatalf("unknown VAP counters or VLAN were serialized as values: %s", encoded)
+	}
+}
+
+func TestVAPIntervalCounterProjectionKeepsMeasuredZeroesAndHidesStationInternals(t *testing.T) {
+	zero := int64(0)
+	data, err := json.Marshal(VAP{
+		TxSuccess: &zero, TxTotal: &zero, TxRetries: &zero, WiFiTxAttempts: &zero, WiFiTxDropped: &zero,
+		StaTable: []Station{{MAC: "02:00:00:00:00:11", TxSuccessPackets: 10, TxSuccessPacketsPresent: true, TxRetryExhausted: 1, TxRetryExhaustedPresent: true}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := string(data)
+	for _, field := range []string{`"tx_success":0`, `"tx_total":0`, `"tx_retries":0`, `"wifi_tx_attempts":0`, `"wifi_tx_dropped":0`} {
+		if !strings.Contains(encoded, field) {
+			t.Fatalf("known zero interval field %s missing: %s", field, encoded)
+		}
+	}
+	if strings.Contains(encoded, "TxSuccessPackets") || strings.Contains(encoded, "TxRetryExhausted") || strings.Contains(encoded, "tx_success_packets") {
+		t.Fatalf("station cumulative source internals leaked to wire: %s", encoded)
 	}
 }
 

@@ -9,47 +9,56 @@ import (
 )
 
 var (
-	rssiRegex         = regexp.MustCompile(`(?i)(?:rssi|signal):\s*(-?\d+)`)
-	noiseRegex        = regexp.MustCompile(`(?i)noise(?:\s*floor)?:\s*(-?\d+)`)
-	txRateKbpsRegex   = regexp.MustCompile(`(?i)rate of last tx pkt:\s*(\d+)\s*kbps`)
-	rxRateKbpsRegex   = regexp.MustCompile(`(?i)rate of last rx pkt:\s*(\d+)\s*kbps`)
-	legacyRateRegex   = regexp.MustCompile(`(?i)legacy rate\s*(\d+)\s*mbps`)
-	genericRateRegex  = regexp.MustCompile(`(?i)(?:rate|rate_mbps):\s*(\d+)`)
-	txUcastBytesRegex = regexp.MustCompile(`(?i)tx ucast bytes:\s*(\d+)`)
-	txTotalBytesRegex = regexp.MustCompile(`(?i)tx total bytes:\s*(\d+)`)
-	rxUcastBytesRegex = regexp.MustCompile(`(?i)rx ucast bytes:\s*(\d+)`)
-	rxDataBytesRegex  = regexp.MustCompile(`(?i)rx (?:data|total) bytes:\s*(\d+)`)
-	txUcastPktsRegex  = regexp.MustCompile(`(?i)tx ucast pkts:\s*(\d+)`)
-	txTotalPktsRegex  = regexp.MustCompile(`(?i)tx total pkts:\s*(\d+)`)
-	rxUcastPktsRegex  = regexp.MustCompile(`(?i)rx ucast pkts:\s*(\d+)`)
-	rxDataPktsRegex   = regexp.MustCompile(`(?i)rx (?:data|total) pkts:\s*(\d+)`)
-	txRetriesRegex    = regexp.MustCompile(`(?i)tx (?:pkts retries|data pkts retried):\s*(\d+)`)
-	uptimeRegex       = regexp.MustCompile(`(?i)in network\s*(\d+)\s*seconds`)
-	idleRegex         = regexp.MustCompile(`(?i)idle\s*(\d+)\s*seconds`)
+	rssiRegex                 = regexp.MustCompile(`(?i)(?:rssi|signal):\s*(-?\d+)`)
+	noiseRegex                = regexp.MustCompile(`(?i)noise(?:\s*floor)?:\s*(-?\d+)`)
+	txRateKbpsRegex           = regexp.MustCompile(`(?i)rate of last tx pkt:\s*(\d+)\s*kbps`)
+	rxRateKbpsRegex           = regexp.MustCompile(`(?i)rate of last rx pkt:\s*(\d+)\s*kbps`)
+	legacyRateRegex           = regexp.MustCompile(`(?i)legacy rate\s*(\d+)\s*mbps`)
+	genericRateRegex          = regexp.MustCompile(`(?i)(?:rate|rate_mbps):\s*(\d+)`)
+	txUcastBytesRegex         = regexp.MustCompile(`(?i)tx ucast bytes:\s*(\d+)`)
+	txTotalBytesRegex         = regexp.MustCompile(`(?i)tx total bytes:\s*(\d+)`)
+	rxUcastBytesRegex         = regexp.MustCompile(`(?i)rx ucast bytes:\s*(\d+)`)
+	rxDataBytesRegex          = regexp.MustCompile(`(?i)rx (?:data|total) bytes:\s*(\d+)`)
+	txUcastPktsRegex          = regexp.MustCompile(`(?i)tx ucast pkts:\s*(\d+)`)
+	txTotalPktsRegex          = regexp.MustCompile(`(?i)tx total pkts:\s*(\d+)`)
+	rxUcastPktsRegex          = regexp.MustCompile(`(?i)rx ucast pkts:\s*(\d+)`)
+	rxDataPktsRegex           = regexp.MustCompile(`(?i)rx (?:data|total) pkts:\s*(\d+)`)
+	txPktsRetriesRegex        = regexp.MustCompile(`(?i)tx pkts retries:\s*(\d+)`)
+	txDataPktsRetriedRegex    = regexp.MustCompile(`(?i)tx data pkts retried:\s*(\d+)`)
+	txTotalPktsSentRegex      = regexp.MustCompile(`(?i)tx total pkts sent:\s*(\d+)`)
+	txPktsRetryExhaustedRegex = regexp.MustCompile(`(?i)tx pkts retry exhausted:\s*(\d+)`)
+	uptimeRegex               = regexp.MustCompile(`(?i)in network\s*(\d+)\s*seconds`)
+	idleRegex                 = regexp.MustCompile(`(?i)idle\s*(\d+)\s*seconds`)
 )
 
 type ParsedStaInfo struct {
-	Signal           int
-	Noise            int
-	RSSI             int
-	RadioProto       string
-	Is11ax           bool
-	Is11ac           bool
-	Is11n            bool
-	TxRate           int
-	RxRate           int
-	Uptime           int64
-	IdleTime         int64
-	TxBytes          int64
-	RxBytes          int64
-	TxPackets        int64
-	RxPackets        int64
-	TxRetries        int64
-	TxPacketsPresent bool
-	TxPacketSource   string
-	TxRetriesPresent bool
-	RetriesSource    string
-	UptimePresent    bool
+	Signal             int
+	Noise              int
+	RSSI               int
+	RadioProto         string
+	Is11ax             bool
+	Is11ac             bool
+	Is11n              bool
+	TxRate             int
+	RxRate             int
+	Uptime             int64
+	IdleTime           int64
+	TxBytes            int64
+	RxBytes            int64
+	TxPackets          int64
+	RxPackets          int64
+	TxRetries          int64
+	TxSuccessPackets   int64
+	TxSuccessPresent   bool
+	TxSuccessSource    string
+	TxRetryExhausted   int64
+	TxExhaustedPresent bool
+	TxExhaustedSource  string
+	TxPacketsPresent   bool
+	TxPacketSource     string
+	TxRetriesPresent   bool
+	RetriesSource      string
+	UptimePresent      bool
 }
 
 // ParseStaInfo parses the text output of `wl sta_info <mac>`.
@@ -170,15 +179,35 @@ func ParseStaInfo(output string, fallbackBand string) ParsedStaInfo {
 			info.RxPackets = val
 		}
 	}
-	if match := txRetriesRegex.FindStringSubmatch(output); len(match) > 1 {
-		if val, err := strconv.ParseInt(match[1], 10, 64); err == nil {
+	// Prefer the kernel's canonical host-requested unicast retry counter even
+	// when the firmware also emits a separately named data-retry counter.
+	retryMatch := txPktsRetriesRegex.FindStringSubmatch(output)
+	if len(retryMatch) > 1 {
+		info.RetriesSource = "tx_pkts_retries"
+	} else {
+		retryMatch = txDataPktsRetriedRegex.FindStringSubmatch(output)
+		if len(retryMatch) > 1 {
+			info.RetriesSource = "tx_data_pkts_retried"
+		}
+	}
+	if len(retryMatch) > 1 {
+		if val, err := strconv.ParseInt(retryMatch[1], 10, 64); err == nil {
 			info.TxRetries = val
 			info.TxRetriesPresent = true
-			if strings.Contains(strings.ToLower(match[0]), "data pkts retried") {
-				info.RetriesSource = "tx_data_pkts_retried"
-			} else {
-				info.RetriesSource = "tx_pkts_retries"
-			}
+		}
+	}
+	if match := txTotalPktsSentRegex.FindStringSubmatch(output); len(match) > 1 {
+		if val, err := strconv.ParseInt(match[1], 10, 64); err == nil {
+			info.TxSuccessPackets = val
+			info.TxSuccessPresent = true
+			info.TxSuccessSource = "tx_total_pkts_sent"
+		}
+	}
+	if match := txPktsRetryExhaustedRegex.FindStringSubmatch(output); len(match) > 1 {
+		if val, err := strconv.ParseInt(match[1], 10, 64); err == nil {
+			info.TxRetryExhausted = val
+			info.TxExhaustedPresent = true
+			info.TxExhaustedSource = "tx_pkts_retry_exhausted"
 		}
 	}
 	if match := uptimeRegex.FindStringSubmatch(output); len(match) > 1 {
@@ -214,6 +243,12 @@ func EnrichStation(sta *telemetry.Station, info ParsedStaInfo) {
 	sta.TxPackets = info.TxPackets
 	sta.RxPackets = info.RxPackets
 	sta.TxRetries = info.TxRetries
+	sta.TxSuccessPackets = info.TxSuccessPackets
+	sta.TxSuccessPacketsPresent = info.TxSuccessPresent
+	sta.TxSuccessCounterSource = info.TxSuccessSource
+	sta.TxRetryExhausted = info.TxRetryExhausted
+	sta.TxRetryExhaustedPresent = info.TxExhaustedPresent
+	sta.TxExhaustedCounterSource = info.TxExhaustedSource
 	sta.TxPacketsPresent = info.TxPacketsPresent
 	sta.TxPacketCounterSource = info.TxPacketSource
 	sta.TxRetriesPresent = info.TxRetriesPresent

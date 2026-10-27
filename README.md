@@ -306,6 +306,10 @@ The dev CLI can write a short Ethernet PCAP without `tcpdump`. It requires Linux
 
 Replace the example with the intended device's unicast MAC. Maximums are10 seconds,100 matching packets,128 bytes per packet and32KiB per file. The result is a private0600 `/tmp/unifi-bridge-packet-*.pcap`; stdout prints its path only. The file can contain packet contents, so keep it private. Truncated PCAP records retain their original wire length. Nothing runs automatically in the daemon, and no capture is uploaded. Source tests, ARMv7/ARM64 compile checks and a10-packet Main self-test passed; live limits are recorded in the ledger.
 
+### Native VAP signal and retry telemetry
+
+The next source batch reports measured per-network signal and matched host-unicast retry intervals to UniFi. It prioritizes the canonical Broadcom retry counter when the firmware prints multiple counter types. VAP signal is the mean of complete current dBm samples; retry attempts combine matching success, exhausted-frame and retry deltas. First samples, association changes, resets and missing measurements remain unknown. These are measured client-unicast statistics, not all-radio PHY counters; UniFi computes its historical percentages. Deployment/visible AirView acceptance is recorded in the audit ledger.
+
 ### Host roaming correlation and bounded command diagnostics
 
 `go run ./cmd/roam-correlator -ap Main=/private/main-status.js -ap Node=/private/node-status.js -window 90s`

@@ -2,7 +2,7 @@
 
 > **Current delivery status — 2026-10-27 PDT:** Both APs are accepted on `54c35dbcd74d49df45f8997f53082643b049a065` (v1.2.5 dev). Native utilization ingestion is now verified for all six radios, and optional bounded LAN packet capture passed a Main self-test without tcpdump. Fresh GCM, watchdogs, protected config/state/keys,20/40/80MHz physical radios and expected port links remain healthy. Earlier settings-save, WLAN cache, Main reboot/persistence and stale-radio acceptance remain valid.
 
-**Remaining:** AirView historical average/display acceptance is open: the current browser view showed an empty table, and its TX-retry denominator remains unverified. Native controller utilization ingestion is fixed; this is not yet a claim that all screenshot columns are fixed. Locate needs a reliable firmware LED restore contract. RF monitor-frame capture/spectrum analysis and scan-result freshness remain unsupported/unproven; the accepted PCAP feature is limited LAN Ethernet capture. Firmware updates and broad provisioning remain deferred.
+**Remaining:** AirView rows are visible after selecting both active bands. Airtime averages passed for2.4GHz/lower5GHz; upper5GHz history, interference and TX-retry averages remain unverified. Native controller utilization ingestion is fixed; this is not yet a claim that all screenshot columns are fixed. Locate needs a reliable firmware LED restore contract. RF monitor-frame capture/spectrum analysis and scan-result freshness remain unsupported/unproven; the accepted PCAP feature is limited LAN Ethernet capture. Firmware updates and broad provisioning remain deferred.
 
 **Release track:** `dev`. No main merge or stable tag was created. Sections below preserve dated audit/recovery history; this header and the latest section describe current delivery.
 
@@ -1269,3 +1269,23 @@ The current AirView browser table displayed "We Couldn't Find a Match" even with
 | Wireless monitor capture | Requires separately verified hardware/driver support; bounded LAN PCAP does not provide it. |
 
 Source review corrected ARMv7 timeval types and PCAP original-length preservation. Integrated full Go race/vet checks, secret guard, ARMv7 build and worker ARM64 build passed. No new access, credential, timer, dependencies, main merge or stable tag was introduced. Both existing unrelated __pycache__ directories remain preserved.
+
+### AirView display correction — follow-up verification
+
+The empty browser table was resolved by explicitly selecting2.4GHz and5GHz in AirView's Band filter; no AP/controller configuration change was required. The prior assumption that no selected band meant all bands was incorrect for this view. The checkbox widget exposes its active selection through aria-checked; a native checked-property assertion can fail even after the UI selection has taken effect. All six physical radio rows are now visible.
+
+Visible AirView averages now confirm the utilization fix for2.4GHz and the lower5GHz radio: Main42.9%/6.3% and Node49.6%/21.7% airtime at the observed checkpoint. Both upper5GHz rows still show0% airtime and no24-hour traffic despite current radio measurements/clients; historical third-radio coverage remains unaccepted. Interference and TX retries remain0 on all rows. These are separate gaps, not a failed AP or zero RF activity.
+
+Read-only public UI source10.6.109.0 identifies the historical summary properties `tx_retries_percentage`, `client_signal_avg`, `interference_avg`, keyed by AP MAC and physical radio name. This is stronger evidence for tracing the missing averages than guessing native fields. Public source inventory and downloaded modules are temporary local research artifacts; no credentials or application records were included.
+
+## 26. Native VAP signal and retry reporting — source checkpoint
+
+Read-only live station inspection found both `tx data pkts retried` and `tx pkts retries` in the same reply, with different values2 and71. The old combined regex chose the first occurrence and silently preferred the fallback counter. The parser now prioritizes exact `tx pkts retries` independent of line order and retains explicit source metadata.
+
+The same live reply exposes `tx total pkts sent` and `tx pkts retry exhausted`. Broadcom's [published host-requested unicast counter definitions](https://android.googlesource.com/kernel/common/+/bcmdhd-3.10/drivers/net/wireless/bcmdhd/include/wlioctl.h) separate successful user frames, user retry attempts and locally generated firmware traffic. A [primary native UniFi device record](https://community.ui.com/questions/Export-list-of-BSSIDs-for-E911-location-services/ff228bc9-f227-4313-b6c6-f903f42b9f33) contains a nonzero dBm `avg_client_signal` and consistent VAP success/retry/attempt fields. These support a practical measured user-unicast projection, rather than mixing bulk Ethernet counters or retry-denominator guesses.
+
+The new bounded RAM tracker computes consecutive, stable-membership VAP intervals: success=successful-frame delta; dropped=retry-exhausted-frame delta; total=success+dropped; retries=canonical retry delta; attempts=total+retries. All five optional wire fields are emitted together only when every current station has the exact measured sources and uptime, complete/unchanged membership, monotonic counters, a positive interval no longer than120seconds and no arithmetic overflow. First/reset/missing/ambiguous/partial/empty samples omit them. This covers observed host-requested unicast traffic; it does not claim all PHY/firmware/control traffic. No percentage is fabricated locally: the controller receives counts.
+
+`avg_client_signal` is the rounded arithmetic mean of current station dBm values only for complete, nonempty VAP snapshots. Invalid/missing signals or duplicate stations omit the field. The controller remains responsible for historical aggregation. Private raw station evidence remains outside Git.
+
+Full local Go race/vet checks and secret guard passed. Bounded independent review found no correctness blocker; targeted packages passed107tests. Publication and Main-only native ingestion canary are the next acceptance gate. No AP change occurred while preparing this source checkpoint.

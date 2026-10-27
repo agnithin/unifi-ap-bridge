@@ -178,6 +178,35 @@ tx pkts retries: 8`
 	}
 }
 
+func TestParseStaInfoPrefersCanonicalRetryLabelAndKeepsExactCounters(t *testing.T) {
+	// Sanitized dual-label observation: canonical host-requested unicast retry
+	// count follows the broader data retry count in the textual payload.
+	raw := `tx data pkts retried: 2
+ tx pkts retries: 71
+ tx total pkts sent: 2795
+ tx pkts retry exhausted: 1
+ in network 600 seconds`
+	parsed := ParseStaInfo(raw, "na")
+	if parsed.TxRetries != 71 || !parsed.TxRetriesPresent || parsed.RetriesSource != "tx_pkts_retries" {
+		t.Fatalf("canonical retry source did not win: %+v", parsed)
+	}
+	if parsed.TxSuccessPackets != 2795 || !parsed.TxSuccessPresent || parsed.TxSuccessSource != "tx_total_pkts_sent" {
+		t.Fatalf("exact success counter missing: %+v", parsed)
+	}
+	if parsed.TxRetryExhausted != 1 || !parsed.TxExhaustedPresent || parsed.TxExhaustedSource != "tx_pkts_retry_exhausted" {
+		t.Fatalf("exact exhausted counter missing: %+v", parsed)
+	}
+	fallback := ParseStaInfo("tx data pkts retried: 9", "na")
+	if fallback.TxRetries != 9 || !fallback.TxRetriesPresent || fallback.RetriesSource != "tx_data_pkts_retried" {
+		t.Fatalf("secondary retry source fallback failed: %+v", fallback)
+	}
+	sta := telemetry.Station{}
+	EnrichStation(&sta, parsed)
+	if sta.TxSuccessPackets != 2795 || sta.TxRetryExhausted != 1 || !sta.TxSuccessPacketsPresent || !sta.TxRetryExhaustedPresent {
+		t.Fatalf("station lost private parsed counters: %+v", sta)
+	}
+}
+
 func TestCalculateSatisfaction(t *testing.T) {
 	// Excellent client (-55 dBm, 0 retries) -> 100
 	if s := CalculateSatisfaction(-55, 35, 1000, 0); s != 100 {
