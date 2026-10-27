@@ -50,7 +50,13 @@ func (d *RebootDispatcher) loadIDs() error {
 		d.stateErr = errors.New("invalid reboot command ID state file")
 		return d.stateErr
 	}
-	raw, err := os.ReadFile(d.statePath)
+	file, err := os.Open(d.statePath)
+	if err != nil {
+		d.stateErr = errors.New("cannot read reboot command ID state")
+		return d.stateErr
+	}
+	raw, err := io.ReadAll(io.LimitReader(file, 8193))
+	_ = file.Close()
 	if err != nil || len(raw) > 8192 {
 		d.stateErr = errors.New("cannot read reboot command ID state")
 		return d.stateErr

@@ -923,3 +923,37 @@ Main's candidate `1f22343206c80bda01d576dfdb813e4a911e4568` is **accepted from i
 The source packet now checks `install.sh` bytes against the pinned archive contents and separately requires installed mode 0755, matching the updater's normalization. Regression fixtures prove archive mode 0644 plus installed mode 0755 with identical bytes passes, while wrong installed mode or changed bytes fails. All other packet gates are preserved. Exact-artifact packet verification, pinned candidate lifecycle tests (3/3), and `git diff --check` passed. This is a verifier correction only; Main is not updated again.
 
 Remaining backlog: cosmetic UniFi upper-5-GHz width/radio display discrepancies; Asus settings-save and controlled persistence/recovery acceptance (held because the settings action restarts/synchronizes services); evidence-blocked phantom-radio removal, authenticated W8 command capture, and firmware-specific peer SSH trust interoperability; optional maintenance and deferred WLAN/guest/roaming/RF/firmware features remain deferred absent demonstrated need and required evidence. Historical updater-file disappearance attribution remains unknown and was not reopened.
+
+
+## 20. Parallel Wireless Feature Batch
+
+**Operator scope:** the seven requested items (UniFi width, stale radio, settings
+save, reboot/locate, automatic WLAN mapping, roaming enrichment and RF diagnostics)
+are now priorities. Three isolated Luna worktrees implemented scoped source/tests;
+the orchestrator integrated and reviewed them on dev. This batch does not authorize
+an AP update, settings apply, controller write, physical reboot, scan or packet
+capture. Existing live Main remains the accepted `1f223432`; Node was not touched.
+
+| Requested item | New result | Remaining acceptance or evidence |
+|---|---|---|
+| UniFi 40/80 MHz display | Current read-only controller evidence still shows saved ht=40 and normalized bw=0 while physical driver/status says 80. Primary emulator protocol documents ht in radio_table but does not establish runtime bw ingestion. No speculative wire-field change was added. | Prepare a clearly scoped saved-controller-width change through supported UI/API and verify its readback separately. Do not call the earlier bw source addition a verified UniFi display fix. |
+| Main extra Auto row | Read-only API/UI again confirm four configured groups, only three physical/runtime identities, and no UI per-radio delete affordance. | Removal semantics remain unknown after the prior ineffective PUT. No repeated write, database edit or forget/re-adopt is authorized. |
+| Asus settings save | Handler consumes a helper-local effective-change result and emits SAVED_NOOP without startup or peer sync on unchanged config. UI recognizes it. Integration caught and fixed a global-result race using per-call output instead. | Tests cover no-op side effects and custom-field preservation; live acceptance follows an approved deployment. Changed settings can still restart/synchronize as designed. |
+| Reboot/locate | Default-off cmd/reboot dispatcher is wired only to actual authenticated GCM replies for an adopted, non-bootstrap identity. It requires persistent hashed-ID deduplication before the fixed reboot executor; tests use fake executors. Sanitized command status is exposed. | Actual current controller command/XT8 reboot behavior is unverified. Locate/legacy shapes are observation-only; no known LED-control contract, firmware update or broad provisioning handler. |
+| Automatic WLAN mapping | Host-side exact allowlist resolver uses the previously proven classic WLAN-list GET. Validated mapping-file cache is connected to collection with manual overrides and last-good retention; API keys stay off APs. | Approved operational publication/scheduling and AP mapping-file configuration remain to be set up. No live config was changed. |
+| Roaming enrichment | Bounded AP-local timeline exposes observed association/departure, physical-radio/BSSID transitions, known signal and polling gap in Asus diagnostics. | Cross-AP destination, exact roam interruption and disconnect reasons are not established by polling. No synthetic reason codes/802.11r claims. History resets with daemon restart. |
+| RF scans/capture | Passive noise/OBSS and trend view added from actual Main driver header evidence. Explicit opt-in selected-channel passive-scan CLI writes private bounded JSON, with process-group command timeout and unknown scan-result freshness. | No scan was run. Driver scans are asynchronous; command timeout does not prove scan cancellation/completion. tcpdump was not found, so packet capture remains unimplemented pending a supported tool/path. |
+
+**Read-only firmware evidence:** Main's Broadcom 17.10.157.2809 chanim_stats v3
+header includes `tx inbss obss nocat nopkt doze txop goodtx badtx glitch badplcp
+knoise idle timestamp`. Driver help lists `scan -t passive -p N -h N -c L`
+and `scanresults`; no active command or capture was invoked. CT107 identity and
+GET-only WLAN mapping were verified by the controller worker without exporting
+credentials/raw objects. Prior source-vs-deployed rows above remain dated history;
+this section records the newly prioritized, not-yet-deployed source batch.
+
+**Validation so far:** full integrated Go race tests and Go vet pass; UI tests
+include text-only SSID rendering, actual driver bandwidth, mapping and disabled
+command status; backend fixtures pass 8/8, including no-op no-restart/no-sync.
+Final milestone/hosted status will be recorded below. Keep optional dangerous
+operations disabled pending concrete live acceptance decisions.

@@ -18,11 +18,6 @@ import (
 
 const defaultMutationLock = "/tmp/unifi-bridge-mutation.lock"
 
-// settingsChanged reports whether the most recent local settings merge changed
-// effective configuration. It is consumed immediately by the single-purpose
-// CLI helper before it exits.
-var settingsChanged bool
-
 func settingsMutationLockPath() string {
 	if p := os.Getenv("UNIFI_BRIDGE_MUTATION_LOCK"); p != "" {
 		return p
@@ -82,7 +77,13 @@ func acquireSettingsMutation() (func(), error) {
 // mergeSettings preserves fields owned by other components (including WLAN IDs,
 // node lists and per-node topology) instead of reconstructing the configuration.
 func mergeSettings(path string, input io.Reader, format, gateway string, expectedRequestIDs ...string) error {
-	settingsChanged = false
+	return mergeSettingsOutcome(path, input, format, gateway, nil, expectedRequestIDs...)
+}
+
+func mergeSettingsOutcome(path string, input io.Reader, format, gateway string, changed *bool, expectedRequestIDs ...string) error {
+	if changed != nil {
+		*changed = false
+	}
 	expectedRequestID := ""
 	if len(expectedRequestIDs) > 0 {
 		expectedRequestID = expectedRequestIDs[0]
@@ -261,7 +262,9 @@ func mergeSettings(path string, input io.Reader, format, gateway string, expecte
 	if err = os.Rename(temp, path); err != nil {
 		return err
 	}
-	settingsChanged = true
+	if changed != nil {
+		*changed = true
+	}
 	return nil
 }
 

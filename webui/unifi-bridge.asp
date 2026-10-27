@@ -428,8 +428,76 @@ function clusterState(n) {
   return label.indexOf("In Sync") !== -1 ? "verified" : "unverified";
 }
 
+// These views use only text nodes: station/SSID fields are untrusted data.
+function diagnosticCellText(value) {
+  return typeof value === "string" ? value.slice(0, 128) : "-";
+}
+function appendDiagnosticRow(body, values) {
+  var row = document.createElement("tr");
+  for (var i = 0; i < values.length; i++) {
+    var cell = document.createElement("td");
+    cell.style.padding = "6px";
+    cell.textContent = String(values[i]);
+    row.appendChild(cell);
+  }
+  body.appendChild(row);
+}
+function diagnosticNumber(value, suffix) {
+  return typeof value === "number" && isFinite(value) ? String(Math.round(value * 10) / 10) + suffix : "-";
+}
+function updateDiagnosticsUI(st) {
+  var radioBody = document.getElementById("rf_diagnostics_rows");
+  if (radioBody) {
+    radioBody.textContent = "";
+    var radios = Array.isArray(st.radio_stats) ? st.radio_stats.slice(0, 8) : [];
+    var trends = Array.isArray(st.passive_rf_trends) ? st.passive_rf_trends.slice(0, 8) : [];
+    for (var i = 0; i < radios.length; i++) {
+      var radio = radios[i] || {};
+      var mean = null;
+      for (var j = 0; j < trends.length; j++) if (trends[j] && trends[j].radio === radio.name) mean = trends[j].mean_busy_percent;
+      appendDiagnosticRow(radioBody, [diagnosticCellText(radio.name), diagnosticNumber(radio.channel, ""),
+        diagnosticNumber(radio.bw, " MHz"), diagnosticNumber(radio.cu_total, "%"),
+        diagnosticNumber(radio.cu_obss, "%"), diagnosticNumber(radio.noise_dbm, " dBm"),
+        mean === null ? "Collecting samples" : diagnosticNumber(mean, "%")]);
+    }
+    if (!radios.length) appendDiagnosticRow(radioBody, ["Waiting for a successful radio sample"]);
+  }
+  var eventBody = document.getElementById("station_event_rows");
+  if (eventBody) {
+    eventBody.textContent = "";
+    var events = Array.isArray(st.station_events) ? st.station_events.slice(-20).reverse() : [];
+    var labels = {observed_association:"Joined (observed)", observed_disassociation:"Left (observed)",
+      observed_radio_change:"Radio changed", observed_bssid_change:"BSSID changed"};
+    for (var k = 0; k < events.length; k++) {
+      var event = events[k] || {};
+      var physical = diagnosticCellText(event.physical_radio || event.radio);
+      if (event.previous_physical_radio) physical = diagnosticCellText(event.previous_physical_radio) + " → " + physical;
+      appendDiagnosticRow(eventBody, [diagnosticCellText(event.observed_at), labels[event.type] || "Observed change",
+        diagnosticCellText(event.mac), diagnosticCellText(event.essid), physical,
+        event.signal_known === true ? diagnosticNumber(event.signal, " dBm") : "-",
+        diagnosticNumber(event.poll_gap_seconds, " s")]);
+    }
+    if (!events.length) appendDiagnosticRow(eventBody, ["No changes observed since this daemon started"]);
+  }
+  var mapping = document.getElementById("wlan_mapping_status");
+  if (mapping) {
+    var info = st.wlan_mapping || {};
+    mapping.textContent = diagnosticNumber(info.entries, " SSID mappings") +
+      (info.file_enabled === true ? " · Automatic mapping file enabled" : " · Manual mapping") +
+      (info.last_error ? " · " + diagnosticCellText(info.last_error) : "");
+  }
+  var commands = document.getElementById("controller_command_status");
+  if (commands) {
+    var commandInfo = st.controller_commands || {};
+    var last = commandInfo.last_result || commandInfo.last_observation;
+    commands.textContent = "UniFi reboot: " + (commandInfo.reboot_enabled === true ? "Enabled" : "Disabled") +
+      (last ? " · Last command: " + diagnosticCellText(last.action) + (last.status ? " (" + diagnosticCellText(last.status) + ")" : " (observed only)") : " · No command observed");
+  }
+}
+
 function updateUI(st) {
   if (!st) return;
+  updateDiagnosticsUI(st);
 
   // Initialize form controls ONCE from daemon state so user edits are never overwritten
   initFormOnce(st);
@@ -951,6 +1019,22 @@ function initial(){
                         <div class="stat_sub" id="stat_sys_sub" style="font-size:11px; color:#bdc3c7; margin-top:4px;">CPU: - | RAM: -</div>
                       </div>
                     </div>
+
+                    <details style="margin-bottom:12px; padding:10px; background:#263238; border-radius:6px;">
+                      <summary style="cursor:pointer; font-weight:bold;">RF diagnostics &amp; observed client changes</summary>
+                      <p style="color:#bdc3c7; font-size:11px;">Passive serving-radio measurements. OBSS is a separate driver counter; values are not additive. Trends cover recent successful samples.</p>
+                      <table width="100%" style="font-size:11px; text-align:left;">
+                        <thead><tr><th>Radio</th><th>Channel</th><th>Actual width</th><th>Busy</th><th>Other WiFi (OBSS)</th><th>Noise</th><th>Mean busy</th></tr></thead>
+                        <tbody id="rf_diagnostics_rows"></tbody>
+                      </table>
+                      <p style="color:#bdc3c7; font-size:11px;">AP-local observations, held in RAM. Times and gaps reflect polling; departures do not identify the next AP or a disconnect reason.</p>
+                      <table width="100%" style="font-size:11px; text-align:left;">
+                        <thead><tr><th>Observed at</th><th>Change</th><th>Client</th><th>SSID</th><th>Radio</th><th>Signal</th><th>Poll gap</th></tr></thead>
+                        <tbody id="station_event_rows"></tbody>
+                      </table>
+                      <p id="wlan_mapping_status" style="color:#bdc3c7; font-size:11px;"></p>
+                      <p id="controller_command_status" style="color:#bdc3c7; font-size:11px;"></p>
+                    </details>
 
                     <!-- Cluster Nodes & Synchronization Table -->
                     <table width="100%" border="1" align="center" cellpadding="2" cellspacing="0" bordercolor="#6b8fa3" class="FormTable SettingsTable" style="border:0px; margin-bottom:12px;" id="table_cluster">

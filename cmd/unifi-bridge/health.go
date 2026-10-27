@@ -5,13 +5,21 @@ import (
 	"time"
 
 	"github.com/agnithin/unifi-ap-bridge/pkg/inform"
+	"github.com/agnithin/unifi-ap-bridge/pkg/telemetry"
 )
 
 // exchangeHealth is owned by the serial exchange loop.
 type exchangeHealth struct {
-	LastAttempt time.Time
-	LastSuccess time.Time
-	rejections  int
+	StationEvents      []telemetry.StationEvent
+	RFTrends           []*telemetry.PassiveRFTrend
+	WLANMappingStatus  string
+	WLANMappingEntries int
+	CommandObservation *inform.CommandObservation
+	CommandResult      *inform.CommandDispatchResult
+	CommandObservedAt  int64
+	LastAttempt        time.Time
+	LastSuccess        time.Time
+	rejections         int
 }
 
 // Only repeated authentication/not-found responses permit adoption recovery.

@@ -1,6 +1,6 @@
 # unifi-ap-bridge
 
-> **Current delivery status — 2026-10-25, 20:40–20:42 UTC:** Node is verified on v1.2.5 dev candidate `6224430`. Main is reachable again on prior daemon `be106ec` with fresh GCM after a recent system restart of unknown cause. Main retains a compatibility bootstrap bundle containing the old daemon/scripts and candidate updater; its candidate rollout is incomplete. Do not retry until the missing-stage failure and migration provenance are reviewed. See [recovery evidence](docs/AUDIT_STATE.md#13-independent-main-recovery-observations--2026-10-25-20382108-utc). Stable publication and Asus browser/recovery acceptance remain pending.
+> **Current delivery status — 2026-10-26:** Main candidate `1f223432` is accepted from independent live follow-up; Node was left unchanged on its previously verified `6224430` build. The parallel wireless-feature batch below is new dev source, not deployed. See [live acceptance](docs/AUDIT_STATE.md#19-approved-main-launch-and-live-acceptance--2026-10-26-2325-utc) and [the current feature batch](docs/AUDIT_STATE.md#20-parallel-wireless-feature-batch).
 
 A high-performance, ultra-lightweight standalone daemon and WebUI addon for **Asuswrt-Merlin** and Linux routers that bridges Broadcom Wi-Fi and switch telemetry into the **Ubiquiti UniFi Inform Protocol** (`:8080/inform`).
 
@@ -10,11 +10,20 @@ It emulates a genuine UniFi 6 Access Point—featuring native **UniFi 6 In-Wall 
 
 ## Current deployment
 
-Current runtime evidence: **Node `6224430`**, **Main previous daemon `be106ec`**, both adopted and Active GCM at the 20:40–20:42 UTC checks. Main SSH recovered after a recent system restart of unknown cause; its failed rollout remains unaccepted. Earlier 16:25 tri-radio/60-client results are dated baseline evidence, not the present deployment or a disruption-free measurement.
+Main is accepted on `1f223432`, version `1.2.5 dev`, after successful updater
+execution and independent live checks. The launch wrapper returned 87 due to its
+subsequently corrected `install.sh` mode expectation; that exit is preserved as
+a wrapper failure, not rewritten as success. Recovery was not needed. Protected
+config/adoption/key state, fresh GCM, watchdog, clean transaction/locks and
+physical radio widths 20/40/80 MHz were verified.
 
-The actual UniFi browser UI now shows Main connected to Cloud Gateway Max **Port 1** and Node to **Port 3**, both at **2.5 GbE**. Port Manager shows those uplinks active and **Bridge-EufyHomeBase3 on Node Port 4 at GbE**. These original UI issues were closed at the dated baseline. Main gateway Port 1 was observed again after recovery; an extra empty controller radio row now requires investigation. The exposed controller API key was rotated and revoked on 2026-10-25; controlled outage/recovery checks and broader review remain open. The operator approved promoting all current changes to `main` on 2026-10-25. The APs remain on the verified `dev` deployment.
+UniFi shows Main on Cloud Gateway Max Port 1 at 2.5 GbE. Its upper-5-GHz width
+still displays 40 MHz and Main retains an extra configured Auto radio. Those
+controller-display issues remain open. Node was not accessed or changed by the
+accepted rollout; its last verified build remains `6224430`. New wireless
+features described below require separate deployment/live acceptance.
 
-See [audit state and action items](docs/AUDIT_STATE.md) and the [architecture reference](docs/ARCHITECTURE.md).
+See [audit state](docs/AUDIT_STATE.md) and [architecture](docs/ARCHITECTURE.md).
 
 ### v1.2.4 update-check fix
 
@@ -248,11 +257,51 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="$BUILD_FLAGS"
 * [x] **Automated In-WebUI Updates & Dual Tracks:** Instant release/dev update checks and one-click upgrades.
 * [x] **Cluster Mesh Synchronization:** Centralized AP configuration and binary propagation over SSH.
 
+### Parallel wireless-feature batch (source only)
+
+The current dev batch adds semantic no-op settings saves (no bridge restart or
+node sync), bounded AP-local station-change history and passive RF trends in the
+Asus UI, host-resolved WLAN mapping refresh, default-off authenticated reboot
+dispatch, and an explicitly opted-in manual passive scan. These changes are
+**not deployed or live-accepted**; Main's accepted runtime remains `1f223432`.
+See [the current feature batch](docs/AUDIT_STATE.md#20-parallel-wireless-feature-batch).
+
+WLAN discovery runs on a trusted host using `scripts/ops/wlan_mapping.py`.
+Publish its allowlisted JSON atomically to a private RAM file on the AP and set
+`wlan_mapping_file` to that path during an approved configuration change.
+The daemon refreshes the file without restarting; explicit `wlan_mapping`
+entries take precedence, and malformed refreshes preserve the last good cache.
+No controller credential belongs on the AP. Refresh scheduling/publication is a
+separate operational setup, not automatically installed by this source change.
+
+Reboot support requires `controller_reboot_enabled: true` and an adopted,
+non-bootstrap authenticated GCM session. Only the supported `cmd/reboot` shape
+with a request ID can run the fixed `/sbin/reboot` operation. A private command-ID
+state file alongside adoption state prevents repeated IDs across process/AP
+restarts. Default is off; live command/firmware acceptance is pending. Locate
+and legacy command shapes can be observed as sanitized metadata but do not
+control LEDs or execute arbitrary commands.
+
+The manual passive scan is never scheduled automatically. After explicit
+authorization for a potentially disruptive serving-radio scan, its command is:
+
+```sh
+unifi-bridge -rf-scan-interface eth4 -rf-scan-channels 6 -allow-disruptive-rf-scan
+```
+
+The operation uses 100 ms passive/home dwell, an explicit channel list, a
+10-second command deadline and a 16 KiB output cap. It prints only the path to a
+mode-0600 JSON result in RAM. The driver starts scans asynchronously, so the
+deadline bounds command execution, not proven firmware completion; returned
+scan-results freshness is explicitly unknown. No scan or packet capture has
+been run for acceptance. Packet capture remains unavailable without a supported
+capture tool; Main's read-only inventory did not find `tcpdump`.
+
 ### Prioritized backlog and operator decisions
 
-For the ordered work packets, acceptance tests, Luna/Sol escalation rules and worker launch prompt, start at [the autonomous worker plan](docs/AUDIT_STATE.md#11-autonomous-worker-plan--2026-10-25). The [current audit follow-up queue](docs/AUDIT_STATE.md#17-audit-reconciliation-and-accepted-follow-up-tasks) adds W9–W12 source work and preserves the W7 production hold.
+Use [the current feature batch](docs/AUDIT_STATE.md#20-parallel-wireless-feature-batch) for the newly prioritized wireless features and [the audit follow-up queue](docs/AUDIT_STATE.md#17-audit-reconciliation-and-accepted-follow-up-tasks) for the remaining operational/evidence gaps. Earlier worker packets remain dated history; the Main rollout is accepted and no further live operation is implicitly authorized.
 
-The detailed evidence and acceptance criteria are in [the project audit/backlog](docs/AUDIT_STATE.md#8-approved-backlog-and-fix-batch--2026-10-25). The current batch passed local tests, ARM builds and [hosted validation](https://github.com/agnithin/unifi-ap-bridge/actions/runs/40210104250); it is now deployed on both APs. Runtime/three-radio/topology acceptance passed; settings UI and controlled recovery/persistence checks remain pending. See [rollout evidence](docs/AUDIT_STATE.md#9-v125-sequential-rollout-and-live-acceptance--2026-10-25).
+Main deployment and its preserved wrapper result are documented in [Section 19](docs/AUDIT_STATE.md#19-approved-main-launch-and-live-acceptance--2026-10-26-2325-utc). Older rollout entries are historical evidence. Source completion, hosted publication, AP deployment and live acceptance are separate milestones.
 
 | Work | Status / next step |
 |---|---|
@@ -264,9 +313,9 @@ The detailed evidence and acceptance criteria are in [the project audit/backlog]
 | B7–B10: Health and telemetry correctness | CPU deltas, unknown noise/experience handling, topology/FDB corrections, UI freshness/unverified labels and watchdog log cap implemented and tested in dev. Sampling deadlines/caching, stable traffic counters, rollback, structured config verification and remaining form transport work stay open. |
 | F1: WLAN discovery | `scripts/ops/wlan_mapping.py` now reads the fixed classic WLAN-list endpoint from a host, requires an exact SSID allowlist, rejects duplicate/missing names and UUIDs, and prints only SSID→legacy-ObjectId JSON. Keep the API key on the host; review/export is separate from applying settings to an AP. |
 | F2: Guest/VLAN classification | Report actual VAP bridge/VLAN/isolation metadata first. Classification does not enforce network policy. |
-| F3: Roaming | Already visible in UniFi per operator. No replacement roam-event implementation planned without a demonstrated gap; optional future detail is timing, reason codes and transitions shorter than sampling. |
-| F4: RF diagnostics | Passive statistics only for now. Continuous spectrum/scanning-radio parity requires supported hardware; active off-channel scans/captures and proprietary AirView/Channel AI parity are deferred. |
-| F5: Simple UniFi device commands | Reboot and other small commands are eligible for an explicit typed allowlist and controlled tests. Reboot interrupts service; no arbitrary command execution or automatic live reboot tests. |
+| F3: Roaming | New bounded AP-local poll-derived client/radio/BSSID timeline and known signal in Asus UI; source-tested, not deployed. Cross-AP destination, precise event time and disconnect reasons remain unknown unless another verified source supplies them. |
+| F4: RF diagnostics | New passive noise/OBSS fields and RF trends plus explicit opt-in manual passive scan source; no automatic scan or live acceptance. Results freshness unknown; packet capture and proprietary spectrum parity remain unresolved. |
+| F5: Simple UniFi device commands | Default-off authenticated GCM cmd/reboot dispatcher, fixed executor and persistent request-ID deduplication are source-tested. Real command/firmware acceptance is pending. Locate is observation-only; no firmware/provisioning handler. |
 | F6: UniFi provisioning / firmware | **Deferred by operator:** firmware updates, UniFi-triggered bridge upgrades and broad SSID/security/radio/VLAN provisioning. Asus remains the configuration authority. Existing GitHub bridge-addon updater correctness is a separate maintenance fix. |
 | F7: Community distribution | amtm/SNBForums submission after installation, release integrity and compatibility gaps are closed. |
 

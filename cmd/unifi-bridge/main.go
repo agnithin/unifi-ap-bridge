@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -28,15 +29,17 @@ var (
 )
 
 type Config struct {
-	Enabled          bool              `json:"enabled"`
-	ControllerURL    string            `json:"controller_url"`
-	IntervalSec      int               `json:"interval_sec"`
-	Model            string            `json:"model"`
-	StatePath        string            `json:"state_path"`
-	Branch           string            `json:"branch,omitempty"`
-	UplinkMAC        string            `json:"uplink_mac,omitempty"`
-	UplinkRemotePort int               `json:"uplink_remote_port,omitempty"`
-	WlanMapping      map[string]string `json:"wlan_mapping"`
+	ControllerRebootEnabled bool              `json:"controller_reboot_enabled,omitempty"`
+	WlanMappingFile         string            `json:"wlan_mapping_file,omitempty"`
+	Enabled                 bool              `json:"enabled"`
+	ControllerURL           string            `json:"controller_url"`
+	IntervalSec             int               `json:"interval_sec"`
+	Model                   string            `json:"model"`
+	StatePath               string            `json:"state_path"`
+	Branch                  string            `json:"branch,omitempty"`
+	UplinkMAC               string            `json:"uplink_mac,omitempty"`
+	UplinkRemotePort        int               `json:"uplink_remote_port,omitempty"`
+	WlanMapping             map[string]string `json:"wlan_mapping"`
 }
 
 func loadConfig(path string) (*Config, error) {
@@ -141,9 +144,15 @@ func updateWebUIStatus(host *providers.HostInfo, modelProfile models.ModelProfil
 		"last_heartbeat":         health.lastSuccessString(),
 		"last_successful_inform": health.lastSuccessString(),
 		"last_attempt":           health.LastAttempt.Format("2006-01-02 15:04:05"),
-		"status_updated_at":      time.Now().Unix(),
-		"sample_fresh":           sampleFresh,
-		"sample_updated_at":      sampleCompletedAt.Unix(),
+		"controller_commands": map[string]any{
+			"reboot_enabled":   cfg.ControllerRebootEnabled,
+			"last_observation": health.CommandObservation,
+			"last_result":      health.CommandResult,
+			"observed_at":      health.CommandObservedAt,
+		},
+		"status_updated_at": time.Now().Unix(),
+		"sample_fresh":      sampleFresh,
+		"sample_updated_at": sampleCompletedAt.Unix(),
 		"sample_age_sec": func() int64 {
 			if sampleCompletedAt.IsZero() {
 				return -1
@@ -160,9 +169,17 @@ func updateWebUIStatus(host *providers.HostInfo, modelProfile models.ModelProfil
 		"cu_total_2g":         cuTotal2G,
 		"cu_total_5g":         cuTotal5G,
 		"radio_stats":         radioStats,
-		"ports":               ports,
-		"system_stats":        sysStats,
-		"recent_logs":         logsCopy,
+		"station_events":      health.StationEvents,
+		"station_event_scope": "AP-local, observed between successful polls; reasons and destination AP unknown",
+		"passive_rf_trends":   health.RFTrends,
+		"wlan_mapping": map[string]any{
+			"file_enabled": cfg.WlanMappingFile != "",
+			"entries":      health.WLANMappingEntries,
+			"last_error":   health.WLANMappingStatus,
+		},
+		"ports":        ports,
+		"system_stats": sysStats,
+		"recent_logs":  logsCopy,
 	}
 
 	raw, err := json.MarshalIndent(statusObj, "", "  ")
@@ -192,6 +209,10 @@ func main() {
 	onceFlag := flag.Bool("once", false, "Execute single inform exchange and exit")
 	profileFlag := flag.String("profile", "", "Path to synthetic profile JSON for simulation/testing")
 	wlanMapFlag := flag.String("wlan-map", "", "JSON mapping of SSID to 24-hex WLAN ObjectId")
+	rfScanInterface := flag.String("rf-scan-interface", "", "Run one manual passive RF scan on this wireless interface")
+	rfScanChannels := flag.String("rf-scan-channels", "", "Explicit comma-separated channels for the manual passive scan")
+	rfScanAllowed := flag.Bool("allow-disruptive-rf-scan", false, "Explicitly allow a serving-radio scan that may interrupt clients")
+
 	dumpFlag := flag.Bool("dump", false, "Dump rendered inform JSON payload to stdout")
 	versionFlag := flag.Bool("version", false, "Print version information and exit")
 	flag.BoolVar(versionFlag, "v", false, "Print version information and exit (shorthand)")
@@ -199,6 +220,18 @@ func main() {
 
 	if *versionFlag {
 		fmt.Printf("unifi-bridge %s (commit: %s, built: %s)\n", version, commit, buildDate)
+		return
+	}
+
+	if *rfScanInterface != "" || *rfScanChannels != "" || *rfScanAllowed {
+		if *applySettingsFlag || *syncSettingsFlag || *onceFlag || *dumpFlag {
+			log.Fatal("RF scanning cannot be combined with daemon/settings actions")
+		}
+		path, err := runPassiveScanCLI(*rfScanInterface, *rfScanChannels, *rfScanAllowed, os.TempDir(), nil)
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("rf_scan_result=%s freshness=unknown\n", path)
 		return
 	}
 
@@ -210,10 +243,11 @@ func main() {
 			log.Fatal("-apply-settings and -sync-settings cannot be combined")
 		}
 		var err error
+		settingsChanged := false
 		if *syncSettingsFlag {
 			err = mergeSharedSettings(*configPath, os.Stdin, *gatewayFlag)
 		} else {
-			err = mergeSettings(*configPath, os.Stdin, *settingsFormat, *gatewayFlag, *requestIDFlag)
+			err = mergeSettingsOutcome(*configPath, os.Stdin, *settingsFormat, *gatewayFlag, &settingsChanged, *requestIDFlag)
 		}
 		if err != nil {
 			log.Fatal(err)
@@ -305,6 +339,10 @@ func main() {
 	defer ticker.Stop()
 
 	health := &exchangeHealth{}
+	rebootDispatcher := inform.NewRebootDispatcher(cfg.ControllerRebootEnabled, startPlatformReboot, filepath.Join(filepath.Dir(cfg.StatePath), "controller-command-state.json"))
+	wlanMappingCache := telemetry.NewWLANMappingCache(cfg.WlanMappingFile)
+	stationTimeline := telemetry.NewStationTimeline(64, 512)
+	rfHistory := telemetry.NewPassiveRFHistory(60, 8)
 	lastTotalStations := 0
 	lastRadioStats := []telemetry.RadioStat(nil)
 	lastPorts := []telemetry.Port(nil)
@@ -324,7 +362,15 @@ func main() {
 		}()
 
 		sampleCtx, sampleCancel := context.WithTimeout(ctx, sampleBudget)
-		sample, err := provider.Collect(sampleCtx, cfg.WlanMapping)
+		mappings := wlanMappingCache.Mappings()
+		for ssid, id := range cfg.WlanMapping {
+			if telemetry.ValidLegacyWlanID(id) {
+				mappings[ssid] = id
+			}
+		}
+		health.WLANMappingStatus = wlanMappingCache.LastError()
+		health.WLANMappingEntries = len(mappings)
+		sample, err := provider.Collect(sampleCtx, mappings)
 		sampleCancel()
 		if err != nil {
 			return fmt.Errorf("telemetry sample failed: %w", err)
@@ -347,6 +393,16 @@ func main() {
 		}
 
 		telemetry.AssignRadioStationCounts(radioStats, vaps)
+		stationTimeline.Observe(vaps, sample.CompletedAt, true)
+		health.StationEvents = stationTimeline.Events()
+		_, radioFailed := sample.StageErrors["radio_stats"]
+		rfHistory.Observe(sample.CompletedAt, radioStats, !radioFailed)
+		health.RFTrends = nil
+		for _, name := range rfHistory.Radios() {
+			if trend := rfHistory.Trend(name, 3); trend != nil {
+				health.RFTrends = append(health.RFTrends, trend)
+			}
+		}
 		totalStations := 0
 		for _, v := range vaps {
 			totalStations += v.NumSta
@@ -441,6 +497,16 @@ func main() {
 		respPacket, err := inform.UnpackInform(respRaw, key, host.MAC)
 		if err != nil {
 			return fmt.Errorf("failed to unpack controller response: %w", err)
+		}
+
+		observation, commandResult := authenticatedControllerCommand(respPacket, key, adopted, rebootDispatcher, time.Now())
+		if observation != nil {
+			health.CommandObservation = observation
+			health.CommandResult = commandResult
+			health.CommandObservedAt = time.Now().Unix()
+			if commandResult != nil {
+				logEvent("[unifi-bridge] Controller command %s: %s", commandResult.Action, commandResult.Status)
+			}
 		}
 
 		changed, err := stateMgr.ApplyControllerResponse(respPacket.Payload)

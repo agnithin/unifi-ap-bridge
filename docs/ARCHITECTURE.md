@@ -202,3 +202,44 @@ The first v1.2.4 upgrade requires reviewed matching scripts, checksum-verified b
 Checks and installs acquire an atomic RAM-directory lock at `/tmp/unifi-bridge-update.lock` before starting the operation. A competing request exits without replacing the owner's status or entering its download/install path. Exit/INT/TERM cleanup releases only a lock with this shell's PID. A stale lock is not automatically stolen: inspect process/service state and partial-install status before recovery. This lock serializes updater operations only; settings and cluster sync still need coordinated mutation protection.
 
 Success is published once. The previous delayed background rewrite to UP_TO_DATE was removed so a completed request cannot overwrite a subsequent request's status. Synthetic overlap and busy-owner tests pass. These changes are subsequent source work and are not part of the deployed `be106ec` scripts; automatic rollback, immutable bundles and broader coordination remain open.
+
+
+## Wireless diagnostics and optional controller operations (dev source)
+
+The Asus status publication now carries a RAM-bounded AP-local station timeline,
+per-radio passive RF trend summaries, fixed WLAN-refresh status and sanitized
+controller-command observations. Tracker state is process-local: no history is
+written to flash, failed or ambiguous samples do not imply departures, and the
+first complete sample only establishes a baseline. Time gaps describe polling
+coverage, not exact roaming or disconnect latency. BSSID changes and physical
+radio changes are distinguished; the next AP and firmware reason codes are not
+invented. UI rows use text nodes for client/SSID fields.
+
+Broadcom version-3 chanim output was inspected read-only on Main. Named `obss`
+and `knoise` columns supply optional overlapping-BSS airtime and noise, with
+unknowns omitted. RF trends are capped at 60 samples per radio and eight retained
+radio identities; station history is capped at 64 events and 512 tracked clients.
+These values are diagnostic measurements, not a claim of native UniFi scoring,
+spectrum-analysis or controller UI field compatibility.
+
+A host-side exact-SSID resolver uses the previously verified classic WLAN-list
+GET. Its API key stays on the host. The optional AP mapping-file cache accepts
+at most 64 KiB, 256 exact SSIDs and validated 24-hex legacy IDs, rejects duplicate
+keys, and retains last-known-good entries after invalid refreshes. Manual config
+mappings override cached values. The cache is separate from SSID/VLAN provisioning.
+
+Authenticated command observations are allowlisted projections after successful
+GCM decoding for a previously adopted non-bootstrap identity. The optional reboot
+dispatcher defaults off; it requires a request ID, atomically persists bounded
+hashed IDs before execution and invokes only `/sbin/reboot`. Unknown actions and
+locate observations do not execute. Current reboot shape evidence comes from
+[unifi-emu's primary implementation](https://github.com/jamesbraid/unifi-emu/blob/main/docs/PROTOCOL.md);
+legacy mFi documentation is not firmware interoperability proof. Neither reboot
+nor locate has been tested against the live AP/controller.
+
+Manual RF scanning is a distinct CLI operation before daemon startup, never an
+inform-loop side effect. Explicit disruptive-operation opt-in, selected channels,
+passive-only flags, dwell/time/output caps and private results are enforced.
+Installed driver help supports the command syntax but not a reliable completion
+marker. Latest `scanresults` may predate the requested scan; source results retain
+that uncertainty. No capture utility was installed and no packet data collected.

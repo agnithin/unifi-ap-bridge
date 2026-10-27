@@ -30,12 +30,13 @@ func TestSettingsReadersReportInputErrorsSeparatelyFromSizeLimit(t *testing.T) {
 }
 
 func TestSettingsPreserveConfiguration(t *testing.T) {
+	settingsChanged := false
 	path := filepath.Join(t.TempDir(), "config.json")
 	original := `{"enabled":true,"auto_gateway":false,"controller_url":"http://controller.test:8080/inform","model":"U6IW","branch":"dev","interval_sec":10,"wlan_mapping":{"custom":"0123456789abcdef01234567"},"nodes":["10.0.0.2"],"uplink_remote_port":3,"extra":{"keep":true}}`
 	if e := os.WriteFile(path, []byte(original), 0644); e != nil {
 		t.Fatal(e)
 	}
-	if e := mergeSettings(path, strings.NewReader(`{"enabled":false,"interval":15}`), "json", ""); e != nil {
+	if e := mergeSettingsOutcome(path, strings.NewReader(`{"enabled":false,"interval":15}`), "json", "", &settingsChanged); e != nil {
 		t.Fatal(e)
 	}
 	if !settingsChanged {
@@ -61,7 +62,7 @@ func TestSettingsPreserveConfiguration(t *testing.T) {
 		t.Fatal(info.Mode())
 	}
 	beforeInfo, _ := os.Stat(path)
-	if e := mergeSettings(path, strings.NewReader(`{"enabled":false,"interval":15}`), "json", ""); e != nil {
+	if e := mergeSettingsOutcome(path, strings.NewReader(`{"enabled":false,"interval":15}`), "json", "", &settingsChanged); e != nil {
 		t.Fatal(e)
 	}
 	if settingsChanged {
