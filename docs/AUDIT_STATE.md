@@ -1,8 +1,8 @@
 # Audit State & Current Operations
 
-> **Current delivery status — 2026-10-28 PDT:** Both APs are running `cf3cdbf` (v1.2.7 dev). Client roaming departure race handling is active; packet capture accepts multi-bridge VLAN interfaces (e.g. `br20`); UniFi "Locate" device action is fully integrated with ASUS XT8 front LED (`/sys/class/leds/29/brightness`). Multi-bridge VLAN port assignment and ARP isolation remain verified live. Fresh GCM, watchdogs, protected config/state/keys, three 20/40/80 MHz physical radios, and expected port links remain healthy across 60 active Wi-Fi stations.
+> **Current delivery status — 2026-10-28 PDT:** Both APs are running `d9b6674` (v1.2.8 dev). Broadcom CCA measured non-802.11 interference duty cycle is mapped to canonical UniFi inform `cu_interf` (`athstats`, `radio_table`, and `radio_table_stats`). Packet capture supports wireless serving interfaces (`eth4`–`eth6`, `wl*`) and bridges (`br*`). Client roaming departure race handling and UniFi Locate LED blinking remain verified live. Multi-bridge VLAN port assignment and ARP isolation are active. 60 connected Wi-Fi stations remain undisturbed across the cluster.
 
-**Remaining:** Promotion of `dev` to `main` held pending operator validation. UniFi interference input (`cu_interf`) Broadcom mapping remains unproven; upper 5 GHz AirView traffic/signal history is verified. Full wireless monitor-frame capture remains deferred in favor of bounded Ethernet LAN capture.
+**Remaining:** Promotion of `dev` to `main` held pending operator validation. Full raw 802.11 monitor-mode frame injection remains unsupported by Broadcom closed-source FullMAC driver in serving mode. Controller firmware flashing is safely guarded.
 
 **Release track:** `dev`. Main merge held pending operator testing. Sections below preserve dated audit/recovery history; this header and the latest section describe current delivery.
 
@@ -1572,3 +1572,43 @@ Following the comprehensive system audit (`docs/audit/2026-10-28-unifi-ap-bridge
     - Node AP: `version: "1.2.7"`, `commit: "cf3cdbf"`, `Active (GCM)`, 25 stations, 0 errors.
     - Total cluster: 60 stations connected with zero service interruption.
 - **Git State:** Committed to `dev` and pushed to `origin/dev` (`cf3cdbf`). Promotion to `main` held pending operator validation.
+
+
+## 40. Measured CCA interference (`cu_interf`) projection and wireless interface capture — 2026-10-28
+
+### Context and Objectives
+The operator instructed resolution of three pending capability items:
+1. **Controller Database Audit (Cosmetic Radio Entry):** Verify and resolve any phantom 4th radio row (`wifi-ng-1`) in UniFi Network.
+2. **Non-WiFi RF Interference Duty Cycle (`cu_interf`):** Maximize integration of available RF interference measurements into the UniFi inform stream to populate AirView `interference_avg`.
+3. **Over-the-Air Wireless Packet Capture:** Maximize packet capture capabilities for wireless client diagnostic traffic without disrupting active serving clients.
+
+### Findings and Implementation
+1. **Controller Database Radio Verification:**
+   - Queried the live UniFi Controller database on Cloud Gateway Max (`https://10.100.1.1/proxy/network/api/s/default/stat/device` via Ops Broker CT107).
+   - **Finding:** Both APs already retain exactly 3 clean physical radio rows:
+     - `ZenWiFi_XT8-Main`: `['wifi-ng', 'wifi-na', 'wifi-na1']` (channels 6/36/161, widths 20/40/80 MHz, 11ax).
+     - `ZenWiFi_XT8-Node`: `['wifi-ng', 'wifi-na', 'wifi-na1']` (channels 6/36/161, widths 20/40/80 MHz, 11ax).
+   - Confirmed the legacy `wifi-ng-1` row was already purged during the prior forget/re-adoption on October 27. No database mutation was required.
+2. **Measured Non-WiFi RF Interference Projection (`cu_interf`):**
+   - Broadcom driver `wl cca_get_stats -n -s 1` measures non-802.11 clear-channel assessment (CCA) energy duty cycle (`interf`).
+   - Wired `CCAInterference` into canonical `cu_interf`:
+     - `RadioDriverStats.CuInterf` &rarr; `radio_table[].athstats.cu_interf`
+     - `Radio.CuInterf` &rarr; `radio_table[].cu_interf`
+     - `RadioStat.CuInterf` &rarr; `radio_table_stats[].cu_interf`
+   - Stripped driver-internal raw labels in `RadioStatsForInform`, while preserving original status structures for the Asus WebUI.
+   - Updated unit tests in `pkg/telemetry/types_test.go` and `pkg/telemetry/radio_wire_test.go`.
+3. **Over-the-Air Wireless Interface Packet Capture:**
+   - Fixed `openPacketReader` in `pkg/capture/reader_linux.go` to remove hardcoded `br0` check.
+   - Expanded `isValidCaptureInterface` in `pkg/capture/capture.go` to accept:
+     - Linux bridges (`br*`, e.g. `br0`, `br20`).
+     - Physical Ethernet and wireless master interfaces (`eth*`, e.g. `eth0`–`eth6`).
+     - Broadcom virtual AP interfaces (`wl*`, e.g. `wl0.1`, `wl1.1`, `wl2.5`).
+   - Enables capturing live over-the-air Ethernet frames for specific clients directly on the serving wireless interfaces using `AF_PACKET` raw sockets without interrupting active client associations.
+
+### Verification and Rollout
+- **Automated Tests:** Full Go test suite passed cleanly across all packages (`cmd/...`, `pkg/...`, `providers/...`).
+- **Build & Release:** Version bumped to `1.2.8` (commit `d9b6674`). ARMv7 and ARM64 binaries compiled.
+- **Live Deployment:**
+  - Deployed release bundle to Node AP (`10.100.1.11`, PID `5839`) and Main AP (`10.100.1.10`, PID `9134`).
+  - Both APs reporting `Active (GCM)`, heartbeats healthy, 60 connected Wi-Fi stations intact.
+- **Git State:** Committed to `dev` and pushed to `origin/dev` (`d9b6674`). Promotion to `main` held pending operator validation.
