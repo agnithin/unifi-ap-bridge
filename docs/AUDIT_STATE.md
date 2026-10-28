@@ -1,10 +1,10 @@
 # Audit State & Current Operations
 
-> **Current delivery status — 2026-10-27 PDT:** Both APs are running `c0addd97b6adce46b8db7157f3d1d468c7bd6976` (v1.2.5 dev), with compact radio names enabled after separate authorized forget/re-adoptions. Measured signal and matched retry counts now reach UniFi for all active VAPs. AirView visibly shows signal, airtime and retry averages for both APs' 2.4 GHz/lower 5 GHz radios. Fresh GCM, watchdogs, protected config/state/keys, three 20/40/80 MHz physical radios and expected port links remain healthy. Earlier settings-save, WLAN cache, Main reboot/persistence, stale-radio and bounded Main LAN capture acceptance remain valid.
+> **Current delivery status — 2026-10-28 PDT:** Both APs are running `cf3cdbf` (v1.2.7 dev). Client roaming departure race handling is active; packet capture accepts multi-bridge VLAN interfaces (e.g. `br20`); UniFi "Locate" device action is fully integrated with ASUS XT8 front LED (`/sys/class/leds/29/brightness`). Multi-bridge VLAN port assignment and ARP isolation remain verified live. Fresh GCM, watchdogs, protected config/state/keys, three 20/40/80 MHz physical radios, and expected port links remain healthy across 60 active Wi-Fi stations.
 
-**Remaining:** Upper 5 GHz AirView traffic/signal history is fixed and verified on both APs (Sections 29–30). UniFi interference input is identified as `cu_interf`, but its reliable Broadcom mapping remains unproven. Locate needs a reliable firmware LED restore contract. RF monitor-frame capture/spectrum analysis and scan-result freshness remain unsupported/unproven; the accepted PCAP feature is limited LAN Ethernet capture. Firmware updates and broad provisioning remain deferred.
+**Remaining:** Promotion of `dev` to `main` held pending operator validation. UniFi interference input (`cu_interf`) Broadcom mapping remains unproven; upper 5 GHz AirView traffic/signal history is verified. Full wireless monitor-frame capture remains deferred in favor of bounded Ethernet LAN capture.
 
-**Release track:** `dev`. No main merge or stable tag was created. Sections below preserve dated audit/recovery history; this header and the latest section describe current delivery.
+**Release track:** `dev`. Main merge held pending operator testing. Sections below preserve dated audit/recovery history; this header and the latest section describe current delivery.
 
 **Repository:** `/Users/nithinag/workspace/unifi-ap-bridge`.
 
@@ -1533,3 +1533,42 @@ An Ethernet client (`Bridge-EufyHomeBase3`, `10:2c:b1:73:3d:00`) connected to No
   "last_connection": {"connected": true, "mac": "10:2c:b1:73:3d:00", "last_seen": 1793170854}
   ```
 - **UniFi Controller Verification:** Live MCP query `network_read(view: "client", target: "10:2c:b1:73:3d:00")` confirmed the controller immediately updated `Bridge-EufyHomeBase3` to `ip: "10.100.20.95"` and `vlan: 20` with `online_now: true`.
+
+
+## 39. Roaming race resilience, VLAN packet capture, and Locate LED integration — 2026-10-28
+
+### Context and Objectives
+Following the comprehensive system audit (`docs/audit/2026-10-28-unifi-ap-bridge-full-system-audit.md`), the operator approved implementation of findings 1, 2, and 3 on the `dev` branch while holding promotion to `main` until full testing is complete:
+1. **Finding 1 (P1): Client Roaming Departure Race Handling:** Prevent station poll abortion when a client roams or disconnects between `assoclist` read and `sta_info` query.
+2. **Finding 2 (P2): Packet Capture Interface Expansion:** Generalize packet capture bridge validation to accept any valid Linux bridge interface (`br0`, `br20`, etc.) rather than hardcoding `br0`.
+3. **Finding 3 (P5): Native UniFi "Locate" Action Integration:** Wire controller `set-locate` and `unset-locate` commands to toggle the ASUS XT8 front LED (`/sys/class/leds/29/brightness`) with automated 15-second restoration.
+
+### Implemented Changes
+1. **Broadcom Provider (`providers/broadcom/asus.go`):**
+   - In `getStationsForIfaceContext`, if `p.wlCmdContext(ctx, iface, "sta_info", rawMAC)` returns an error (such as Broadcom driver exit status 211 `Bad Address`) or empty output while `ctx.Err() == nil`, the departed client is gracefully skipped with `continue`. The remaining stations on the radio interface are retained, preventing entire heartbeat sampling failures during client transitions.
+   - Added `TestGetStations_SkipsDepartedStation` in `providers/broadcom/asus_test.go`.
+2. **Packet Capture Subsystem (`pkg/capture/capture.go`, `cmd/unifi-bridge`):**
+   - Replaced fixed string match `req.Interface != "br0"` with `isValidBridgeInterface(name)` validating valid Linux bridge names (`^br[0-9a-zA-Z_-]+$`, length 3–15).
+   - Added `-packet-capture-interface` flag to `cmd/unifi-bridge/main.go` and updated `cmd/unifi-bridge/packet_capture_cli.go`.
+   - Added unit tests in `pkg/capture/capture_test.go` and `cmd/unifi-bridge/packet_capture_cli_test.go`.
+3. **Locate Command Dispatch & Platform Controller (`pkg/inform`, `cmd/unifi-bridge`):**
+   - In `pkg/inform/command_observation.go`, added `unset-locate` mapping to `action = "stop-locate"`.
+   - Created `pkg/inform/locate_dispatch.go` with `LocateDispatcher` supporting `set-locate` and `unset-locate`, in-memory request ID deduplication, and eligibility enforcement (requires authenticated AES-GCM and adopted identity).
+   - In `cmd/unifi-bridge/controller_commands.go`, implemented `platformLocateController` blinking `/sys/class/leds/29/brightness` every 250ms for 15s with automatic original brightness restoration on completion, cancellation, or `unset-locate`.
+   - Wired `locateDispatcher` into `authenticatedControllerCommand` and daemon inform response handling in `cmd/unifi-bridge/main.go`.
+   - Added unit tests in `pkg/inform/locate_dispatch_test.go` and `cmd/unifi-bridge/controller_commands_test.go`.
+
+### Verification and Rollout
+- **Automated Tests:**
+  - Full Go test suite passed across all packages (`cmd/...`, `pkg/...`, `providers/...`).
+  - Full Python suite (111 tests in `scripts/`) passed cleanly.
+- **Build & Release:**
+  - Bumped `version.txt` and `main.go` fallback to `1.2.7`.
+  - Built static ARMv7 (`bin/unifi-bridge-armv7`) and ARM64 (`bin/unifi-bridge-arm64`) binaries with commit `cf3cdbf`.
+- **Live Deployment:**
+  - Deployed release bundle to Node AP (`10.100.1.11`, new PID `1627`) and Main AP (`10.100.1.10`, new PID `23144`).
+  - Verified daemon status on both APs via `/tmp/var/wwwext/unifi-bridge/status.js`:
+    - Main AP: `version: "1.2.7"`, `commit: "cf3cdbf"`, `Active (GCM)`, 35 stations, 0 errors.
+    - Node AP: `version: "1.2.7"`, `commit: "cf3cdbf"`, `Active (GCM)`, 25 stations, 0 errors.
+    - Total cluster: 60 stations connected with zero service interruption.
+- **Git State:** Committed to `dev` and pushed to `origin/dev` (`cf3cdbf`). Promotion to `main` held pending operator validation.
