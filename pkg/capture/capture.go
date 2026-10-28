@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -45,12 +46,24 @@ func Run(ctx context.Context, req Request) (string, error) {
 	return run(ctx, req, openPacketReader, "/tmp")
 }
 
+func isValidBridgeInterface(name string) bool {
+	if len(name) < 3 || len(name) > 15 || !strings.HasPrefix(name, "br") {
+		return false
+	}
+	for _, ch := range name[2:] {
+		if !((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '-' || ch == '_') {
+			return false
+		}
+	}
+	return true
+}
+
 func validate(req Request) (net.HardwareAddr, error) {
 	if !req.Allow {
 		return nil, errors.New("packet capture requires --allow-packet-capture")
 	}
-	if req.Interface != "br0" {
-		return nil, errors.New("packet capture is restricted to interface br0")
+	if !isValidBridgeInterface(req.Interface) {
+		return nil, errors.New("packet capture is restricted to bridge interfaces (e.g. br0, br20)")
 	}
 	mac, err := net.ParseMAC(req.ClientMAC)
 	if err != nil || len(mac) != 6 {

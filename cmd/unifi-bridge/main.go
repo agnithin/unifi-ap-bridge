@@ -23,7 +23,7 @@ import (
 )
 
 var (
-	version   = "1.2.5"
+	version   = "1.2.7"
 	commit    = "none"
 	buildDate = "unknown"
 )
@@ -220,7 +220,8 @@ func main() {
 	rfScanInterface := flag.String("rf-scan-interface", "", "Run one manual passive RF scan on this wireless interface")
 	rfScanChannels := flag.String("rf-scan-channels", "", "Explicit comma-separated channels for the manual passive scan")
 	rfScanAllowed := flag.Bool("allow-disruptive-rf-scan", false, "Explicitly allow a serving-radio scan that may interrupt clients")
-	packetCaptureClient := flag.String("packet-capture-client", "", "Capture bounded Ethernet frames for this exact client MAC on br0")
+	packetCaptureClient := flag.String("packet-capture-client", "", "Capture bounded Ethernet frames for this exact client MAC on bridge")
+	packetCaptureInterface := flag.String("packet-capture-interface", "br0", "Bridge interface for packet capture (e.g. br0, br20)")
 	packetCaptureSeconds := flag.Int("packet-capture-seconds", 5, "Packet capture duration (maximum 10 seconds)")
 	packetCapturePackets := flag.Int("packet-capture-packets", 100, "Maximum matching packets (maximum 100)")
 	packetCaptureSnapLen := flag.Int("packet-capture-snaplen", 128, "Maximum bytes per packet (maximum 128)")
@@ -239,7 +240,7 @@ func main() {
 	packetCaptureRequested := false
 	flag.Visit(func(f *flag.Flag) {
 		switch f.Name {
-		case "packet-capture-client", "packet-capture-seconds", "packet-capture-packets", "packet-capture-snaplen", "allow-packet-capture":
+		case "packet-capture-client", "packet-capture-interface", "packet-capture-seconds", "packet-capture-packets", "packet-capture-snaplen", "allow-packet-capture":
 			packetCaptureRequested = true
 		}
 	})
@@ -253,7 +254,7 @@ func main() {
 		if *packetCaptureSeconds < 1 || *packetCaptureSeconds > 10 {
 			log.Fatal("-packet-capture-seconds must be between 1 and 10")
 		}
-		path, err := runPacketCaptureCLI(*packetCaptureClient, time.Duration(*packetCaptureSeconds)*time.Second, *packetCapturePackets, *packetCaptureSnapLen, *packetCaptureAllowed, nil)
+		path, err := runPacketCaptureCLI(*packetCaptureInterface, *packetCaptureClient, time.Duration(*packetCaptureSeconds)*time.Second, *packetCapturePackets, *packetCaptureSnapLen, *packetCaptureAllowed, nil)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -382,6 +383,7 @@ func main() {
 	health := &exchangeHealth{}
 	responseCapture := &controllerResponseCapture{dir: controllerResponseCaptureDir, remaining: cfg.ControllerResponseCaptureCount}
 	rebootDispatcher := inform.NewRebootDispatcher(cfg.ControllerRebootEnabled, startPlatformReboot, filepath.Join(filepath.Dir(cfg.StatePath), "controller-command-state.json"))
+	locateDispatcher := inform.NewLocateDispatcher(startPlatformLocate)
 	wlanMappingCache := telemetry.NewWLANMappingCache(cfg.WlanMappingFile)
 	stationTimeline := telemetry.NewStationTimeline(64, 512)
 	rfHistory := telemetry.NewPassiveRFHistory(60, 8)
@@ -547,7 +549,7 @@ func main() {
 			logEvent("[unifi-bridge] Controller response capture unavailable")
 		}
 
-		observation, commandResult := authenticatedControllerCommand(respPacket, key, adopted, rebootDispatcher, time.Now())
+		observation, commandResult := authenticatedControllerCommand(respPacket, key, adopted, rebootDispatcher, locateDispatcher, time.Now())
 		if observation != nil {
 			health.CommandObservation = observation
 			health.CommandResult = commandResult

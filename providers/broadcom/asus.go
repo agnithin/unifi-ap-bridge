@@ -720,10 +720,14 @@ func (p *AsusProvider) getStationsForIfaceContext(ctx context.Context, iface, va
 		// Enrich with sta_info (RSSI, generation, rates)
 		infoRaw, err := p.wlCmdContext(ctx, iface, "sta_info", rawMAC)
 		if err != nil {
-			return nil, fmt.Errorf("read %s station %s details: %w", iface, normMAC, err)
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			// Station disconnected or roamed between assoclist and sta_info read.
+			continue
 		}
 		if len(infoRaw) == 0 {
-			return nil, fmt.Errorf("read %s station %s details: empty response", iface, normMAC)
+			continue
 		}
 		parsed := ParseStaInfo(infoRaw, band)
 		EnrichStation(&sta, parsed)

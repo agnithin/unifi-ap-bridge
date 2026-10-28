@@ -35,6 +35,8 @@ func ObserveAuthenticatedCommand(payload map[string]any, authenticated bool) (Co
 			action = cmd
 		case "set-locate":
 			action = "locate"
+		case "unset-locate":
+			action = "stop-locate"
 		default:
 			return CommandObservation{}, false
 		}
