@@ -93,6 +93,7 @@ type sampleCommandCache struct {
 type AsusProvider struct {
 	runner            CmdRunner
 	compactRadioNames bool
+	expectedUplinkMAC string
 	radioNames        map[string]string
 	previousCPU       cpuSample
 	retryBaselines    map[string]retryCounterBaseline
@@ -117,6 +118,9 @@ type verifiedParent struct {
 // CompactRadioNames requires a controller identity migration on adopted APs.
 type AsusProviderOptions struct {
 	CompactRadioNames bool
+	// ExpectedUplinkMAC permits a locally-scoped LLDP chassis ID only when it
+	// exactly matches this explicit configured parent identity.
+	ExpectedUplinkMAC string
 }
 
 const parentCacheTTL = 2 * time.Minute
@@ -141,7 +145,8 @@ func NewAsusProviderWithOptions(runner CmdRunner, options AsusProviderOptions) *
 	if runner == nil {
 		runner = defaultCmdRunner
 	}
-	return &AsusProvider{runner: runner, compactRadioNames: options.CompactRadioNames, staticCache: make(map[string]staticCacheEntry), retryBaselines: make(map[string]retryCounterBaseline), vapCounterState: newVAPCounterTracker(), now: time.Now, readFile: os.ReadFile, readDir: os.ReadDir}
+	expectedUplinkMAC, _ := inform.NormalizeMAC(options.ExpectedUplinkMAC)
+	return &AsusProvider{runner: runner, compactRadioNames: options.CompactRadioNames, expectedUplinkMAC: expectedUplinkMAC, staticCache: make(map[string]staticCacheEntry), retryBaselines: make(map[string]retryCounterBaseline), vapCounterState: newVAPCounterTracker(), now: time.Now, readFile: os.ReadFile, readDir: os.ReadDir}
 }
 
 func (p *AsusProvider) Collect(ctx context.Context, mapping map[string]string) (*providers.Sample, error) {
@@ -979,12 +984,13 @@ func (p *AsusProvider) resolveLLDPNeighborContext(ctx context.Context) (chassisM
 	for _, item := range ifaceData.Chassis {
 		neighborID = item.ID
 	}
-	if !isMACIDSubtype(neighborID.Type) {
-		return p.cachedParent(fmt.Errorf("unsupported chassis ID subtype %q", neighborID.Type))
-	}
 	chassisMAC, err = inform.NormalizeMAC(neighborID.Value)
 	if err != nil || !isUnicastMAC(chassisMAC) {
 		return p.cachedParent(fmt.Errorf("invalid chassis MAC"))
+	}
+	localChassisID := isLocalIDSubtype(neighborID.Type)
+	if !isMACIDSubtype(neighborID.Type) && !localChassisID {
+		return p.cachedParent(fmt.Errorf("unsupported chassis ID subtype %q", neighborID.Type))
 	}
 	portID = strings.TrimSpace(ifaceData.Port.ID.Value)
 	portType := strings.ToLower(strings.TrimSpace(ifaceData.Port.ID.Type))
@@ -1014,6 +1020,9 @@ func (p *AsusProvider) resolveLLDPNeighborContext(ctx context.Context) (chassisM
 	}
 	if portID == "" {
 		return p.cachedParent(fmt.Errorf("empty port ID"))
+	}
+	if localChassisID && (p.expectedUplinkMAC == "" || chassisMAC != p.expectedUplinkMAC || remotePort == 0) {
+		return p.cachedParent(fmt.Errorf("unverified local chassis ID"))
 	}
 	verified := p.now()
 	p.parentCache = &verifiedParent{localInterface: "eth0", chassisMAC: chassisMAC, portID: portID, remotePort: remotePort, verifiedAt: verified}

@@ -354,6 +354,7 @@ func main() {
 	} else {
 		provider = broadcom.NewAsusProviderWithOptions(nil, broadcom.AsusProviderOptions{
 			CompactRadioNames: cfg.CompactRadioNames,
+			ExpectedUplinkMAC: cfg.UplinkMAC,
 		})
 	}
 

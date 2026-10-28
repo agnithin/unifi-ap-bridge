@@ -1471,3 +1471,12 @@ The explicit `--ssid` Mac resolver was exercised read-only first with one SSID a
 The host roaming correlator ran against the fresh private Main and Node status snapshots and returned eight paired observations, all with radio metadata on at least one side. The correlation is sampled evidence and does not prove exact roam time, interruption or cause. Focused correlator and Broadcom tests passed with a temporary Go build cache. No client identifiers or snapshots were published.
 
 The Asus browser tab reached the login screen, so rendered RF diagnostics acceptance awaits a signed-in session. Scan-result freshness, native UniFi interference semantics, wireless monitor capture and Locate retain the limitations in Section 34; no additional live scan, monitor-mode operation or LED change occurred.
+
+
+## 36. Asus RF page acceptance and LLDP follow-up — 2026-10-27
+
+The signed-in Main Asus page rendered the RF diagnostics panel with three radio rows at channels 6/36/161 and widths 20/40/80 MHz. Its table showed the separate non-WiFi CCA values (sample 4%, 0%, 0%), and explicitly stated their age is unknown and that UniFi interference equivalence is unproven. Two WLAN mappings and observed local client changes were also visible. This accepts Main browser rendering, not scan freshness or native UniFi interference.
+
+The page displayed partial telemetry. Both APs independently reported `lldp: unavailable` despite fresh Active GCM and fresh samples. Read-only `lldpcli` output showed a single gateway neighbor on `eth0` with chassis ID subtype `local`, whose value matches each AP's explicitly configured gateway MAC, plus remote port descriptions `eth0` (Main) and `eth2` (Node). The deployed parser rejects the `local` chassis subtype; configured topology remains a separate fallback. A guarded source fix accepts a local chassis only when its unicast MAC matches the explicit configured parent and its remote port is unambiguous. Main/Node-shaped fixtures, the full Go suite, vet and bounded review passed; live acceptance still requires deployment.
+
+An attempted read-only `wl -i eth4 escan_event_check` argument-help probe unexpectedly started a listener and the SSH call timed out after 20 seconds. A separate process check identified that exact listener (PID 18784); it was terminated, and follow-up confirmed no matching listener and fresh adopted Active GCM on Main. No scan was requested. Do not assume missing arguments invoke a harmless help display on this firmware.

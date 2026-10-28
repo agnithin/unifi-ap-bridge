@@ -359,6 +359,58 @@ func TestLLDPValidationAndVerifiedParentCache(t *testing.T) {
 	}
 }
 
+func TestLLDPLocalChassisRequiresConfiguredMACAndUnambiguousPort(t *testing.T) {
+	const expectedMAC = "6c:63:f8:30:9a:05"
+	base := `{"lldp":{"interface":{"eth0":{"chassis":{"1":{"id":{"type":"local","value":"6c:63:f8:30:9a:05"}}},"port":{"id":{"type":"interface name","value":"eth2"},"descr":"eth2"}}}}}`
+	mainObserved := `{"lldp":{"interface":{"eth0":{"chassis":{"1":{"id":{"type":"local","value":"6c:63:f8:30:9a:05"}}},"port":{"id":{"type":"mac","value":"6c:63:f8:30:9a:06"},"descr":"eth0"}}}}}`
+	nodeObserved := `{"lldp":{"interface":{"eth0":{"chassis":{"1":{"id":{"type":"local","value":"6c:63:f8:30:9a:05"}}},"port":{"id":{"type":"mac","value":"6c:63:f8:30:9a:07"},"descr":"eth2"}}}}}`
+	makeResponse := func(chassis, portID, descr string) string {
+		response := strings.Replace(base, `"value":"6c:63:f8:30:9a:05"`, `"value":"`+chassis+`"`, 1)
+		response = strings.Replace(response, `"value":"eth2"`, `"value":"`+portID+`"`, 1)
+		return strings.Replace(response, `"descr":"eth2"`, `"descr":"`+descr+`"`, 1)
+	}
+	tests := []struct {
+		name         string
+		response     string
+		configured   string
+		wantAccepted bool
+		wantPortID   string
+		wantRemote   int
+	}{
+		{name: "matching configured MAC and port", response: base, configured: expectedMAC, wantAccepted: true, wantPortID: "eth2", wantRemote: 3},
+		{name: "configured MAC mismatch", response: base, configured: "6c:63:f8:30:9a:06"},
+		{name: "missing configured MAC", response: base},
+		{name: "malformed chassis MAC", response: makeResponse("gateway", "eth2", "eth2"), configured: expectedMAC},
+		{name: "invalid multicast chassis MAC", response: makeResponse("ff:ff:ff:ff:ff:ff", "eth2", "eth2"), configured: "ff:ff:ff:ff:ff:ff"},
+		{name: "missing port evidence", response: makeResponse(expectedMAC, "", ""), configured: expectedMAC},
+		{name: "ambiguous port evidence", response: makeResponse(expectedMAC, "eth2", "eth3"), configured: expectedMAC},
+		{name: "standard MAC subtype remains accepted", response: strings.Replace(base, `"type":"local"`, `"type":"mac"`, 1), wantAccepted: true, wantPortID: "eth2", wantRemote: 3},
+		{name: "observed Main LLDP output uses eth0 description", response: mainObserved, configured: expectedMAC, wantAccepted: true, wantPortID: "6c:63:f8:30:9a:06", wantRemote: 1},
+		{name: "observed Node LLDP output uses eth2 description", response: nodeObserved, configured: expectedMAC, wantAccepted: true, wantPortID: "6c:63:f8:30:9a:07", wantRemote: 3},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := func(ctx context.Context, name string, args ...string) (string, error) {
+				if name == "lldpcli" {
+					return tt.response, nil
+				}
+				return "", nil
+			}
+			p := NewAsusProviderWithOptions(runner, AsusProviderOptions{ExpectedUplinkMAC: tt.configured})
+			chassis, portID, remote, cached, err := p.resolveLLDPNeighborContext(context.Background())
+			if tt.wantAccepted {
+				if err != nil || cached || chassis != expectedMAC || portID != tt.wantPortID || remote != tt.wantRemote {
+					t.Fatalf("expected verified parent, got chassis=%q port=%q remote=%d cached=%v err=%v", chassis, portID, remote, cached, err)
+				}
+				return
+			}
+			if err == nil || chassis != "" || remote != 0 || cached {
+				t.Fatalf("expected fail-closed result, got chassis=%q remote=%d cached=%v err=%v", chassis, remote, cached, err)
+			}
+		})
+	}
+}
+
 func TestRetryExperienceRequiresCompatibleIntervalAndResetsSafely(t *testing.T) {
 	p := NewAsusProvider(nil)
 	start := time.Unix(100, 0)
