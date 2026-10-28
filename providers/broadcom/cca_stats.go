@@ -136,7 +136,9 @@ func (p *AsusProvider) enrichCCAInterferenceContext(ctx context.Context, stats [
 		}
 		for i := range stats {
 			if stats[i].Name == radioName {
-				stats[i].CCAInterference = p.readCCAInterference(ctx, iface, stats[i].Channel)
+				interf := p.readCCAInterference(ctx, iface, stats[i].Channel)
+				stats[i].CCAInterference = interf
+				stats[i].CuInterf = interf
 				break
 			}
 		}

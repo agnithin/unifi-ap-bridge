@@ -14,8 +14,8 @@ import (
 type packetSocket struct{ fd int }
 
 func openPacketReader(name string) (PacketReader, error) {
-	if name != "br0" {
-		return nil, errors.New("interface must be br0")
+	if !isValidCaptureInterface(name) {
+		return nil, fmt.Errorf("interface %s is not an allowed capture interface (br*, eth*, wl*)", name)
 	}
 	ifi, err := netInterfaceByName(name)
 	if err != nil {

@@ -72,12 +72,13 @@ type VAP struct {
 }
 
 // RadioDriverStats is the native radio_table[].athstats wire projection.
-// Only measured utilization/noise is included; no Atheros counters are invented.
+// Measured utilization, interference duty cycle, and noise floor.
 type RadioDriverStats struct {
 	Name       string `json:"name"`
 	CuTotal    int    `json:"cu_total"`
 	CuSelfRx   int    `json:"cu_self_rx"`
 	CuSelfTx   int    `json:"cu_self_tx"`
+	CuInterf   *int   `json:"cu_interf,omitempty"`
 	NoiseFloor *int   `json:"noise_floor,omitempty"`
 }
 
@@ -96,9 +97,10 @@ type Radio struct {
 	HasHE          bool              `json:"has_he"`
 	HasVHT         bool              `json:"has_vht,omitempty"`
 	TxPowerMode    string            `json:"tx_power_mode,omitempty"`
-	CuTotal        int               `json:"cu_total"`   // Total channel utilization % (0-100)
-	CuSelfRx       int               `json:"cu_self_rx"` // AP receive airtime % (0-100)
-	CuSelfTx       int               `json:"cu_self_tx"` // AP transmit airtime % (0-100)
+	CuTotal        int               `json:"cu_total"`            // Total channel utilization % (0-100)
+	CuSelfRx       int               `json:"cu_self_rx"`          // AP receive airtime % (0-100)
+	CuSelfTx       int               `json:"cu_self_tx"`          // AP transmit airtime % (0-100)
+	CuInterf       *int              `json:"cu_interf,omitempty"` // Non-WiFi RF interference % (0-100)
 }
 
 type RadioStat struct {
@@ -109,10 +111,11 @@ type RadioStat struct {
 	CuTotal         int    `json:"cu_total"`                   // Total channel utilization % (0-100)
 	CuSelfRx        int    `json:"cu_self_rx"`                 // AP receive airtime % (0-100)
 	CuSelfTx        int    `json:"cu_self_tx"`                 // AP transmit airtime % (0-100)
+	CuInterf        *int   `json:"cu_interf,omitempty"`        // Non-WiFi RF interference % (0-100)
 	CuOBSS          *int   `json:"cu_obss,omitempty"`          // Driver-reported overlapping-BSS airtime, when available.
 	CuNoCat         *int   `json:"cu_nocat,omitempty"`         // Driver CCA no-category activity: bad-FCS frames and some control frames, %.
 	CuNoPkt         *int   `json:"cu_nopkt,omitempty"`         // Driver CCA invalid-PLCP/CRS noise-like activity, %; not a non-Wi-Fi classification.
-	CCAInterference *int   `json:"cca_interference,omitempty"` // Broadcom measured CCA interference; not UniFi cu_interf.
+	CCAInterference *int   `json:"cca_interference,omitempty"` // Broadcom measured CCA interference.
 	NoiseDBm        *int   `json:"noise_dbm,omitempty"`        // Driver-reported channel noise floor, when available.
 }
 

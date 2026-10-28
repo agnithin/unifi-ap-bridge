@@ -8,8 +8,13 @@ import (
 
 func TestNativeRadioStatsAreNestedAndMatchExactPhysicalIdentity(t *testing.T) {
 	noise := -89
+	interf := 5
 	radios := []Radio{{Name: "wifi-ng", Channel: 6}, {Name: "wifi-na", Channel: 36}, {Name: "wifi-na-1", Channel: 161}}
-	stats := []RadioStat{{Name: "wifi-na-1", Channel: 161, CuTotal: 47, CuSelfRx: 2, CuSelfTx: 7, NoiseDBm: &noise}, {Name: "wifi-ng", Channel: 6, CuTotal: 48, CuSelfRx: 7, CuSelfTx: 13}, {Name: "wifi-na", Channel: 36, CuTotal: 0}}
+	stats := []RadioStat{
+		{Name: "wifi-na-1", Channel: 161, CuTotal: 47, CuSelfRx: 2, CuSelfTx: 7, NoiseDBm: &noise},
+		{Name: "wifi-ng", Channel: 6, CuTotal: 48, CuSelfRx: 7, CuSelfTx: 13, CCAInterference: &interf},
+		{Name: "wifi-na", Channel: 36, CuTotal: 0},
+	}
 	AttachRadioDriverStats(radios, stats)
 	b, err := json.Marshal(InformPayload{RadioTable: radios})
 	if err != nil {
@@ -17,8 +22,9 @@ func TestNativeRadioStatsAreNestedAndMatchExactPhysicalIdentity(t *testing.T) {
 	}
 	var wire struct {
 		Radios []struct {
-			Name  string            `json:"name"`
-			Stats *RadioDriverStats `json:"athstats"`
+			Name     string            `json:"name"`
+			CuInterf *int              `json:"cu_interf"`
+			Stats    *RadioDriverStats `json:"athstats"`
 		} `json:"radio_table"`
 	}
 	if err = json.Unmarshal(b, &wire); err != nil {
@@ -31,6 +37,12 @@ func TestNativeRadioStatsAreNestedAndMatchExactPhysicalIdentity(t *testing.T) {
 	}
 	if len(wire.Radios) != 3 || wire.Radios[0].Stats.CuTotal != 48 || wire.Radios[1].Stats.CuTotal != 0 || wire.Radios[2].Stats.CuTotal != 47 || *wire.Radios[2].Stats.NoiseFloor != -89 {
 		t.Fatalf("wrong native projection: %s", b)
+	}
+	if wire.Radios[0].Stats.CuInterf == nil || *wire.Radios[0].Stats.CuInterf != 5 {
+		t.Fatalf("athstats missing cu_interf: %s", b)
+	}
+	if wire.Radios[0].CuInterf == nil || *wire.Radios[0].CuInterf != 5 {
+		t.Fatalf("radio_table missing cu_interf: %s", b)
 	}
 	for _, r := range wire.Radios {
 		if r.Stats.Name != r.Name {

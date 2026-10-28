@@ -77,7 +77,7 @@ func TestOperatingWidthIsIndependentOfConfiguredWidth(t *testing.T) {
 	}
 }
 
-func TestCCAInterferenceStaysInLocalStatusAndIsOmittedFromInform(t *testing.T) {
+func TestCCAInterferenceMapsToCuInterfAndStripsDriverInternalFields(t *testing.T) {
 	measured := 4
 	stats := []RadioStat{{Name: "wifi-ng", Channel: 6, CCAInterference: &measured}}
 	local, err := json.Marshal(map[string]any{"radio_stats": stats})
@@ -91,8 +91,11 @@ func TestCCAInterferenceStaysInLocalStatusAndIsOmittedFromInform(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(payload), "cca_interference") || strings.Contains(string(payload), "cu_interf") {
-		t.Fatalf("local CCA diagnostic leaked into inform payload: %s", payload)
+	if !strings.Contains(string(payload), `"cu_interf":4`) {
+		t.Fatalf("inform payload missing cu_interf: %s", payload)
+	}
+	if strings.Contains(string(payload), "cca_interference") {
+		t.Fatalf("local CCA driver-internal field leaked into inform payload: %s", payload)
 	}
 	if stats[0].CCAInterference == nil || *stats[0].CCAInterference != measured {
 		t.Fatal("inform projection mutated local status sample")

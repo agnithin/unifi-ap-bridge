@@ -46,12 +46,15 @@ func Run(ctx context.Context, req Request) (string, error) {
 	return run(ctx, req, openPacketReader, "/tmp")
 }
 
-func isValidBridgeInterface(name string) bool {
-	if len(name) < 3 || len(name) > 15 || !strings.HasPrefix(name, "br") {
+func isValidCaptureInterface(name string) bool {
+	if len(name) < 3 || len(name) > 15 {
 		return false
 	}
-	for _, ch := range name[2:] {
-		if !((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '-' || ch == '_') {
+	if !strings.HasPrefix(name, "br") && !strings.HasPrefix(name, "eth") && !strings.HasPrefix(name, "wl") {
+		return false
+	}
+	for _, ch := range name {
+		if !((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '-' || ch == '_' || ch == '.') {
 			return false
 		}
 	}
@@ -62,8 +65,8 @@ func validate(req Request) (net.HardwareAddr, error) {
 	if !req.Allow {
 		return nil, errors.New("packet capture requires --allow-packet-capture")
 	}
-	if !isValidBridgeInterface(req.Interface) {
-		return nil, errors.New("packet capture is restricted to bridge interfaces (e.g. br0, br20)")
+	if !isValidCaptureInterface(req.Interface) {
+		return nil, errors.New("packet capture is restricted to bridge, ethernet, and wireless interfaces (e.g. br0, br20, eth4, wl0.1)")
 	}
 	mac, err := net.ParseMAC(req.ClientMAC)
 	if err != nil || len(mac) != 6 {

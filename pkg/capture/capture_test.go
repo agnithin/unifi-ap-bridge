@@ -137,7 +137,7 @@ func TestValidationPrecedesSocketAndRejectsUnsafeBounds(t *testing.T) {
 	base := request()
 	called := false
 	for _, mutate := range []func(*Request){
-		func(r *Request) { r.Allow = false }, func(r *Request) { r.Interface = "eth0" }, func(r *Request) { r.Interface = "br" },
+		func(r *Request) { r.Allow = false }, func(r *Request) { r.Interface = "tun0" }, func(r *Request) { r.Interface = "docker0" }, func(r *Request) { r.Interface = "br" },
 		func(r *Request) { r.Interface = "br/0" }, func(r *Request) { r.Interface = "" }, func(r *Request) { r.ClientMAC = "ff:ff:ff:ff:ff:ff" },
 		func(r *Request) { r.Duration = MaxDuration + time.Nanosecond }, func(r *Request) { r.PacketLimit = MaxPackets + 1 },
 		func(r *Request) { r.SnapLen = MaxSnapLen + 1 }, func(r *Request) { r.SnapLen = 13 },
@@ -153,13 +153,13 @@ func TestValidationPrecedesSocketAndRejectsUnsafeBounds(t *testing.T) {
 	}
 }
 
-func TestValidationAcceptsValidBridgeInterfaces(t *testing.T) {
-	for _, iface := range []string{"br0", "br20", "br50", "br-lan", "br_iot"} {
+func TestValidationAcceptsValidCaptureInterfaces(t *testing.T) {
+	for _, iface := range []string{"br0", "br20", "br50", "br-lan", "br_iot", "eth0", "eth4", "eth5", "eth6", "wl0.1", "wl1.1", "wl2.5"} {
 		r := request()
 		r.Interface = iface
 		mac, err := validate(r)
 		if err != nil {
-			t.Fatalf("valid bridge interface %q was rejected: %v", iface, err)
+			t.Fatalf("valid capture interface %q was rejected: %v", iface, err)
 		}
 		if mac == nil {
 			t.Fatalf("expected MAC for %q, got nil", iface)

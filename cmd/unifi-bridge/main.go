@@ -23,7 +23,7 @@ import (
 )
 
 var (
-	version   = "1.2.7"
+	version   = "1.2.8"
 	commit    = "none"
 	buildDate = "unknown"
 )
@@ -221,7 +221,7 @@ func main() {
 	rfScanChannels := flag.String("rf-scan-channels", "", "Explicit comma-separated channels for the manual passive scan")
 	rfScanAllowed := flag.Bool("allow-disruptive-rf-scan", false, "Explicitly allow a serving-radio scan that may interrupt clients")
 	packetCaptureClient := flag.String("packet-capture-client", "", "Capture bounded Ethernet frames for this exact client MAC on bridge")
-	packetCaptureInterface := flag.String("packet-capture-interface", "br0", "Bridge interface for packet capture (e.g. br0, br20)")
+	packetCaptureInterface := flag.String("packet-capture-interface", "br0", "Capture interface (e.g. br0, br20, eth4, wl0.1)")
 	packetCaptureSeconds := flag.Int("packet-capture-seconds", 5, "Packet capture duration (maximum 10 seconds)")
 	packetCapturePackets := flag.Int("packet-capture-packets", 100, "Maximum matching packets (maximum 100)")
 	packetCaptureSnapLen := flag.Int("packet-capture-snaplen", 128, "Maximum bytes per packet (maximum 128)")

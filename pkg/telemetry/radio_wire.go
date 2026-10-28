@@ -1,8 +1,8 @@
 package telemetry
 
-// RadioStatsForInform removes fields that are local diagnostics and must not
-// be sent to the controller. The returned slice is a copy so local status
-// retains the complete sample.
+// RadioStatsForInform maps local CCA diagnostics to standard inform telemetry
+// and removes driver-internal diagnostic fields. The returned slice is a copy
+// so local status retains the complete raw sample.
 func RadioStatsForInform(stats []RadioStat) []RadioStat {
 	if stats == nil {
 		return nil
@@ -10,6 +10,12 @@ func RadioStatsForInform(stats []RadioStat) []RadioStat {
 	result := make([]RadioStat, len(stats))
 	copy(result, stats)
 	for i := range result {
+		if result[i].CuInterf == nil && result[i].CCAInterference != nil {
+			v := *result[i].CCAInterference
+			if v >= 0 && v <= 100 {
+				result[i].CuInterf = &v
+			}
+		}
 		result[i].CCAInterference = nil
 	}
 	return result
@@ -35,6 +41,15 @@ func AttachRadioDriverStats(radios []Radio, stats []RadioStat) {
 			continue
 		}
 		value := &RadioDriverStats{Name: stat.Name, CuTotal: stat.CuTotal, CuSelfRx: stat.CuSelfRx, CuSelfTx: stat.CuSelfTx}
+		interf := stat.CuInterf
+		if interf == nil {
+			interf = stat.CCAInterference
+		}
+		if interf != nil && *interf >= 0 && *interf <= 100 {
+			v := *interf
+			value.CuInterf = &v
+			radios[i].CuInterf = &v
+		}
 		if stat.NoiseDBm != nil {
 			noise := *stat.NoiseDBm
 			value.NoiseFloor = &noise
