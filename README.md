@@ -1,6 +1,6 @@
 # unifi-ap-bridge
 
-> **Current delivery status — 2026-10-27 PDT:** Both APs are running `6dfab3d` with compact radio naming and Broadcom CCA diagnostics (v1.2.5 dev). Changed-settings/cluster save, Mac-only WLAN cache refresh and one real Main UniFi reboot passed. Three physical radios report20/40/80 MHz; the stale Auto row is resolved. Native radio utilization now reaches UniFi; bounded LAN packet capture passed a Main self-test. AirView now shows measured signal, airtime and retry averages for 2.4 GHz/lower 5 GHz. Upper 5 GHz AirView traffic/signal history is verified on both APs; interference and Locate remain pending. See [current audit state](docs/AUDIT_STATE.md).
+> **Current delivery status — 2026-10-27 PDT:** Both APs are running `edfdca5` with compact radio naming and Broadcom CCA diagnostics (v1.2.5 dev). Changed-settings/cluster save, Mac-only WLAN cache refresh and one real Main UniFi reboot passed. Three physical radios report20/40/80 MHz; the stale Auto row is resolved. Native radio utilization now reaches UniFi; bounded LAN packet capture passed a Main self-test. AirView now shows measured signal, airtime and retry averages for 2.4 GHz/lower 5 GHz. Upper 5 GHz AirView traffic/signal history is verified on both APs; interference and Locate remain pending. See [current audit state](docs/AUDIT_STATE.md).
 
 A high-performance, ultra-lightweight standalone daemon and WebUI addon for **Asuswrt-Merlin** and Linux routers that bridges Broadcom Wi-Fi and switch telemetry into the **Ubiquiti UniFi Inform Protocol** (`:8080/inform`).
 
@@ -10,7 +10,7 @@ It emulates a genuine UniFi 6 Access Point—featuring native **UniFi 6 In-Wall 
 
 ## Current deployment
 
-Both APs run `6dfab3d`, version `1.2.5 dev`, with `compact_radio_names: true`. Fresh GCM, the installed RF page and CCA status values were verified after sequential updates; signed-in Main browser rendering was subsequently verified. Each underwent a separate controlled forget/re-adoption for the radio identity migration. Protected config/key/cache, fresh GCM, watchdogs and clean transactions were verified; previous adoption states are retained privately. Main completed one real UniFi-triggered reboot and recovered its configuration, WLAN cache and daemon automatically. Reboot handling is enabled on both APs; Node's router was not rebooted for this test.
+Both APs run `edfdca5`, version `1.2.5 dev`, with `compact_radio_names: true`. Fresh GCM, the installed RF page and CCA status values were verified after sequential updates; signed-in Main browser rendering was subsequently verified. Each underwent a separate controlled forget/re-adoption for the radio identity migration. Protected config/key/cache, fresh GCM, watchdogs and clean transactions were verified; previous adoption states are retained privately. Main completed one real UniFi-triggered reboot and recovered its configuration, WLAN cache and daemon automatically. Reboot handling is enabled on both APs; Node's router was not rebooted for this test.
 
 Both APs report channels6/36/161 at20/40/80 MHz and the correct gateway ports. Main's extra Auto radio is gone after operator re-adoption. Passive scan retrieval passed, with driver result freshness explicitly unknown. Host tools correlate natural AP departure/arrival observations without claiming precise roaming latency. WLAN mapping refresh runs on demand from the Mac and both private caches are active; the explicit SSID option passed an end-to-end refresh. No new CT107 administrative access or timer is needed.
 
@@ -332,7 +332,7 @@ The dev CLI can write a short Ethernet PCAP without `tcpdump`. It requires Linux
   -packet-capture-snaplen 128 -allow-packet-capture
 ```
 
-Replace the example with the intended device's unicast MAC. Maximums are10 seconds,100 matching packets,128 bytes per packet and32KiB per file. The result is a private0600 `/tmp/unifi-bridge-packet-*.pcap`; stdout prints its path only. The file can contain packet contents, so keep it private. Truncated PCAP records retain their original wire length. Nothing runs automatically in the daemon, and no capture is uploaded. Source tests, ARMv7/ARM64 compile checks and a10-packet Main self-test passed; live limits are recorded in the ledger.
+Replace the example with the intended device's unicast MAC. Maximums are10 seconds,100 matching packets,128 bytes per packet and32KiB per file. The result is a private0600 `/tmp/unifi-bridge-packet-*.pcap`; stdout prints its path only. The file can contain packet contents, so keep it private. Truncated PCAP records retain their original wire length. Nothing runs automatically in the daemon, and no capture is uploaded. Source tests, ARMv7/ARM64 compile checks and ten-packet self-tests on Main and Node passed; Node also passed quiet deadline completion. Live limits are recorded in the ledger.
 
 ### Native VAP signal and retry telemetry
 

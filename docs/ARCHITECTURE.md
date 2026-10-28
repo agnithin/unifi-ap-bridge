@@ -1,6 +1,6 @@
 # Architecture & Technical Reference
 
-> **Current delivery status — 2026-10-27 PDT:** Both APs run `6dfab3d` with compact names and the CCA diagnostic, with fresh GCM, watchdogs, protected state and physical 20/40/80 MHz radios. Changed-save/cluster propagation, both Mac-published WLAN caches and one Main UniFi reboot/persistence test passed. Native radio utilization ingestion and a Main LAN PCAP self-test passed. AirView signal/airtime/retries are visible for 2.4 GHz/lower 5 GHz. Upper 5 GHz history is live-accepted on both APs; interference, Locate and RF monitor capture remain pending. See [the canonical live ledger](AUDIT_STATE.md).
+> **Current delivery status — 2026-10-27 PDT:** Both APs run `edfdca5` with compact names and the CCA diagnostic, with fresh GCM, watchdogs, protected state and physical 20/40/80 MHz radios. Changed-save/cluster propagation, both Mac-published WLAN caches and one Main UniFi reboot/persistence test passed. Native radio utilization ingestion and a Main LAN PCAP self-test passed. AirView signal/airtime/retries are visible for 2.4 GHz/lower 5 GHz. Upper 5 GHz history is live-accepted on both APs; interference, Locate and RF monitor capture remain pending. See [the canonical live ledger](AUDIT_STATE.md).
 
 `unifi-ap-bridge` is a standalone, dependency-free daemon and WebUI extension engineered for Asuswrt-Merlin and Broadcom-based routers. It translates raw Linux and Broadcom wireless and switch telemetry into the Ubiquiti UniFi Inform protocol (`:8080/inform`).
 
