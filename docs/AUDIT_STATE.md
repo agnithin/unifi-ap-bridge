@@ -1505,3 +1505,31 @@ Commit `edfdca5ce685de32c09ac658e09479dac4fc6c8a` passed hosted [run 40624567835
 A Node test filtered to its own bridge MAC captured ten packets in an 824-byte private 0600 PCAP; local parsing verified Ethernet PCAP format, 64-byte snaplen, record lengths and that every packet matched the filter. A second two-second test used a synthetic MAC, completed at its deadline with exit 0, and produced a valid 24-byte empty 0600 PCAP. These tests verify both packet-limit and quiet-deadline completion; they do not prove complete forwarded/offloaded traffic visibility or wireless monitor capture. Private evidence remains in Node's existing private operations directory and its RAM `/tmp`.
 
 Main was then updated to the same commit with updater exit 0 and protected files preserved. Final Main PID `19871` and Node PID `3116` showed fresh adopted Active GCM with successful inform, no sample-stage errors, watchdog entries, channels 6/36/161 at 20/40/80 MHz and 2.5 GbE uplinks; Node Port 4 remained up at 1 GbE. No router reboot, radio setting change, Wi-Fi scan, controller write or LED action was performed.
+
+
+## 38. Multi-bridge VLAN detection and cross-bridge ARP isolation — 2026-10-28
+
+### Root Cause Analysis
+An Ethernet client (`Bridge-EufyHomeBase3`, `10:2c:b1:73:3d:00`) connected to Node AP Port 4 (`eth3`) was reassigned to VLAN 20, acquiring IP `10.100.20.95`. Despite active connectivity on VLAN 20, the UniFi Controller continued displaying stale IP `10.100.1.8` on VLAN 1 for over 20 minutes. Investigation identified three contributing defects in the AP bridge:
+1. **Unvalidated ARP flags in `parseArpTable`:** Linux `/proc/net/arp` flags `0x0` indicate incomplete or failed ARP resolutions (`NUD_FAILED`/`NUD_INCOMPLETE`). When an IP moves or expires, the kernel retains the old MAC with Flags `0x0`. `parseArpTable` only validated MAC string format, parsing invalid `10.100.1.8 0x1 0x0 10:2c:b1:73:3d:00` as an active mapping.
+2. **Missing multi-bridge VLAN resolution in `effectiveVLAN`:** Standard Linux routers (including Asuswrt-Merlin and multi-bridge VLAN configurations) use dedicated bridge interfaces per VLAN (`br0` for primary/untagged, `br20` for VLAN 20) with `vlan_filtering=0`. `effectiveVLAN` only inspected `vlan_filtering`, returning 0 for `br20` ports and causing `mac_table` entries to omit the `vlan` field, defaulting them to VLAN 1 in UniFi.
+3. **Cross-bridge IP poisoning in `last_connection`:** Node AP participates in Layer 3 IP routing solely on `br0` (`10.100.1.11`). Bridges like `br20` are pure Layer 2 forwarding domains bridging `eth3` with `eth0.20`; the router kernel never initiates ARP on `br20`. Associating an ARP entry learned on `br0` with a port on `br20` caused the AP to actively advertise `last_connection: {"ip": "10.100.1.8"}` in its 10-second inform payloads, overriding the Cloud Gateway Max's authoritative DHCP lease.
+
+### Implemented Fix
+1. **Validated ARP parsing (`parseArpTableEntries`):** Requires completed or permanent ARP flags (`(flags & 0x02) != 0`). Entries with flags `0x0` or failing unicast validation are skipped. Records the interface device (`dev`) associated with each resolved neighbor.
+2. **Generic Linux multi-bridge VLAN heuristics (`effectiveVLAN`):** Supports generic Linux multi-bridge conventions without coupling to any specific plugin:
+   - Evaluates 802.1Q subinterface members (e.g. `eth0.20` in `br20` &rarr; VLAN 20).
+   - Evaluates bridge naming conventions (e.g. `br20`, `vlan20` &rarr; VLAN 20; `br0` &rarr; VLAN 1).
+   - Retains 802.1Q subinterface member checks and `vlan_filtering` support when enabled.
+3. **Bridge-device isolation for port connections:** `lastConnByPort` verifies that an ARP record's device matches the port's bridge interface. For ports on pure Layer 2 bridges where local ARP is absent, `last_connection.ip` is omitted (`""`), allowing the UniFi Controller to correlate client IP directly from gateway DHCP leases and ARP snooping.
+
+### Verification and Live Deployment
+- **Unit Testing:** Enhanced `TestParseArpTable` with incomplete entries, permanent entries, and device parsing. Added multi-bridge test cases to `TestBridgeDiscoveryAndEffectiveVLAN` and added `TestGetPortTableContextCrossBridgeArpIsolation` in `providers/broadcom/asus_test.go`. Full Go test suite passed.
+- **Build & Version:** Bumped `version.txt` to `1.2.6` (commit `cd132fa`). Built ARMv7 and ARM64 release binaries.
+- **Live Deployment:** Deployed to Node AP (`10.100.1.11`, PID `24033`) and Main AP (`10.100.1.10`, PID `27247`) with zero disruption to 60 active Wi-Fi stations.
+- **Node AP Status Verification:** `/tmp/var/wwwext/unifi-bridge/status.js` confirmed Port 4 (`eth3`) reports:
+  ```json
+  "mac_table": [{"mac": "10:2c:b1:73:3d:00", "age": 7, "vlan": 20}],
+  "last_connection": {"connected": true, "mac": "10:2c:b1:73:3d:00", "last_seen": 1793170854}
+  ```
+- **UniFi Controller Verification:** Live MCP query `network_read(view: "client", target: "10:2c:b1:73:3d:00")` confirmed the controller immediately updated `Bridge-EufyHomeBase3` to `ip: "10.100.20.95"` and `vlan: 20` with `online_now: true`.
