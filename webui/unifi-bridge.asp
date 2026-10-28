@@ -413,6 +413,25 @@ function displayMetric(value, maxValue) {
   return String(number);
 }
 
+function formatUptime(sec) {
+  if (typeof sec !== "number" || !isFinite(sec) || sec <= 0) return "-";
+  var days = Math.floor(sec / 86400);
+  var hours = Math.floor((sec % 86400) / 3600);
+  var mins = Math.floor((sec % 3600) / 60);
+  if (days > 0) return days + "d " + hours + "h";
+  if (hours > 0) return hours + "h " + mins + "m";
+  return mins + "m";
+}
+
+function formatBytes(bytes) {
+  if (typeof bytes !== "number" || !isFinite(bytes) || bytes <= 0) return "0 B";
+  if (bytes >= 1099511627776) return (bytes / 1099511627776).toFixed(1) + " TB";
+  if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(1) + " GB";
+  if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + " MB";
+  if (bytes >= 1024) return (bytes / 1024).toFixed(1) + " KB";
+  return bytes + " B";
+}
+
 function statusIsFresh(st) {
   var age = Date.now()/1000 - Number(st.status_updated_at);
   return Number.isFinite(age) && age >= -30 && age <= 3 * (Number(st.interval_sec) || 10) + 30;
@@ -426,7 +445,8 @@ function clusterState(n) {
   if (label === "Local") return "local";
   // A version match is healthy sampling, not proof of configuration equality.
   if (/Unverified|Config Synced|Version Diff/i.test(label)) return "unverified";
-  return label.indexOf("In Sync") !== -1 ? "verified" : "unverified";
+  if (/Verified|In Sync/i.test(label)) return "verified";
+  return "unverified";
 }
 
 // These views use only text nodes: station/SSID fields are untrusted data.
@@ -620,6 +640,166 @@ function updateUI(st) {
   }
 }
 
+function renderSatelliteNodesTelemetry(cl) {
+  var container = document.getElementById("satellite_nodes_container");
+  if (!container) return;
+  if (!cl || !cl.nodes || cl.nodes.length <= 1) {
+    container.style.display = "none";
+    container.innerHTML = "";
+    return;
+  }
+
+  var satNodes = [];
+  for (var i = 0; i < cl.nodes.length; i++) {
+    var nd = cl.nodes[i];
+    if (nd.role && nd.role.indexOf("Main") === -1 && nd.sync_status !== "Local") {
+      satNodes.push(nd);
+    }
+  }
+
+  if (satNodes.length === 0) {
+    container.style.display = "none";
+    container.innerHTML = "";
+    return;
+  }
+
+  var html = "";
+  for (var s = 0; s < satNodes.length; s++) {
+    var n = satNodes[s];
+    var isRunning = n.status === "RUNNING";
+    var sys = n.system_stats || {};
+    var ports = n.ports || [];
+    var radios = n.radio_stats || [];
+
+    var cpuStr = typeof sys.cpu === "number" ? sys.cpu + "%" : "-";
+    var memStr = typeof sys.mem === "number" ? sys.mem + "%" : "-";
+    var upStr = typeof sys.uptime === "number" ? formatUptime(sys.uptime) : "-";
+    var tempStr = n.temp || "-";
+    var informStr = n.last_successful_inform ? escapeHTML(n.last_successful_inform) + " [" + escapeHTML(n.mode || "GCM") + "]" : "-";
+
+    html += '<details open style="margin-bottom:12px; padding:10px; background:#222c31; border:1px solid #3e4d66; border-radius:6px;">';
+    html += '<summary style="cursor:pointer; font-weight:bold; font-size:12px; color:#3498db; outline:none;">';
+    html += 'Satellite Node Telemetry: <span style="color:#fff;">' + escapeHTML(n.name) + '</span> (' + escapeHTML(n.ip) + ')';
+    html += isRunning
+      ? ' <span class="badge_online" style="font-size:10px; margin-left:8px; background-color:#27ae60;">Active (' + escapeHTML(n.mode || "GCM") + ')</span>'
+      : ' <span class="badge_offline" style="font-size:10px; margin-left:8px;">Offline</span>';
+    html += '</summary>';
+
+    html += '<div style="margin-top:10px;">';
+
+    // System Summary Bar
+    html += '<div style="display:flex; flex-wrap:wrap; gap:16px; padding:8px 12px; background:#2a363b; border-radius:4px; font-size:11px; color:#bdc3c7; margin-bottom:10px;">';
+    html += '<div>Model: <strong style="color:#ecf0f1;">' + escapeHTML(n.model || "UniFi 6 In-Wall") + '</strong></div>';
+    html += '<div>CPU: <strong style="color:#2ecc71;">' + escapeHTML(cpuStr) + '</strong></div>';
+    html += '<div>RAM: <strong style="color:#f39c12;">' + escapeHTML(memStr) + '</strong></div>';
+    html += '<div>Temp: <strong style="color:#e67e22;">' + escapeHTML(tempStr) + '</strong></div>';
+    html += '<div>Uptime: <strong style="color:#ecf0f1;">' + escapeHTML(upStr) + '</strong></div>';
+    html += '<div>Inform: <strong style="color:#3498db;">' + informStr + '</strong></div>';
+    html += '</div>';
+
+    // Switch Ports Table
+    if (ports.length > 0) {
+      html += '<div style="margin-bottom:10px;">';
+      html += '<div style="font-size:11px; font-weight:bold; color:#ecf0f1; margin-bottom:4px;">Physical Switch Ports &amp; VLAN Connections:</div>';
+      html += '<table width="100%" style="font-size:11px; text-align:left; border-collapse:collapse;">';
+      html += '<thead><tr bgcolor="#1b2427" style="color:#bdc3c7;">';
+      html += '<th style="padding:4px 8px; width:15%;">Port</th>';
+      html += '<th style="padding:4px 8px; width:10%;">Interface</th>';
+      html += '<th style="padding:4px 8px; width:12%;">Link</th>';
+      html += '<th style="padding:4px 8px; width:15%;">Speed</th>';
+      html += '<th style="padding:4px 8px; width:28%;">VLAN / Connected Device</th>';
+      html += '<th style="padding:4px 8px; width:20%;">Traffic (RX / TX)</th>';
+      html += '</tr></thead><tbody>';
+
+      for (var p = 0; p < ports.length; p++) {
+        var pt = ports[p] || {};
+        var isUp = pt.up === true;
+        var pName = typeof pt.name === "string" ? pt.name : "Port " + (pt.port_idx || (p + 1));
+        var speedStr = isUp ? ((pt.speed || 0) > 0 ? pt.speed + " Mbps " + (pt.full_duplex ? "FDX" : "HDX") : "Connected") : "No Link";
+        var linkBadge = isUp
+          ? '<span class="badge_online" style="font-size:9px; background:#27ae60;">' + (pt.is_uplink ? "UPLINK" : "UP") + '</span>'
+          : '<span style="font-size:9px; color:#7f8c8d;">DOWN</span>';
+
+        var connInfo = "-";
+        if (isUp) {
+          if (pt.is_uplink) {
+            var upTarget = pt.last_connection && pt.last_connection.ip ? pt.last_connection.ip : (pt.last_connection && pt.last_connection.mac ? pt.last_connection.mac : "Gateway");
+            connInfo = '<span style="color:#3498db;">Uplink to ' + escapeHTML(String(upTarget)) + '</span>';
+          } else if (pt.mac_table && pt.mac_table.length > 0) {
+            var devList = [];
+            for (var m = 0; m < pt.mac_table.length; m++) {
+              var entry = pt.mac_table[m];
+              var vlanBadge = entry.vlan ? '<span style="background:#8e44ad; color:#fff; font-size:9px; padding:1px 5px; border-radius:3px; font-weight:bold; margin-right:4px;">VLAN ' + entry.vlan + '</span>' : '';
+              devList.push(vlanBadge + '<code style="color:#2ecc71;">' + escapeHTML(entry.mac || "") + '</code>');
+            }
+            connInfo = devList.join(", ");
+          } else if (pt.last_connection && pt.last_connection.mac) {
+            connInfo = '<code style="color:#2ecc71;">' + escapeHTML(pt.last_connection.mac) + '</code>';
+          } else {
+            connInfo = '<span style="color:#bdc3c7;">Connected (No MAC learned)</span>';
+          }
+        }
+
+        var rxFormatted = formatBytes(pt.rx_bytes);
+        var txFormatted = formatBytes(pt.tx_bytes);
+        var trafficStr = isUp ? (rxFormatted + " / " + txFormatted) : "-";
+
+        html += '<tr style="border-bottom:1px solid #2d3b40;">';
+        html += '<td style="padding:4px 8px; font-weight:bold; color:#ecf0f1;">' + escapeHTML(pName) + '</td>';
+        html += '<td style="padding:4px 8px; color:#bdc3c7;">' + escapeHTML(pt.ifname || "") + '</td>';
+        html += '<td style="padding:4px 8px;">' + linkBadge + '</td>';
+        html += '<td style="padding:4px 8px; color:' + (isUp ? "#2ecc71" : "#7f8c8d") + ';">' + escapeHTML(speedStr) + '</td>';
+        html += '<td style="padding:4px 8px;">' + connInfo + '</td>';
+        html += '<td style="padding:4px 8px; color:#bdc3c7; font-size:10px;">' + trafficStr + '</td>';
+        html += '</tr>';
+      }
+      html += '</tbody></table></div>';
+    }
+
+    // Wireless Radios Table
+    if (radios.length > 0) {
+      html += '<div>';
+      html += '<div style="font-size:11px; font-weight:bold; color:#ecf0f1; margin-bottom:4px;">Wireless Radios &amp; Frequency Channels:</div>';
+      html += '<table width="100%" style="font-size:11px; text-align:left; border-collapse:collapse;">';
+      html += '<thead><tr bgcolor="#1b2427" style="color:#bdc3c7;">';
+      html += '<th style="padding:4px 8px; width:15%;">Radio</th>';
+      html += '<th style="padding:4px 8px; width:15%;">Band</th>';
+      html += '<th style="padding:4px 8px; width:12%;">Channel</th>';
+      html += '<th style="padding:4px 8px; width:12%;">Width</th>';
+      html += '<th style="padding:4px 8px; width:12%;">Stations</th>';
+      html += '<th style="padding:4px 8px; width:12%;">Channel Load</th>';
+      html += '<th style="padding:4px 8px; width:12%;">CCA Interf.</th>';
+      html += '<th style="padding:4px 8px; width:10%;">Noise Floor</th>';
+      html += '</tr></thead><tbody>';
+
+      for (var r = 0; r < radios.length; r++) {
+        var rd = radios[r] || {};
+        var bandLabel = (rd.name === "wifi-ng" || rd.channel <= 14) ? "2.4 GHz" : ((rd.channel < 100) ? "5 GHz-1" : "5 GHz-2");
+        var loadColor = (rd.cu_total || 0) > 70 ? "#e74c3c" : ((rd.cu_total || 0) > 40 ? "#f39c12" : "#2ecc71");
+        var interfColor = (rd.cu_interf || 0) > 20 ? "#e74c3c" : "#bdc3c7";
+
+        html += '<tr style="border-bottom:1px solid #2d3b40;">';
+        html += '<td style="padding:4px 8px; font-weight:bold; color:#ecf0f1;">' + escapeHTML(rd.name || "") + '</td>';
+        html += '<td style="padding:4px 8px; color:#bdc3c7;">' + escapeHTML(bandLabel) + '</td>';
+        html += '<td style="padding:4px 8px; color:#3498db; font-weight:bold;">Ch ' + (rd.channel || "-") + '</td>';
+        html += '<td style="padding:4px 8px; color:#bdc3c7;">' + (rd.bw ? rd.bw + " MHz" : "-") + '</td>';
+        html += '<td style="padding:4px 8px; color:#2ecc71; font-weight:bold;">' + (rd.num_sta !== undefined ? rd.num_sta : "-") + '</td>';
+        html += '<td style="padding:4px 8px; color:' + loadColor + '; font-weight:bold;">' + (rd.cu_total !== undefined ? rd.cu_total + "%" : "-") + '</td>';
+        html += '<td style="padding:4px 8px; color:' + interfColor + ';">' + (rd.cu_interf !== undefined ? rd.cu_interf + "%" : "-") + '</td>';
+        html += '<td style="padding:4px 8px; color:#bdc3c7;">' + (rd.noise_dbm ? rd.noise_dbm + " dBm" : "-") + '</td>';
+        html += '</tr>';
+      }
+      html += '</tbody></table></div>';
+    }
+
+    html += '</div>';
+    html += '</details>';
+  }
+
+  container.innerHTML = html;
+  container.style.display = "block";
+}
+
 function updateClusterUI(cl) {
   if (!cl || !cl.nodes) return;
   var tbody = document.getElementById("cluster_nodes_tbody");
@@ -628,6 +808,7 @@ function updateClusterUI(cl) {
   var html = "";
   var hasHealthError = false;
   var healthVerified = cl.nodes.length > 0;
+  var allSync = cl.nodes.length > 0;
   var clusterTotal = 0;
   var cluster2g = 0;
   var cluster5g = 0;
@@ -637,6 +818,7 @@ function updateClusterUI(cl) {
     var isLocal = n.role.indexOf("Main") !== -1;
     var state = clusterState(n);
     var isSync = state === "verified" || state === "local";
+    if (!isSync) allSync = false;
     var nodeDisabledAndHealthy = n.enabled === false && n.running === false && n.freshness === "fresh" && !n.pid;
     var nodeRunningAndFresh = n.status === "RUNNING" && n.running !== false && n.freshness === "fresh";
     if (state === "error") hasHealthError = true;
@@ -655,8 +837,10 @@ function updateClusterUI(cl) {
         : '<span class="badge_offline" style="font-size:10px;">STOPPED</span>');
 
     var syncBadge = isSync
-      ? '<span class="badge_online" style="font-size:10px; background-color:#2980b9;">' + escapeHTML(n.sync_status) + '</span>'
-      : '<span style="font-size:10px;color:' + (state === 'error' ? '#e74c3c' : '#f1c40f') + ';">' + escapeHTML(n.sync_status) + '</span>';
+      ? '<span class="badge_online" style="font-size:10px; background-color:#27ae60;">' + escapeHTML(n.sync_status) + '</span>'
+      : (state === 'error'
+        ? '<span class="badge_offline" style="font-size:10px; background-color:#e74c3c;">' + escapeHTML(n.sync_status) + '</span>'
+        : '<span class="badge_online" style="font-size:10px; background-color:#d35400;">' + escapeHTML(n.sync_status) + '</span>');
 
     html += '<tr style="border-bottom:1px solid #3e4d66;">';
     html += '<td class="settingvalue" style="font-weight:bold; color:#fff;">' + escapeHTML(n.name) + (isLocal ? ' <span style="font-size:10px; color:#f1c40f;">(This AP)</span>' : '') + '</td>';
@@ -674,14 +858,38 @@ function updateClusterUI(cl) {
       ? ' <span style="font-size:10px; color:#f39c12;">[' + (load2g === "-" ? "0" : load2g) + '% / ' + (load5g === "-" ? "0" : load5g) + '% load]</span>' : '';
     html += '<td class="settingvalue">' + clientsTotal + ' <span style="font-size:10px; color:#bdc3c7;">(' + clients2g + 'G / ' + clients5g + 'A)</span>' + loadTag + '</td>';
     html += '<td class="settingvalue">' + syncBadge + '</td>';
-    var operationText = (n.outcome || "unknown") + " · " + (n.stage || "unknown") + " · " + (n.freshness || "unknown") + " · dispatch " + (n.dispatch_result || "unknown");
-    if (n.operation_id) operationText += " · op " + n.operation_id;
-    if (n.requested_version) operationText += " · requested v" + String(n.requested_version).replace(/^v/i, "");
-    if (n.requested_commit) operationText += " · requested " + String(n.requested_commit).slice(0, 12);
-    if (n.commit) operationText += " · observed " + String(n.commit).slice(0, 12);
-    if (n.enabled === false) operationText += " · disabled";
-    if (n.last_successful_inform) operationText += " · inform " + n.last_successful_inform;
-    html += '<td class="settingvalue" style="font-size:10px;">' + escapeHTML(operationText) + '</td>';
+
+    var fullTrace = (n.outcome || "unknown") + " · " + (n.stage || "unknown") + " · " + (n.freshness || "unknown") + " · dispatch " + (n.dispatch_result || "unknown");
+    if (n.operation_id) fullTrace += " · op " + n.operation_id;
+    if (n.requested_version) fullTrace += " · requested v" + String(n.requested_version).replace(/^v/i, "");
+    if (n.requested_commit) fullTrace += " · requested " + String(n.requested_commit).slice(0, 12);
+    if (n.commit) fullTrace += " · observed " + String(n.commit).slice(0, 12);
+    if (n.enabled === false) fullTrace += " · disabled";
+    if (n.last_successful_inform) fullTrace += " · inform " + n.last_successful_inform;
+
+    var visualHealth = "";
+    if (state === "error") {
+      visualHealth = '<span class="badge_offline" style="font-size:9px; background:#c0392b;">ATTENTION</span>';
+    } else if (n.status === "RUNNING") {
+      var modeLabel = n.mode ? " (" + escapeHTML(n.mode) + ")" : "";
+      visualHealth = '<span class="badge_online" style="font-size:9px; background:#27ae60;">ACTIVE' + modeLabel + '</span>';
+    } else if (n.enabled === false) {
+      visualHealth = '<span style="font-size:9px; color:#bdc3c7;">DISABLED</span>';
+    } else {
+      visualHealth = '<span class="badge_offline" style="font-size:9px;">STOPPED</span>';
+    }
+
+    var informPart = "";
+    if (n.last_successful_inform) {
+      var infParts = String(n.last_successful_inform).split(" ");
+      var infTime = infParts.length > 1 ? infParts[1] : infParts[0];
+      informPart = ' <span style="font-size:10px; color:#bdc3c7;" title="' + escapeHTML(n.last_successful_inform) + '">Inform: ' + escapeHTML(infTime) + '</span>';
+    }
+
+    var tempPart = (n.temp && n.temp !== "-") ? ' <span style="font-size:10px; color:#f39c12;">(' + escapeHTML(n.temp) + ')</span>' : "";
+    var cpuPart = (n.system_stats && typeof n.system_stats.cpu === "number") ? ' <span style="font-size:10px; color:#9b59b6;">[' + n.system_stats.cpu + '% CPU]</span>' : "";
+
+    html += '<td class="settingvalue" style="font-size:10px;" title="' + escapeHTML(fullTrace) + '">' + visualHealth + informPart + tempPart + cpuPart + '</td>';
     html += '</tr>';
   }
 
@@ -697,6 +905,10 @@ function updateClusterUI(cl) {
       syncBadgeEl.className = "badge_offline";
       syncBadgeEl.textContent = "HEALTH ATTENTION · CONFIGURATION UNVERIFIED";
       syncBadgeEl.style.backgroundColor = "#c0392b";
+    } else if (allSync && healthVerified) {
+      syncBadgeEl.className = "badge_online";
+      syncBadgeEl.textContent = "HEALTH OK · CLUSTER IN SYNC";
+      syncBadgeEl.style.backgroundColor = "#27ae60";
     } else {
       syncBadgeEl.className = "badge_online";
       syncBadgeEl.textContent = healthVerified ? "HEALTH OK · CONFIGURATION UNVERIFIED" : "CONFIGURATION UNVERIFIED";
@@ -714,6 +926,8 @@ function updateClusterUI(cl) {
     document.getElementById("stat_2g").textContent = cluster2g;
     document.getElementById("stat_5g").textContent = cluster5g;
   }
+
+  renderSatelliteNodesTelemetry(cl);
 }
 
 function updateUpdateUI(u) {
@@ -1078,6 +1292,9 @@ function initial(){
                       <input id="btn_sync_cluster" class="button_gen" type="button" value="Sync Cluster Now" onclick="syncClusterNow();" style="padding:2px 10px; font-size:11px;" />
                     </div>
                     <div id="action_status" role="status" aria-live="polite" style="min-height:16px; margin:0 0 14px 2px; font-size:11px; color:#bdc3c7;"></div>
+
+                    <!-- Satellite Node Hardware & Ports Telemetry -->
+                    <div id="satellite_nodes_container" style="display:none; margin-bottom:14px;"></div>
 
                     <!-- Software Updates & Track Management Table -->
                     <table width="100%" border="1" align="center" cellpadding="2" cellspacing="0" bordercolor="#6b8fa3" class="FormTable SettingsTable" style="border:0px; margin-bottom:12px;" id="table_updates">

@@ -116,6 +116,26 @@ assert_no_update_journal() {
         echo "Unfinished addon update journal requires recovery before cluster mutation" >&2; return 1;
     }
 }
+commits_match() {
+    [ -n "$1" ] && [ -n "$2" ] || return 1
+    [ "$1" = "$2" ] && return 0
+    c1="$1"; c2="$2"
+    if [ "${#c1}" -ge 7 ] && [ "${#c2}" -ge 7 ]; then
+        p1=$(printf '%s' "$c1" | cut -c1-7)
+        p2=$(printf '%s' "$c2" | cut -c1-7)
+        [ "$p1" = "$p2" ] && return 0
+    fi
+    return 1
+}
+
+extract_json_field() {
+    if which jq >/dev/null 2>&1 || [ -x /usr/bin/jq ]; then
+        res=$(printf '%s' "$1" | jq -c "$2" 2>/dev/null)
+        [ -n "$res" ] && [ "$res" != "null" ] && { printf '%s' "$res"; return 0; }
+    fi
+    printf '%s' "$3"
+}
+
 json_escape() {
     printf '%s' "$1" | tr -d '\r\n' | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
@@ -173,7 +193,11 @@ if [ "$ACTION" = "sync" ] || [ "$ACTION" = "update" ]; then
     else
         case "$REQUESTED_BRANCH" in main|dev) ;; *) echo "Invalid requested cluster release track" >&2; exit 1 ;; esac
         case "$REQUESTED_COMMIT" in *[!0-9a-f]*|'') REQUESTED_COMMIT="" ;; esac
-        [ "${#REQUESTED_COMMIT}" -eq 40 ] || REQUESTED_COMMIT=""
+        if [ -n "$REQUESTED_COMMIT" ] && [ "${#REQUESTED_COMMIT}" -ge 7 ] && [ "${#REQUESTED_COMMIT}" -le 40 ]; then
+            :
+        else
+            REQUESTED_COMMIT=""
+        fi
         [ -n "$REQUESTED_COMMIT" ] || { echo "Exact local source commit is unavailable" >&2; exit 1; }
     fi
     release_mutation_lock
@@ -218,7 +242,11 @@ main_updated=$(grep '"status_updated_at":' "$main_status_js" 2>/dev/null | head 
 main_commit=$(sed -n 's/.*"commit":[[:space:]]*"\([^"]*\)".*/\1/p' "$main_status_js" 2>/dev/null | head -n 1)
 main_inform=$(sed -n 's/.*"last_successful_inform":[[:space:]]*"\([^"]*\)".*/\1/p' "$main_status_js" 2>/dev/null | head -n 1)
 case "$main_commit" in *[!0-9a-f]*|'') main_commit="" ;; esac
-[ "${#main_commit}" -eq 40 ] || main_commit=""
+if [ -n "$main_commit" ] && [ "${#main_commit}" -ge 7 ] && [ "${#main_commit}" -le 40 ]; then
+    :
+else
+    main_commit=""
+fi
 main_interval=$(grep '"interval_sec":' "$main_status_js" 2>/dev/null | head -n 1 | awk -F':' '{print $2}' | tr -d ' \t\r\n,')
 case "$main_interval" in ''|*[!0-9]*) main_interval=10 ;; esac
 if status_is_fresh "$(date +%s)" "$main_updated" "$((main_interval * 3 + 30))"; then
@@ -245,6 +273,15 @@ if [ -f "/sys/class/thermal/thermal_zone0/temp" ]; then
     raw_temp=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null)
     [ -n "$raw_temp" ] && [ "$raw_temp" -gt 0 ] && main_temp=$(awk "BEGIN {printf \"%.1f °C\", $raw_temp / 1000}")
 fi
+
+# Extract hardware ports, radios, and system stats
+main_raw_json=$(sed -e '1s/^[^{]*{/{/' -e '$s/};[[:space:]]*$/}/' "$main_status_js" 2>/dev/null)
+main_ports=$(extract_json_field "$main_raw_json" '.ports // []' '[]')
+main_radios=$(extract_json_field "$main_raw_json" '.radio_stats // []' '[]')
+main_system=$(extract_json_field "$main_raw_json" '.system_stats // {}' '{}')
+[ -n "$main_ports" ] || main_ports="[]"
+[ -n "$main_radios" ] || main_radios="[]"
+[ -n "$main_system" ] || main_system="{}"
 
 # Initialize JSON output
 main_version_json=$(json_escape "$main_version")
@@ -288,7 +325,10 @@ nodes_json="${nodes_json}
       \"mode\": \"${main_mode_json}\",
       \"temp\": \"${main_temp_json}\",
       \"last_heartbeat\": \"${main_hb_json}\",
-      \"sync_status\": \"Local\"
+      \"sync_status\": \"Local\",
+      \"ports\": ${main_ports},
+      \"radio_stats\": ${main_radios},
+      \"system_stats\": ${main_system}
     }"
 
 # 2. Iterate Satellite Nodes
@@ -303,6 +343,9 @@ for node_ip in $NODE_IPS; do
     node_model="unknown"
     node_version="unknown"
     node_commit=""
+    node_ports="[]"
+    node_radios="[]"
+    node_system="{}"
     node_updated=""
     node_inform=""
     node_freshness="unknown"
@@ -389,6 +432,8 @@ REMOTE
             printf '%s' "$remote_status" | grep -Eq '"running"[[:space:]]*:[[:space:]]*true' && r_run="true"
             printf '%s' "$remote_status" | grep -Eq '"enabled"[[:space:]]*:[[:space:]]*true' && r_enabled="true"
             node_version=$(printf '%s' "$remote_status" | sed -n 's/.*"version":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+            node_model=$(printf '%s' "$remote_status" | sed -n 's/.*"model":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+            [ -n "$node_model" ] || node_model="unknown"
             node_commit=$(printf '%s' "$remote_status" | sed -n 's/.*"commit":[[:space:]]*"\([0-9a-f]*\)".*/\1/p' | head -n 1)
             node_pid=$(printf '%s' "$remote_status" | sed -n 's/.*"pid":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)
             node_updated="$r_updated"
@@ -429,7 +474,11 @@ REMOTE
                 node_temp=$(awk "BEGIN {printf \"%.1f °C\", $r_temp_raw / 1000}")
             fi
             case "$node_commit" in *[!0-9a-f]*|'') node_commit="" ;; esac
-            [ "${#node_commit}" -eq 40 ] || node_commit=""
+            if [ -n "$node_commit" ] && [ "${#node_commit}" -ge 7 ] && [ "${#node_commit}" -le 40 ]; then
+                :
+            else
+                node_commit=""
+            fi
             remote_operation_id=$(printf '%s' "$remote_op" | sed -n 's/.*"operation_id":[[:space:]]*"\([0-9]*\)".*/\1/p' | head -n 1)
             remote_operation_status=$(printf '%s' "$remote_op" | sed -n 's/.*"status":[[:space:]]*"\([A-Z_]*\)".*/\1/p' | head -n 1)
             remote_operation_name=$(printf '%s' "$remote_op" | sed -n 's/.*"operation":[[:space:]]*"\([a-z_]*\)".*/\1/p' | head -n 1)
@@ -437,18 +486,25 @@ REMOTE
             remote_operation_commit=$(printf '%s' "$remote_op" | sed -n 's/.*"commit":[[:space:]]*"\([0-9a-f]*\)".*/\1/p' | head -n 1)
             remote_update_id=$(printf '%s' "$remote_update" | sed -n 's/.*"request_id":[[:space:]]*"\([0-9]*\)".*/\1/p' | head -n 1)
             remote_update_status=$(printf '%s' "$remote_update" | sed -n 's/.*"status":[[:space:]]*"\([A-Z_]*\)".*/\1/p' | head -n 1)
+            node_raw_json=$(printf '%s\n' "$remote_status" | sed -e '1s/^[^{]*{/{/' -e '$s/};[[:space:]]*$/}/')
+            node_ports=$(extract_json_field "$node_raw_json" '.ports // []' '[]')
+            node_radios=$(extract_json_field "$node_raw_json" '.radio_stats // []' '[]')
+            node_system=$(extract_json_field "$node_raw_json" '.system_stats // {}' '{}')
+            [ -n "$node_ports" ] || node_ports="[]"
+            [ -n "$node_radios" ] || node_radios="[]"
+            [ -n "$node_system" ] || node_system="{}"
             if [ "$ACTION" = "update" ]; then
                 node_stage="verification_pending"
                 if [ "$remote_operation_id" = "$OPERATION_ID" ] && [ "$remote_operation_name" = "update" ] && [ "$remote_operation_status" = "FAILED" ]; then
                     node_stage="failed"; node_outcome="failure"; sync_status="Update Failed"
                 elif [ "$remote_operation_id" = "$OPERATION_ID" ] && [ "$remote_operation_name" = "update" ] &&
                      [ "$remote_operation_status" = "APPLIED" ] && [ "$node_health_verified" = "true" ] &&
-                     [ "$node_commit" = "$REQUESTED_COMMIT" ]; then
+                     commits_match "$node_commit" "$REQUESTED_COMMIT"; then
                     node_stage="verified"; node_outcome="success"; sync_status="Update Verified"
                 elif [ "$remote_update_id" = "$OPERATION_ID" ] && [ "$remote_update_status" = "ERROR" ]; then
                     node_stage="failed"; node_outcome="failure"; sync_status="Update Failed"
                 elif [ "$remote_update_id" = "$OPERATION_ID" ] && [ "$remote_update_status" = "SUCCESS" ] &&
-                     [ "$node_health_verified" = "true" ] && [ "$node_commit" = "$REQUESTED_COMMIT" ]; then
+                     [ "$node_health_verified" = "true" ] && commits_match "$node_commit" "$REQUESTED_COMMIT"; then
                     node_stage="verified"; node_outcome="success"; sync_status="Update Verified"
                 fi
             elif [ "$ACTION" = "sync" ]; then
@@ -456,7 +512,7 @@ REMOTE
                 if [ "$remote_operation_id" = "$OPERATION_ID" ] && [ "$remote_operation_name" = "sync" ] && [ "$remote_operation_status" = "FAILED" ]; then
                     node_stage="failed"; node_outcome="failure"; sync_status="Config Apply Failed"
                 elif [ "$remote_operation_id" = "$OPERATION_ID" ] && [ "$remote_operation_name" = "sync" ] && [ "$remote_operation_status" = "APPLIED" ] &&
-                   [ "$node_health_verified" = "true" ] && [ "$node_commit" = "$main_commit" ]; then
+                   [ "$node_health_verified" = "true" ] && commits_match "$node_commit" "$main_commit"; then
                     node_stage="verified"; node_outcome="success"; sync_status="Config Applied (Runtime Verified)"
                 fi
             else
@@ -531,7 +587,10 @@ REMOTE
       \"mode\": \"${node_mode_json}\",
       \"temp\": \"${node_temp_json}\",
       \"last_heartbeat\": \"${node_hb_json}\",
-      \"sync_status\": \"${sync_status_json}\"
+      \"sync_status\": \"${sync_status_json}\",
+      \"ports\": ${node_ports},
+      \"radio_stats\": ${node_radios},
+      \"system_stats\": ${node_system}
     }"
 done
 
