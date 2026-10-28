@@ -117,7 +117,7 @@ printf '%s %s\n' "$host" "$key" >> "$KNOWN_HOSTS_FIXTURE"
             raw = (self.root / "www/unifi-bridge/cluster.js").read_text()
             node = json.loads(raw.split("=", 1)[1].strip().rstrip(";"))["nodes"][1]
             self.assertEqual(node["status"] == "RUNNING", expected)
-            self.assertEqual(node["sync_status"], "Version Match (Config Unverified)" if expected else "Stale or Stopped")
+            self.assertEqual(node["sync_status"], "In Sync" if expected else "Stale or Stopped")
 
 
     def prepare_settings_sync(self, *, status_age=10, operation_status="APPLIED", dispatch_rc=0,

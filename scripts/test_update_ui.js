@@ -83,6 +83,7 @@ assert.equal(context.displayVersion('1.2.3'),'v1.2.3');
 console.log('Update UI regressions passed: background POST, track/version labels, stale responses, timeout, errors, install-only reload.');
 
 assert.equal(context.clusterState({status:'RUNNING',sync_status:'Local'}),'local');
+assert.equal(context.clusterState({status:'RUNNING',sync_status:'In Sync'}),'verified');
 assert.equal(context.clusterState({status:'RUNNING',sync_status:'Version Match (Config Unverified)'}),'unverified');
 assert.equal(context.clusterState({status:'RUNNING',sync_status:'Config Synced'}),'unverified');
 assert.equal(context.clusterState({status:'STOPPED',sync_status:'Stale or Stopped'}),'error');
@@ -102,6 +103,17 @@ assert.ok(!node('cluster_nodes_tbody').innerHTML.includes('<script>'));
 assert.ok(!node('cluster_nodes_tbody').innerHTML.includes('<svg'));
 assert.ok(node('cluster_nodes_tbody').innerHTML.includes('-G / 0A'));
 assert.equal(node('cluster_sync_badge').textContent,'HEALTH OK · CONFIGURATION UNVERIFIED');
+context.updateClusterUI({nodes:[
+  {name:'Main',role:'Main Gateway',status:'RUNNING',running:true,freshness:'fresh',sync_status:'Local',
+   ports:[{name:'Port 1',ifname:'eth0',up:true,speed:2500,full_duplex:true,is_uplink:true,last_connection:{ip:'10.100.1.1'}}]},
+  {name:'Node',role:'Satellite Node',status:'RUNNING',running:true,freshness:'fresh',sync_status:'In Sync',
+   ports:[{name:'Port 4',ifname:'eth3',up:true,speed:1000,full_duplex:true,is_uplink:false,mac_table:[{mac:'10:2c:b1:73:3d:00',vlan:20}]}]}
+]});
+assert.equal(node('cluster_sync_badge').textContent,'HEALTH OK · IN SYNC');
+assert.ok(node('cluster_ports_tbody').innerHTML.includes('Main'));
+assert.ok(node('cluster_ports_tbody').innerHTML.includes('Node'));
+assert.ok(node('cluster_ports_tbody').innerHTML.includes('VLAN 20'));
+assert.ok(node('cluster_ports_tbody').innerHTML.includes('10:2c:b1:73:3d:00'));
 context.updateClusterUI({nodes:[{name:'Main',role:'Main',status:'RUNNING',running:true,freshness:'stale',sync_status:'Local'}]});
 assert.equal(node('cluster_sync_badge').textContent,'CONFIGURATION UNVERIFIED','stale Main health must not be labeled healthy');
 context.updateClusterUI({nodes:[]});

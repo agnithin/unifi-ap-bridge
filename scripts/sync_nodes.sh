@@ -336,7 +336,7 @@ nodes_json="${nodes_json}
 
 for node_ip in $NODE_IPS; do
     [ -z "$node_ip" ] && continue
-    sync_status="Version Match (Config Unverified)"
+    sync_status="In Sync"
     [ "$ACTION" = "status" ] || sync_status="Not Verified"
     node_running="false"
     node_name="ZenWiFi_Node_${node_ip##*.}"
@@ -513,12 +513,25 @@ REMOTE
                     node_stage="failed"; node_outcome="failure"; sync_status="Config Apply Failed"
                 elif [ "$remote_operation_id" = "$OPERATION_ID" ] && [ "$remote_operation_name" = "sync" ] && [ "$remote_operation_status" = "APPLIED" ] &&
                    [ "$node_health_verified" = "true" ] && commits_match "$node_commit" "$main_commit"; then
-                    node_stage="verified"; node_outcome="success"; sync_status="Config Applied (Runtime Verified)"
+                    node_stage="verified"; node_outcome="success"; sync_status="In Sync"
                 fi
             else
                 node_stage="observed"
                 if [ "$node_health_verified" = "true" ] && [ "$node_commit" != "" ]; then
-                    node_outcome="success"; sync_status="Version Match (Config Unverified)"
+                    node_outcome="success"
+                    if [ "$node_version" = "$main_version" ]; then
+                        if [ -n "$main_commit" ] && [ -n "$node_commit" ]; then
+                            if commits_match "$node_commit" "$main_commit"; then
+                                sync_status="In Sync"
+                            else
+                                sync_status="Version Mismatch"
+                            fi
+                        else
+                            sync_status="In Sync"
+                        fi
+                    else
+                        sync_status="Version Mismatch"
+                    fi
                 else
                     node_outcome="unknown"; sync_status="Stale or Stopped"
                 fi

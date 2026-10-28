@@ -135,6 +135,9 @@ thead.collapsible-jquery {
 var autoRefreshTimer = null;
 var formInitialized = false;
 var lastClusterHtml = "";
+var lastPortsHtml = "";
+var lastStatusData = null;
+var lastClusterData = null;
 var detectedGatewayIP = "<% nvram_get("lan_gateway"); %>";
 
 function validGatewayIP(value) {
@@ -467,28 +470,52 @@ function diagnosticNumber(value, suffix) {
   return typeof value === "number" && isFinite(value) ? String(Math.round(value * 10) / 10) + suffix : "-";
 }
 function updateDiagnosticsUI(st) {
+  if (st) lastStatusData = st;
+  var statusData = st || lastStatusData;
+  if (!statusData) return;
   var radioBody = document.getElementById("rf_diagnostics_rows");
   if (radioBody) {
     radioBody.textContent = "";
-    var radios = Array.isArray(st.radio_stats) ? st.radio_stats.slice(0, 8) : [];
-    var trends = Array.isArray(st.passive_rf_trends) ? st.passive_rf_trends.slice(0, 8) : [];
+    var radios = Array.isArray(statusData.radio_stats) ? statusData.radio_stats.slice(0, 8) : [];
+    var trends = Array.isArray(statusData.passive_rf_trends) ? statusData.passive_rf_trends.slice(0, 8) : [];
+    var hasCluster = lastClusterData && Array.isArray(lastClusterData.nodes) && lastClusterData.nodes.length > 1;
+    var mainPrefix = hasCluster ? "Main · " : "";
     for (var i = 0; i < radios.length; i++) {
       var radio = radios[i] || {};
       var mean = null;
       for (var j = 0; j < trends.length; j++) if (trends[j] && trends[j].radio === radio.name) mean = trends[j].mean_busy_percent;
-      appendDiagnosticRow(radioBody, [diagnosticCellText(radio.name), diagnosticNumber(radio.channel, ""),
+      appendDiagnosticRow(radioBody, [diagnosticCellText(mainPrefix + (radio.name || "")), diagnosticNumber(radio.channel, ""),
         diagnosticNumber(radio.bw, " MHz"), diagnosticNumber(radio.cu_total, "%"),
         diagnosticNumber(radio.cu_obss, "%"), diagnosticNumber(radio.cu_nocat, "%"),
         diagnosticNumber(radio.cu_nopkt, "%"), diagnosticNumber(radio.cca_interference, "%"),
         diagnosticNumber(radio.noise_dbm, " dBm"),
         mean === null ? "Collecting samples" : diagnosticNumber(mean, "%")]);
     }
-    if (!radios.length) appendDiagnosticRow(radioBody, ["Waiting for a successful radio sample"]);
+    if (hasCluster) {
+      for (var sn = 0; sn < lastClusterData.nodes.length; sn++) {
+        var nd = lastClusterData.nodes[sn];
+        if (nd.role && nd.role.indexOf("Main") !== -1) continue;
+        if (!nd.radio_stats || !nd.radio_stats.length) continue;
+        var nodePrefix = (nd.name ? nd.name.replace(/^ZenWiFi_XT8-/, "Node ") : "Node") + " · ";
+        for (var nr = 0; nr < nd.radio_stats.length; nr++) {
+          var nRadio = nd.radio_stats[nr] || {};
+          appendDiagnosticRow(radioBody, [diagnosticCellText(nodePrefix + (nRadio.name || "")), diagnosticNumber(nRadio.channel, ""),
+            diagnosticNumber(nRadio.bw, " MHz"), diagnosticNumber(nRadio.cu_total, "%"),
+            diagnosticNumber(nRadio.cu_obss, "%"), diagnosticNumber(nRadio.cu_nocat, "%"),
+            diagnosticNumber(nRadio.cu_nopkt, "%"), diagnosticNumber(nRadio.cca_interference, "%"),
+            diagnosticNumber(nRadio.noise_dbm, " dBm"),
+            "-"]);
+        }
+      }
+    }
+    if (!radios.length && (!hasCluster || !lastClusterData.nodes.some(function(n){ return n.radio_stats && n.radio_stats.length; }))) {
+      appendDiagnosticRow(radioBody, ["Waiting for a successful radio sample"]);
+    }
   }
   var eventBody = document.getElementById("station_event_rows");
   if (eventBody) {
     eventBody.textContent = "";
-    var events = Array.isArray(st.station_events) ? st.station_events.slice(-20).reverse() : [];
+    var events = Array.isArray(statusData.station_events) ? statusData.station_events.slice(-20).reverse() : [];
     var labels = {observed_association:"Joined (observed)", observed_disassociation:"Left (observed)",
       observed_radio_change:"Radio changed", observed_bssid_change:"BSSID changed"};
     for (var k = 0; k < events.length; k++) {
@@ -504,14 +531,14 @@ function updateDiagnosticsUI(st) {
   }
   var mapping = document.getElementById("wlan_mapping_status");
   if (mapping) {
-    var info = st.wlan_mapping || {};
+    var info = statusData.wlan_mapping || {};
     mapping.textContent = diagnosticNumber(info.entries, " SSID mappings") +
       (info.file_enabled === true ? " · Automatic mapping file enabled" : " · Manual mapping") +
       (info.last_error ? " · " + diagnosticCellText(info.last_error) : "");
   }
   var commands = document.getElementById("controller_command_status");
   if (commands) {
-    var commandInfo = st.controller_commands || {};
+    var commandInfo = statusData.controller_commands || {};
     var last = commandInfo.last_result || commandInfo.last_observation;
     commands.textContent = "UniFi reboot: " + (commandInfo.reboot_enabled === true ? "Enabled" : "Disabled") +
       (last ? " · Last command: " + diagnosticCellText(last.action) + (last.status ? " (" + diagnosticCellText(last.status) + ")" : " (observed only)") : " · No command observed");
@@ -520,7 +547,9 @@ function updateDiagnosticsUI(st) {
 
 function updateUI(st) {
   if (!st) return;
+  lastStatusData = st;
   updateDiagnosticsUI(st);
+  renderUnifiedPortsTable(lastClusterData, st);
 
   // Initialize form controls ONCE from daemon state so user edits are never overwritten
   initFormOnce(st);
@@ -640,168 +669,83 @@ function updateUI(st) {
   }
 }
 
-function renderSatelliteNodesTelemetry(cl) {
-  var container = document.getElementById("satellite_nodes_container");
-  if (!container) return;
-  if (!cl || !cl.nodes || cl.nodes.length <= 1) {
-    container.style.display = "none";
-    container.innerHTML = "";
-    return;
+function renderUnifiedPortsTable(cl, st) {
+  var tbody = document.getElementById("cluster_ports_tbody");
+  if (!tbody) return;
+  var nodes = (cl && Array.isArray(cl.nodes) && cl.nodes.length > 0) ? cl.nodes : null;
+  if (!nodes && st && st.ports) {
+    nodes = [{
+      name: st.hostname || "ZenWiFi_XT8-Main",
+      role: "Main Gateway",
+      ports: st.ports
+    }];
   }
-
-  var satNodes = [];
-  for (var i = 0; i < cl.nodes.length; i++) {
-    var nd = cl.nodes[i];
-    if (nd.role && nd.role.indexOf("Main") === -1 && nd.sync_status !== "Local") {
-      satNodes.push(nd);
-    }
-  }
-
-  if (satNodes.length === 0) {
-    container.style.display = "none";
-    container.innerHTML = "";
-    return;
-  }
+  if (!nodes || nodes.length === 0) return;
 
   var html = "";
-  for (var s = 0; s < satNodes.length; s++) {
-    var n = satNodes[s];
-    var isRunning = n.status === "RUNNING";
-    var sys = n.system_stats || {};
-    var ports = n.ports || [];
-    var radios = n.radio_stats || [];
+  for (var i = 0; i < nodes.length; i++) {
+    var nd = nodes[i];
+    var isMain = nd.role && nd.role.indexOf("Main") !== -1;
+    var apLabel = escapeHTML(nd.name) + (isMain ? ' <span style="font-size:10px; color:#f1c40f;">(Main)</span>' : ' <span style="font-size:10px; color:#3498db;">(Node)</span>');
+    var ports = nd.ports || [];
+    for (var p = 0; p < ports.length; p++) {
+      var pt = ports[p] || {};
+      var isUp = pt.up === true;
+      var pName = typeof pt.name === "string" ? pt.name : "Port " + (pt.port_idx || (p + 1));
+      var speedStr = isUp ? ((pt.speed || 0) > 0 ? pt.speed + " Mbps " + (pt.full_duplex ? "FDX" : "HDX") : "Connected") : "No Link";
+      var linkBadge = isUp
+        ? '<span class="badge_online" style="font-size:9px; background:#27ae60; white-space:nowrap;">' + (pt.is_uplink ? "UPLINK" : "UP") + '</span>'
+        : '<span style="font-size:9px; color:#7f8c8d;">DOWN</span>';
 
-    var cpuStr = typeof sys.cpu === "number" ? sys.cpu + "%" : "-";
-    var memStr = typeof sys.mem === "number" ? sys.mem + "%" : "-";
-    var upStr = typeof sys.uptime === "number" ? formatUptime(sys.uptime) : "-";
-    var tempStr = n.temp || "-";
-    var informStr = n.last_successful_inform ? escapeHTML(n.last_successful_inform) + " [" + escapeHTML(n.mode || "GCM") + "]" : "-";
-
-    html += '<details open style="margin-bottom:12px; padding:10px; background:#222c31; border:1px solid #3e4d66; border-radius:6px;">';
-    html += '<summary style="cursor:pointer; font-weight:bold; font-size:12px; color:#3498db; outline:none;">';
-    html += 'Satellite Node Telemetry: <span style="color:#fff;">' + escapeHTML(n.name) + '</span> (' + escapeHTML(n.ip) + ')';
-    html += isRunning
-      ? ' <span class="badge_online" style="font-size:10px; margin-left:8px; background-color:#27ae60;">Active (' + escapeHTML(n.mode || "GCM") + ')</span>'
-      : ' <span class="badge_offline" style="font-size:10px; margin-left:8px;">Offline</span>';
-    html += '</summary>';
-
-    html += '<div style="margin-top:10px;">';
-
-    // System Summary Bar
-    html += '<div style="display:flex; flex-wrap:wrap; gap:16px; padding:8px 12px; background:#2a363b; border-radius:4px; font-size:11px; color:#bdc3c7; margin-bottom:10px;">';
-    html += '<div>Model: <strong style="color:#ecf0f1;">' + escapeHTML(n.model || "UniFi 6 In-Wall") + '</strong></div>';
-    html += '<div>CPU: <strong style="color:#2ecc71;">' + escapeHTML(cpuStr) + '</strong></div>';
-    html += '<div>RAM: <strong style="color:#f39c12;">' + escapeHTML(memStr) + '</strong></div>';
-    html += '<div>Temp: <strong style="color:#e67e22;">' + escapeHTML(tempStr) + '</strong></div>';
-    html += '<div>Uptime: <strong style="color:#ecf0f1;">' + escapeHTML(upStr) + '</strong></div>';
-    html += '<div>Inform: <strong style="color:#3498db;">' + informStr + '</strong></div>';
-    html += '</div>';
-
-    // Switch Ports Table
-    if (ports.length > 0) {
-      html += '<div style="margin-bottom:10px;">';
-      html += '<div style="font-size:11px; font-weight:bold; color:#ecf0f1; margin-bottom:4px;">Physical Switch Ports &amp; VLAN Connections:</div>';
-      html += '<table width="100%" style="font-size:11px; text-align:left; border-collapse:collapse;">';
-      html += '<thead><tr bgcolor="#1b2427" style="color:#bdc3c7;">';
-      html += '<th style="padding:4px 8px; width:15%;">Port</th>';
-      html += '<th style="padding:4px 8px; width:10%;">Interface</th>';
-      html += '<th style="padding:4px 8px; width:12%;">Link</th>';
-      html += '<th style="padding:4px 8px; width:15%;">Speed</th>';
-      html += '<th style="padding:4px 8px; width:28%;">VLAN / Connected Device</th>';
-      html += '<th style="padding:4px 8px; width:20%;">Traffic (RX / TX)</th>';
-      html += '</tr></thead><tbody>';
-
-      for (var p = 0; p < ports.length; p++) {
-        var pt = ports[p] || {};
-        var isUp = pt.up === true;
-        var pName = typeof pt.name === "string" ? pt.name : "Port " + (pt.port_idx || (p + 1));
-        var speedStr = isUp ? ((pt.speed || 0) > 0 ? pt.speed + " Mbps " + (pt.full_duplex ? "FDX" : "HDX") : "Connected") : "No Link";
-        var linkBadge = isUp
-          ? '<span class="badge_online" style="font-size:9px; background:#27ae60;">' + (pt.is_uplink ? "UPLINK" : "UP") + '</span>'
-          : '<span style="font-size:9px; color:#7f8c8d;">DOWN</span>';
-
-        var connInfo = "-";
-        if (isUp) {
-          if (pt.is_uplink) {
-            var upTarget = pt.last_connection && pt.last_connection.ip ? pt.last_connection.ip : (pt.last_connection && pt.last_connection.mac ? pt.last_connection.mac : "Gateway");
-            connInfo = '<span style="color:#3498db;">Uplink to ' + escapeHTML(String(upTarget)) + '</span>';
-          } else if (pt.mac_table && pt.mac_table.length > 0) {
-            var devList = [];
-            for (var m = 0; m < pt.mac_table.length; m++) {
-              var entry = pt.mac_table[m];
-              var vlanBadge = entry.vlan ? '<span style="background:#8e44ad; color:#fff; font-size:9px; padding:1px 5px; border-radius:3px; font-weight:bold; margin-right:4px;">VLAN ' + entry.vlan + '</span>' : '';
-              devList.push(vlanBadge + '<code style="color:#2ecc71;">' + escapeHTML(entry.mac || "") + '</code>');
-            }
-            connInfo = devList.join(", ");
-          } else if (pt.last_connection && pt.last_connection.mac) {
-            connInfo = '<code style="color:#2ecc71;">' + escapeHTML(pt.last_connection.mac) + '</code>';
-          } else {
-            connInfo = '<span style="color:#bdc3c7;">Connected (No MAC learned)</span>';
+      var connInfo = "-";
+      if (isUp) {
+        if (pt.is_uplink) {
+          var upTarget = pt.last_connection && pt.last_connection.ip ? pt.last_connection.ip : (pt.last_connection && pt.last_connection.mac ? pt.last_connection.mac : "Gateway");
+          connInfo = '<span style="color:#3498db;">Uplink to ' + escapeHTML(String(upTarget)) + '</span>';
+        } else if (pt.mac_table && pt.mac_table.length > 0) {
+          var devList = [];
+          for (var m = 0; m < pt.mac_table.length; m++) {
+            var entry = pt.mac_table[m];
+            var vlanBadge = entry.vlan ? '<span style="background:#8e44ad; color:#fff; font-size:9px; padding:1px 5px; border-radius:3px; font-weight:bold; margin-right:4px;">VLAN ' + entry.vlan + '</span>' : '';
+            devList.push(vlanBadge + '<code style="color:#2ecc71;">' + escapeHTML(entry.mac || "") + '</code>');
           }
+          connInfo = devList.join(", ");
+        } else if (pt.last_connection && pt.last_connection.mac) {
+          connInfo = '<code style="color:#2ecc71;">' + escapeHTML(pt.last_connection.mac) + '</code>';
+        } else {
+          connInfo = '<span style="color:#bdc3c7;">Connected (No MAC learned)</span>';
         }
-
-        var rxFormatted = formatBytes(pt.rx_bytes);
-        var txFormatted = formatBytes(pt.tx_bytes);
-        var trafficStr = isUp ? (rxFormatted + " / " + txFormatted) : "-";
-
-        html += '<tr style="border-bottom:1px solid #2d3b40;">';
-        html += '<td style="padding:4px 8px; font-weight:bold; color:#ecf0f1;">' + escapeHTML(pName) + '</td>';
-        html += '<td style="padding:4px 8px; color:#bdc3c7;">' + escapeHTML(pt.ifname || "") + '</td>';
-        html += '<td style="padding:4px 8px;">' + linkBadge + '</td>';
-        html += '<td style="padding:4px 8px; color:' + (isUp ? "#2ecc71" : "#7f8c8d") + ';">' + escapeHTML(speedStr) + '</td>';
-        html += '<td style="padding:4px 8px;">' + connInfo + '</td>';
-        html += '<td style="padding:4px 8px; color:#bdc3c7; font-size:10px;">' + trafficStr + '</td>';
-        html += '</tr>';
       }
-      html += '</tbody></table></div>';
+
+      var rxFormatted = formatBytes(pt.rx_bytes);
+      var txFormatted = formatBytes(pt.tx_bytes);
+      var trafficStr = isUp ? (rxFormatted + " / " + txFormatted) : "-";
+
+      html += '<tr style="border-bottom:1px solid #3e4d66;">';
+      html += '<td class="settingvalue" style="font-weight:bold; color:#fff;">' + apLabel + '</td>';
+      html += '<td class="settingvalue" style="font-weight:bold; color:#ecf0f1;">' + escapeHTML(pName) + '</td>';
+      html += '<td class="settingvalue" style="color:#bdc3c7;"><code>' + escapeHTML(pt.ifname || "") + '</code></td>';
+      html += '<td class="settingvalue">' + linkBadge + '</td>';
+      html += '<td class="settingvalue" style="color:' + (isUp ? "#2ecc71" : "#7f8c8d") + ';">' + escapeHTML(speedStr) + '</td>';
+      html += '<td class="settingvalue">' + connInfo + '</td>';
+      html += '<td class="settingvalue" style="color:#bdc3c7; font-size:10px;">' + trafficStr + '</td>';
+      html += '</tr>';
     }
-
-    // Wireless Radios Table
-    if (radios.length > 0) {
-      html += '<div>';
-      html += '<div style="font-size:11px; font-weight:bold; color:#ecf0f1; margin-bottom:4px;">Wireless Radios &amp; Frequency Channels:</div>';
-      html += '<table width="100%" style="font-size:11px; text-align:left; border-collapse:collapse;">';
-      html += '<thead><tr bgcolor="#1b2427" style="color:#bdc3c7;">';
-      html += '<th style="padding:4px 8px; width:15%;">Radio</th>';
-      html += '<th style="padding:4px 8px; width:15%;">Band</th>';
-      html += '<th style="padding:4px 8px; width:12%;">Channel</th>';
-      html += '<th style="padding:4px 8px; width:12%;">Width</th>';
-      html += '<th style="padding:4px 8px; width:12%;">Stations</th>';
-      html += '<th style="padding:4px 8px; width:12%;">Channel Load</th>';
-      html += '<th style="padding:4px 8px; width:12%;">CCA Interf.</th>';
-      html += '<th style="padding:4px 8px; width:10%;">Noise Floor</th>';
-      html += '</tr></thead><tbody>';
-
-      for (var r = 0; r < radios.length; r++) {
-        var rd = radios[r] || {};
-        var bandLabel = (rd.name === "wifi-ng" || rd.channel <= 14) ? "2.4 GHz" : ((rd.channel < 100) ? "5 GHz-1" : "5 GHz-2");
-        var loadColor = (rd.cu_total || 0) > 70 ? "#e74c3c" : ((rd.cu_total || 0) > 40 ? "#f39c12" : "#2ecc71");
-        var interfColor = (rd.cu_interf || 0) > 20 ? "#e74c3c" : "#bdc3c7";
-
-        html += '<tr style="border-bottom:1px solid #2d3b40;">';
-        html += '<td style="padding:4px 8px; font-weight:bold; color:#ecf0f1;">' + escapeHTML(rd.name || "") + '</td>';
-        html += '<td style="padding:4px 8px; color:#bdc3c7;">' + escapeHTML(bandLabel) + '</td>';
-        html += '<td style="padding:4px 8px; color:#3498db; font-weight:bold;">Ch ' + (rd.channel || "-") + '</td>';
-        html += '<td style="padding:4px 8px; color:#bdc3c7;">' + (rd.bw ? rd.bw + " MHz" : "-") + '</td>';
-        html += '<td style="padding:4px 8px; color:#2ecc71; font-weight:bold;">' + (rd.num_sta !== undefined ? rd.num_sta : "-") + '</td>';
-        html += '<td style="padding:4px 8px; color:' + loadColor + '; font-weight:bold;">' + (rd.cu_total !== undefined ? rd.cu_total + "%" : "-") + '</td>';
-        html += '<td style="padding:4px 8px; color:' + interfColor + ';">' + (rd.cu_interf !== undefined ? rd.cu_interf + "%" : "-") + '</td>';
-        html += '<td style="padding:4px 8px; color:#bdc3c7;">' + (rd.noise_dbm ? rd.noise_dbm + " dBm" : "-") + '</td>';
-        html += '</tr>';
-      }
-      html += '</tbody></table></div>';
-    }
-
-    html += '</div>';
-    html += '</details>';
   }
 
-  container.innerHTML = html;
-  container.style.display = "block";
+  if (html !== lastPortsHtml) {
+    tbody.innerHTML = html;
+    lastPortsHtml = html;
+  }
+}
+
+function renderSatelliteNodesTelemetry(cl) {
+  renderUnifiedPortsTable(cl, lastStatusData);
 }
 
 function updateClusterUI(cl) {
   if (!cl || !cl.nodes) return;
+  lastClusterData = cl;
   var tbody = document.getElementById("cluster_nodes_tbody");
   if (!tbody) return;
 
@@ -837,10 +781,10 @@ function updateClusterUI(cl) {
         : '<span class="badge_offline" style="font-size:10px;">STOPPED</span>');
 
     var syncBadge = isSync
-      ? '<span class="badge_online" style="font-size:10px; background-color:#27ae60;">' + escapeHTML(n.sync_status) + '</span>'
+      ? '<span class="badge_online" style="font-size:10px; background-color:#27ae60; white-space:nowrap;">' + escapeHTML(n.sync_status) + '</span>'
       : (state === 'error'
-        ? '<span class="badge_offline" style="font-size:10px; background-color:#e74c3c;">' + escapeHTML(n.sync_status) + '</span>'
-        : '<span class="badge_online" style="font-size:10px; background-color:#d35400;">' + escapeHTML(n.sync_status) + '</span>');
+        ? '<span class="badge_offline" style="font-size:10px; background-color:#e74c3c; white-space:nowrap;">' + escapeHTML(n.sync_status) + '</span>'
+        : '<span class="badge_online" style="font-size:10px; background-color:#d35400; white-space:nowrap;">' + escapeHTML(n.sync_status) + '</span>');
 
     html += '<tr style="border-bottom:1px solid #3e4d66;">';
     html += '<td class="settingvalue" style="font-weight:bold; color:#fff;">' + escapeHTML(n.name) + (isLocal ? ' <span style="font-size:10px; color:#f1c40f;">(This AP)</span>' : '') + '</td>';
@@ -907,7 +851,7 @@ function updateClusterUI(cl) {
       syncBadgeEl.style.backgroundColor = "#c0392b";
     } else if (allSync && healthVerified) {
       syncBadgeEl.className = "badge_online";
-      syncBadgeEl.textContent = "HEALTH OK · CLUSTER IN SYNC";
+      syncBadgeEl.textContent = "HEALTH OK · IN SYNC";
       syncBadgeEl.style.backgroundColor = "#27ae60";
     } else {
       syncBadgeEl.className = "badge_online";
@@ -927,7 +871,8 @@ function updateClusterUI(cl) {
     document.getElementById("stat_5g").textContent = cluster5g;
   }
 
-  renderSatelliteNodesTelemetry(cl);
+  renderUnifiedPortsTable(cl, lastStatusData);
+  if (lastStatusData) updateDiagnosticsUI(lastStatusData);
 }
 
 function updateUpdateUI(u) {
@@ -1241,13 +1186,13 @@ function initial(){
                     </div>
 
                     <details style="margin-bottom:12px; padding:10px; background:#263238; border-radius:6px;">
-                      <summary style="cursor:pointer; font-weight:bold;">RF diagnostics &amp; observed client changes</summary>
-                      <p style="color:#bdc3c7; font-size:11px;">Passive serving-radio measurements. Other WiFi is traffic from neighboring WiFi networks. Bad-frame/control activity includes damaged frames and some control traffic; noise-like activity and the driver-reported non-WiFi CCA interference sample are separate measurements. CCA sample age is unknown. These measurements are not additive and do not identify the source of interference. This CCA value is not UniFi Avg. Interference; equivalence is unproven. A 0% UniFi value does not mean no interference. Missing measurements appear as dashes. Trends cover recent successful samples.</p>
+                      <summary style="cursor:pointer; font-weight:bold;">RF Diagnostics &amp; Observed Client Changes</summary>
+                      <p style="color:#bdc3c7; font-size:11px;">Serving-radio RF metrics, channel utilization, and driver CCA interference across cluster access points.</p>
                       <table width="100%" style="font-size:11px; text-align:left;">
                         <thead><tr><th>Radio</th><th>Channel</th><th>Actual width</th><th>Busy</th><th>Other WiFi (OBSS)</th><th>Bad frames / control</th><th>Noise-like activity</th><th>Non-WiFi CCA interference (age unknown)</th><th>Noise floor</th><th>Mean busy</th></tr></thead>
                         <tbody id="rf_diagnostics_rows"></tbody>
                       </table>
-                      <p style="color:#bdc3c7; font-size:11px;">AP-local observations, held in RAM. Times and gaps reflect polling; departures do not identify the next AP or a disconnect reason.</p>
+                      <p style="color:#bdc3c7; font-size:11px;">Recent client roaming and association events observed across cluster access points.</p>
                       <table width="100%" style="font-size:11px; text-align:left;">
                         <thead><tr><th>Observed at</th><th>Change</th><th>Client</th><th>SSID</th><th>Radio</th><th>Signal</th><th>Poll gap</th></tr></thead>
                         <tbody id="station_event_rows"></tbody>
@@ -1293,8 +1238,36 @@ function initial(){
                     </div>
                     <div id="action_status" role="status" aria-live="polite" style="min-height:16px; margin:0 0 14px 2px; font-size:11px; color:#bdc3c7;"></div>
 
-                    <!-- Satellite Node Hardware & Ports Telemetry -->
-                    <div id="satellite_nodes_container" style="display:none; margin-bottom:14px;"></div>
+                    <!-- Physical Switch Ports & VLAN Connections Table -->
+                    <table width="100%" border="1" align="center" cellpadding="2" cellspacing="0" bordercolor="#6b8fa3" class="FormTable SettingsTable" style="border:0px; margin-bottom:12px;" id="table_ports">
+                      <thead class="collapsible-jquery">
+                        <tr>
+                          <td colspan="7">
+                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                              <span>Physical Switch Ports &amp; VLAN Connections</span>
+                              <span id="ports_cluster_badge" class="badge_online" style="font-size:10px; margin-right:5px; background-color:#27ae60;">4 PORTS PER AP</span>
+                            </div>
+                          </td>
+                        </tr>
+                      </thead>
+                      <thead>
+                        <tr bgcolor="#2F3A3E" style="color:#bdc3c7; font-size:11px; text-align:left;">
+                          <th style="padding:6px 10px; width:22%;">Access Point</th>
+                          <th style="padding:6px 10px; width:12%;">Port</th>
+                          <th style="padding:6px 10px; width:10%;">Interface</th>
+                          <th style="padding:6px 10px; width:10%;">Link</th>
+                          <th style="padding:6px 10px; width:14%;">Speed</th>
+                          <th style="padding:6px 10px; width:20%;">VLAN &amp; Connected Device</th>
+                          <th style="padding:6px 10px; width:12%;">Traffic (RX / TX)</th>
+                        </tr>
+                      </thead>
+                      <tbody id="cluster_ports_tbody">
+                        <tr>
+                          <td colspan="7" style="padding:10px; text-align:center; color:#bdc3c7; background-color:#475a5f;">Loading switch port status...</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                    <div id="satellite_nodes_container" style="display:none;"></div>
 
                     <!-- Software Updates & Track Management Table -->
                     <table width="100%" border="1" align="center" cellpadding="2" cellspacing="0" bordercolor="#6b8fa3" class="FormTable SettingsTable" style="border:0px; margin-bottom:12px;" id="table_updates">
@@ -1393,18 +1366,18 @@ function initial(){
                       </thead>
                       <tr>
                         <td class="settingname">
-                          Enable UniFi AP Bridge<br/>
-                          <span style="font-size:10px;color:#bdc3c7;">Start the background telemetry daemon</span>
+                          Service State<br/>
+                          <span style="font-size:10px;color:#bdc3c7;">Enable background telemetry service</span>
                         </td>
                         <td class="settingvalue">
-                          <label><input type="radio" name="radio_enabled" id="unifibridge_enabled_1" value="1" checked> Yes</label>
-                          <label><input type="radio" name="radio_enabled" id="unifibridge_enabled_0" value="0"> No</label>
+                          <label><input type="radio" name="radio_enabled" id="unifibridge_enabled_1" value="1" checked> Enabled</label>
+                          <label style="margin-left:12px;"><input type="radio" name="radio_enabled" id="unifibridge_enabled_0" value="0"> Disabled</label>
                         </td>
                       </tr>
                       <tr>
                         <td class="settingname">
-                          Controller Discovery Mode<br/>
-                          <span style="font-size:10px;color:#bdc3c7;">Select upstream gateway or custom URL</span>
+                          Controller Inform URL<br/>
+                          <span style="font-size:10px;color:#bdc3c7;">UniFi controller connection endpoint</span>
                         </td>
                         <td class="settingvalue">
                           <div>
@@ -1421,21 +1394,21 @@ function initial(){
                       <tr>
                         <td class="settingname">
                           Emulated AP Hardware Profile<br/>
-                          <span style="font-size:10px;color:#bdc3c7;">UniFi hardware model reported to controller</span>
+                          <span style="font-size:10px;color:#bdc3c7;">Hardware model reported to UniFi Controller</span>
                         </td>
                         <td class="settingvalue">
                           <select class="input_option" id="select_model" onchange="this.dataset.userModified='1';">
-                            <option value="U6M">UniFi 6 Mesh (U6M) - Dual/Tri-Band Wi-Fi 6</option>
-                            <option value="U6IW" selected>UniFi 6 In-Wall (U6-IW) - 4-Port Switch & Port Manager (Recommended)</option>
-                            <option value="U6P">UniFi 6 Pro (U6P) - Wi-Fi 6 4x4 MU-MIMO</option>
-                            <option value="U6L">UniFi 6 Lite (U6L) - Wi-Fi 6 2x2</option>
+                            <option value="U6IW" selected>UniFi 6 In-Wall (U6-IW) — 4-Port Switch &amp; Port Manager (Recommended)</option>
+                            <option value="U6M">UniFi 6 Mesh (U6M) — Dual/Tri-Band Wi-Fi 6</option>
+                            <option value="U6P">UniFi 6 Pro (U6P) — 4x4 MU-MIMO</option>
+                            <option value="U6L">UniFi 6 Lite (U6L) — 2x2 Wi-Fi 6</option>
                           </select>
                         </td>
                       </tr>
                       <tr>
                         <td class="settingname">
-                          Heartbeat Reporting Interval<br/>
-                          <span style="font-size:10px;color:#bdc3c7;">Inform exchange frequency with controller</span>
+                          Reporting Interval<br/>
+                          <span style="font-size:10px;color:#bdc3c7;">Heartbeat exchange frequency</span>
                         </td>
                         <td class="settingvalue">
                           <select class="input_option" id="select_interval">
