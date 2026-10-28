@@ -116,30 +116,47 @@ func run(ctx context.Context, req Request, open ReaderOpener, dir string) (strin
 
 	captureCtx, cancel := context.WithTimeout(ctx, req.Duration)
 	defer cancel()
+	parentDeadline, hasParentDeadline := ctx.Deadline()
+	captureDeadline, _ := captureCtx.Deadline()
+	var ownDeadline time.Time
+	if !hasParentDeadline || captureDeadline.Before(parentDeadline) {
+		ownDeadline = captureDeadline
+	}
 	buf := make([]byte, req.SnapLen)
 	written, count := 24, 0
 	for count < req.PacketLimit {
 		n, readErr := reader.ReadPacket(captureCtx, buf)
 		if readErr != nil {
-			if errors.Is(readErr, errNoPacket) {
-				if captureCtx.Err() == context.DeadlineExceeded {
-					break
+			done, readErr := packetReadError(readErr, ctx, parentDeadline, hasParentDeadline, ownDeadline, time.Now())
+			if done {
+				if readErr != nil {
+					return "", fmt.Errorf("read packet: %w", readErr)
 				}
-				if captureCtx.Err() != nil {
-					return "", captureCtx.Err()
-				}
-				continue
-			}
-			if captureCtx.Err() == context.DeadlineExceeded {
 				break
 			}
-			return "", fmt.Errorf("read packet: %w", readErr)
-		}
-		if captureCtx.Err() == context.DeadlineExceeded {
-			break
+			continue
 		}
 		if captureCtx.Err() != nil {
-			return "", captureCtx.Err()
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
+			if hasParentDeadline && !time.Now().Before(parentDeadline) {
+				return "", context.DeadlineExceeded
+			}
+			if ownDeadline.IsZero() {
+				return "", captureCtx.Err()
+			}
+			break
+		}
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		now := time.Now()
+		if hasParentDeadline && !now.Before(parentDeadline) {
+			return "", context.DeadlineExceeded
+		}
+		if !ownDeadline.IsZero() && !now.Before(ownDeadline) {
+			break
 		}
 		if n < ethernetHeaderSize || n > 65535 {
 			return "", errors.New("packet reader returned invalid Ethernet wire length")
@@ -170,6 +187,31 @@ func run(ctx context.Context, req Request, open ReaderOpener, dir string) (strin
 	}
 	keep = true
 	return path, nil
+}
+
+// packetReadError resolves receive errors without relying on the child timeout
+// context's timer goroutine having updated Err() before the packet reader
+// returns. Only the capture's own deadline turns a deadline/no-packet result
+// into a successful partial capture; a parent timeout or cancellation remains
+// an error, and unrelated reader errors are always preserved.
+func packetReadError(readErr error, parent context.Context, parentDeadline time.Time, hasParentDeadline bool, ownDeadline, now time.Time) (done bool, result error) {
+	if err := parent.Err(); err != nil {
+		return true, err
+	}
+	parentTimedOut := hasParentDeadline && !now.Before(parentDeadline)
+	if parentTimedOut && (errors.Is(readErr, context.DeadlineExceeded) || errors.Is(readErr, errNoPacket)) {
+		return true, context.DeadlineExceeded
+	}
+	if errors.Is(readErr, errNoPacket) {
+		if !ownDeadline.IsZero() && !now.Before(ownDeadline) {
+			return true, nil
+		}
+		return false, nil
+	}
+	if errors.Is(readErr, context.DeadlineExceeded) && !ownDeadline.IsZero() && !now.Before(ownDeadline) {
+		return true, nil
+	}
+	return true, readErr
 }
 
 func matchesMAC(frame []byte, mac net.HardwareAddr) bool {

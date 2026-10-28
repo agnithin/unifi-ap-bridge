@@ -195,7 +195,119 @@ func TestRunTimeoutCreatesEmptyPCAPAndReaderErrorsRemoveArtifact(t *testing.T) {
 	if !canceled.closed {
 		t.Fatal("reader not closed after cancellation")
 	}
+	deadlineCtx, deadlineCancel := context.WithDeadline(context.Background(), time.Now().Add(10*time.Millisecond))
+	defer deadlineCancel()
+	deadlineDir := filepath.Join(dir, "deadline")
+	if err := os.Mkdir(deadlineDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	deadlineReader := &fakeReader{}
+	if _, err := run(deadlineCtx, request(), func(string) (PacketReader, error) { return deadlineReader, nil }, deadlineDir); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("parent deadline error=%v, want context deadline exceeded", err)
+	}
+	entries, err = os.ReadDir(deadlineDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("parent deadline left a successful artifact: %s", entries[0].Name())
+	}
+	if !deadlineReader.closed {
+		t.Fatal("reader not closed after parent deadline")
+	}
 }
+
+func TestPacketReadErrorDistinguishesCaptureAndParentDeadlines(t *testing.T) {
+	now := time.Now()
+	ownDeadline := now.Add(-time.Second)
+	if done, err := packetReadError(context.DeadlineExceeded, context.Background(), time.Time{}, false, ownDeadline, now); !done || err != nil {
+		t.Fatalf("own deadline race resolved as done=%v err=%v, want successful stop", done, err)
+	}
+	if done, err := packetReadError(context.DeadlineExceeded, context.Background(), time.Time{}, false, now.Add(time.Second), now); !done || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("early reader deadline resolved as done=%v err=%v, want deadline error", done, err)
+	}
+	parentDeadline := now.Add(-time.Second)
+	if done, err := packetReadError(errNoPacket, context.Background(), parentDeadline, true, time.Time{}, now); !done || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("parent deadline race resolved as done=%v err=%v, want parent deadline error", done, err)
+	}
+	readerFailure := errors.New("unrelated receive failure")
+	if done, err := packetReadError(readerFailure, context.Background(), time.Time{}, false, ownDeadline, now); !done || !errors.Is(err, readerFailure) {
+		t.Fatalf("reader failure after capture deadline resolved as done=%v err=%v, want original error", done, err)
+	}
+	parent, cancel := context.WithCancel(context.Background())
+	cancel()
+	if done, err := packetReadError(context.DeadlineExceeded, parent, time.Time{}, false, ownDeadline, now); !done || !errors.Is(err, context.Canceled) {
+		t.Fatalf("parent cancellation resolved as done=%v err=%v, want canceled", done, err)
+	}
+}
+
+func TestRunDeadlineReaderErrorRaceCreatesEmptyPCAP(t *testing.T) {
+	dir := t.TempDir()
+	reader := &deadlineEdgeReader{}
+	r := request()
+	r.Duration = 10 * time.Millisecond
+	path, err := run(context.Background(), r, func(string) (PacketReader, error) { return reader, nil }, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) != 24 {
+		t.Fatalf("deadline-edge pcap size=%d, want header-only 24", len(data))
+	}
+}
+
+func TestRunParentDeadlineWinsWhenReaderReturnsPacket(t *testing.T) {
+	dir := t.TempDir()
+	reader := &parentDeadlinePacketReader{packet: ethernet(client, "02:aa:bb:cc:dd:ee", 1, 60)}
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(10*time.Millisecond))
+	defer cancel()
+	r := request()
+	r.Duration = time.Second
+	if _, err := run(ctx, r, func(string) (PacketReader, error) { return reader, nil }, dir); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("parent deadline with packet error=%v, want deadline exceeded", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("parent deadline with packet left artifact: %s", entries[0].Name())
+	}
+}
+
+// deadlineEdgeReader returns the OS-style timeout error at the deadline without
+// waiting for the context's timer goroutine to publish ctx.Err().
+type deadlineEdgeReader struct{}
+
+func (deadlineEdgeReader) ReadPacket(ctx context.Context, _ []byte) (int, error) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return 0, errors.New("capture deadline missing")
+	}
+	if delay := time.Until(deadline); delay > 0 {
+		time.Sleep(delay)
+	}
+	return 0, context.DeadlineExceeded
+}
+func (deadlineEdgeReader) Close() error { return nil }
+
+type parentDeadlinePacketReader struct{ packet []byte }
+
+func (r *parentDeadlinePacketReader) ReadPacket(ctx context.Context, dst []byte) (int, error) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return 0, errors.New("parent deadline missing")
+	}
+	if delay := time.Until(deadline); delay > 0 {
+		time.Sleep(delay)
+	}
+	copy(dst, r.packet)
+	return len(r.packet), nil
+}
+func (*parentDeadlinePacketReader) Close() error { return nil }
 
 func mustMAC(t *testing.T, s string) net.HardwareAddr {
 	t.Helper()
