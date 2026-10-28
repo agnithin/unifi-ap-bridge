@@ -1183,18 +1183,49 @@ func readSysfsString(path string) string {
 	return strings.TrimSpace(string(data))
 }
 
-func parseArpTable(data string) map[string]string {
-	arpMap := make(map[string]string)
+type arpRecord struct {
+	ip  string
+	mac string
+	dev string
+}
+
+func parseArpTableEntries(data string) map[string]arpRecord {
+	arpMap := make(map[string]arpRecord)
 	lines := strings.Split(data, "\n")
 	for _, line := range lines {
 		fields := strings.Fields(line)
 		if len(fields) >= 4 {
+			// Require completed or permanent entry (Flags ATF_COM 0x2 or ATF_PERM 0x4).
+			// Incomplete or failed entries (Flags 0x0) must be ignored.
+			flags, err := strconv.ParseInt(strings.TrimPrefix(fields[2], "0x"), 16, 64)
+			if err != nil || (flags&0x02) == 0 {
+				continue
+			}
 			ip := fields[0]
 			mac := strings.ToLower(fields[3])
-			if len(mac) == 17 && !strings.HasPrefix(mac, "00:00:00") {
-				arpMap[mac] = ip
+			norm, err := inform.NormalizeMAC(mac)
+			if err != nil || !isUnicastMAC(norm) || strings.HasPrefix(norm, "00:00:00") {
+				continue
+			}
+			dev := ""
+			if len(fields) >= 6 {
+				dev = fields[5]
+			}
+			arpMap[norm] = arpRecord{
+				ip:  ip,
+				mac: norm,
+				dev: dev,
 			}
 		}
+	}
+	return arpMap
+}
+
+func parseArpTable(data string) map[string]string {
+	entries := parseArpTableEntries(data)
+	arpMap := make(map[string]string, len(entries))
+	for mac, entry := range entries {
+		arpMap[mac] = entry.ip
 	}
 	return arpMap
 }
@@ -1288,6 +1319,7 @@ func parseBrctlShowmacs(data string, bridgePortMap map[int]string, arpMap map[st
 }
 
 type bridgeInventory struct {
+	name          string
 	ports         map[int]string
 	vlanFiltering bool
 	vlanByIf      map[string][]int
@@ -1330,7 +1362,7 @@ func discoverBridgeInventory(ctx context.Context, readDir func(string) ([]os.Dir
 		if err != nil {
 			continue
 		}
-		inv := bridgeInventory{ports: make(map[int]string), vlanByIf: make(map[string][]int)}
+		inv := bridgeInventory{name: name, ports: make(map[int]string), vlanByIf: make(map[string][]int)}
 		for _, member := range members {
 			portNoPath := filepath.Join(brifPath, member.Name(), "port_no")
 			data, err := readFile(portNoPath)
@@ -1427,15 +1459,64 @@ func addVLAN(seen map[string]map[int]bool, iface string, vlan int) {
 	seen[iface][vlan] = true
 }
 
+func parseVLANFromName(name string) int {
+	if strings.HasPrefix(name, "wl") || strings.HasPrefix(name, "ath") || strings.HasPrefix(name, "wlan") || strings.HasPrefix(name, "ra") {
+		return 0
+	}
+	dot := strings.LastIndex(name, ".")
+	if dot == -1 || dot == len(name)-1 {
+		return 0
+	}
+	vid, err := strconv.Atoi(name[dot+1:])
+	if err != nil || vid < 1 || vid > 4094 {
+		return 0
+	}
+	return vid
+}
+
+func parseBridgeVLAN(name string) int {
+	lower := strings.ToLower(name)
+	if lower == "br0" {
+		return 1
+	}
+	prefixes := []string{"br-vlan", "br_vlan", "br-lan-", "vlan", "br."}
+	for _, p := range prefixes {
+		if strings.HasPrefix(lower, p) {
+			if vid, err := strconv.Atoi(strings.TrimPrefix(lower, p)); err == nil && vid >= 1 && vid <= 4094 {
+				return vid
+			}
+		}
+	}
+	if strings.HasPrefix(lower, "br") {
+		rest := strings.TrimPrefix(lower, "br")
+		if vid, err := strconv.Atoi(rest); err == nil && vid >= 1 && vid <= 4094 {
+			return vid
+		}
+	}
+	return 0
+}
+
 func effectiveVLAN(inv bridgeInventory, iface string) int {
-	if !inv.vlanFiltering {
-		return 0
+	if inv.vlanFiltering {
+		v := inv.vlanByIf[iface]
+		if len(v) != 1 {
+			return 0
+		}
+		return v[0]
 	}
-	v := inv.vlanByIf[iface]
-	if len(v) != 1 {
-		return 0
+
+	if vid := parseVLANFromName(iface); vid > 0 {
+		return vid
 	}
-	return v[0]
+	for _, member := range inv.ports {
+		if vid := parseVLANFromName(member); vid > 0 {
+			return vid
+		}
+	}
+	if vid := parseBridgeVLAN(inv.name); vid > 0 {
+		return vid
+	}
+	return 0
 }
 
 func bridgeNameForInterface(bridges map[string]bridgeInventory, iface string) (string, bool) {
@@ -1531,7 +1612,11 @@ func (p *AsusProvider) GetPortTableContext(ctx context.Context) ([]telemetry.Por
 
 	bridges := discoverBridgeInventory(ctx, p.readDir, readFile, p.runCommand)
 	arpData, _ := readFile("/proc/net/arp")
-	arpMap := parseArpTable(string(arpData))
+	arpEntries := parseArpTableEntries(string(arpData))
+	arpMap := make(map[string]string, len(arpEntries))
+	for mac, entry := range arpEntries {
+		arpMap[mac] = entry.ip
+	}
 	macsByPort := make(map[int][]telemetry.PortMacEntry)
 	for bridgeName, inv := range bridges {
 		if err := ctx.Err(); err != nil {
@@ -1561,13 +1646,29 @@ func (p *AsusProvider) GetPortTableContext(ctx context.Context) ([]telemetry.Por
 			}
 		}
 	}
+	portDevMap := map[int]string{1: "eth0", 2: "eth1", 3: "eth2", 4: "eth3"}
 	lastConnByPort := make(map[int]*telemetry.PortLastConnection)
 	for portIdx, entries := range macsByPort {
 		if len(entries) != 1 {
 			continue
 		}
 		entry := entries[0]
-		lastConnByPort[portIdx] = &telemetry.PortLastConnection{Connected: true, MAC: entry.MAC, IP: arpMap[entry.MAC], LastSeen: time.Now().Unix() - int64(entry.Age)}
+		portDev := portDevMap[portIdx]
+		bridgeName, _ := bridgeNameForInterface(bridges, portDev)
+		clientIP := ""
+		if arp, ok := arpEntries[entry.MAC]; ok {
+			// Validate that the ARP entry was learned on the bridge or device corresponding to this physical port.
+			// This prevents cross-bridge IP poisoning when an AP has multiple isolated VLAN bridges.
+			if (bridgeName != "" && arp.dev == bridgeName) || arp.dev == portDev || bridgeName == "" {
+				clientIP = arp.ip
+			}
+		}
+		lastConnByPort[portIdx] = &telemetry.PortLastConnection{
+			Connected: true,
+			MAC:       entry.MAC,
+			IP:        clientIP,
+			LastSeen:  time.Now().Unix() - int64(entry.Age),
+		}
 	}
 
 	chassisMAC, _, remotePort, parentCached, err := "", "", 0, false, error(nil)

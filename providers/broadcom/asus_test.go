@@ -736,17 +736,30 @@ func TestParseArpTable(t *testing.T) {
 	raw := `IP address       HW type     Flags       HW address            Mask     Device
 10.100.1.8       0x1         0x2         10:2c:b1:73:3d:00     *        br0
 10.100.1.99      0x1         0x2         90:3c:1d:58:12:30     *        br0
+10.100.1.100     0x1         0x6         00:11:32:cf:04:f0     *        br0
+10.100.1.150     0x1         0x0         10:2c:b1:73:3d:99     *        br0
 10.100.1.200     0x1         0x0         00:00:00:00:00:00     *        br0`
 
 	arp := parseArpTable(raw)
-	if len(arp) != 2 {
-		t.Fatalf("expected 2 valid arp entries, got %d", len(arp))
+	if len(arp) != 3 {
+		t.Fatalf("expected 3 valid arp entries, got %d", len(arp))
 	}
 	if arp["10:2c:b1:73:3d:00"] != "10.100.1.8" {
 		t.Errorf("arp ip mismatch: %s", arp["10:2c:b1:73:3d:00"])
 	}
 	if arp["90:3c:1d:58:12:30"] != "10.100.1.99" {
 		t.Errorf("arp ip mismatch: %s", arp["90:3c:1d:58:12:30"])
+	}
+	if arp["00:11:32:cf:04:f0"] != "10.100.1.100" {
+		t.Errorf("arp ip mismatch for permanent entry: %s", arp["00:11:32:cf:04:f0"])
+	}
+	if _, ok := arp["10:2c:b1:73:3d:99"]; ok {
+		t.Errorf("incomplete arp entry with flags 0x0 must be skipped")
+	}
+
+	entries := parseArpTableEntries(raw)
+	if entries["10:2c:b1:73:3d:00"].dev != "br0" {
+		t.Errorf("expected device br0, got %q", entries["10:2c:b1:73:3d:00"].dev)
 	}
 }
 
@@ -859,12 +872,144 @@ func TestBridgeDiscoveryAndEffectiveVLAN(t *testing.T) {
 	if got := effectiveVLAN(bridgeInventory{vlanFiltering: true, vlanByIf: invalidRange}, "eth1"); got != 0 {
 		t.Fatalf("malformed VLAN range became VLAN %d", got)
 	}
-	// The bridge's port_no values differ from physical UniFi port indexes:
-	// bridge port 1 is eth1 (physical Port 2), bridge port 2 is eth2.
-	entries := map[int][]telemetry.PortMacEntry{2: {{MAC: "02:00:00:00:00:01"}}, 3: {{MAC: "02:00:00:00:00:02"}}}
-	assignPortVLANs(entries, physicalPortMap(map[int]string{1: "eth1", 2: "eth2"}), bridgeInventory{vlanFiltering: true, vlanByIf: map[string][]int{"eth1": {20}, "eth2": {30}}})
-	if entries[2][0].Vlan != 20 || entries[3][0].Vlan != 30 {
-		t.Fatalf("effective VLAN not assigned: %+v", entries[2])
+	// Multi-bridge architecture (standard Linux bridges without vlan_filtering):
+	// Test bridge br20 with member eth0.20 and eth3:
+	br20Inv := bridgeInventory{name: "br20", ports: map[int]string{1: "eth0.20", 2: "eth3"}}
+	if got := effectiveVLAN(br20Inv, "eth3"); got != 20 {
+		t.Fatalf("expected VLAN 20 for eth3 in br20 with eth0.20 member, got %d", got)
+	}
+	// Test bridge br0 (primary untagged LAN -> VLAN 1):
+	br0Inv := bridgeInventory{name: "br0", ports: map[int]string{1: "eth0", 2: "eth1"}}
+	if got := effectiveVLAN(br0Inv, "eth1"); got != 1 {
+		t.Fatalf("expected VLAN 1 for eth1 in br0, got %d", got)
+	}
+	// Test named bridge vlan100:
+	vlan100Inv := bridgeInventory{name: "vlan100", ports: map[int]string{1: "eth2"}}
+	if got := effectiveVLAN(vlan100Inv, "eth2"); got != 100 {
+		t.Fatalf("expected VLAN 100 for eth2 in vlan100, got %d", got)
+	}
+	// Test multi-bridge assignPortVLANs:
+	multiEntries := map[int][]telemetry.PortMacEntry{4: {{MAC: "10:2c:b1:73:3d:00"}}}
+	assignPortVLANs(multiEntries, map[int]string{4: "eth3"}, br20Inv)
+	if multiEntries[4][0].Vlan != 20 {
+		t.Fatalf("expected port 4 MAC entry to receive VLAN 20, got %+v", multiEntries[4][0])
+	}
+}
+
+func TestGetPortTableContextCrossBridgeArpIsolation(t *testing.T) {
+	runner := func(_ context.Context, name string, args ...string) (string, error) {
+		if name == "nvram" && len(args) == 2 && args[0] == "get" {
+			switch args[1] {
+			case "lan_hwaddr":
+				return "fc:34:97:4f:ac:60", nil
+			case "lan_gateway":
+				return "10.100.1.1", nil
+			case "lan_ipaddr":
+				return "10.100.1.11", nil
+			default:
+				return "", nil
+			}
+		}
+		if name == "brctl" && len(args) == 2 && args[0] == "showmacs" {
+			if args[1] == "br0" {
+				return "port no\tmac addr\t\tis local?\tageing timer\n" +
+					"  2\t02:00:00:00:00:01\tno\t\t   4.10\n", nil
+			}
+			if args[1] == "br20" {
+				return "port no\tmac addr\t\tis local?\tageing timer\n" +
+					"  2\t10:2c:b1:73:3d:00\tno\t\t  10.20\n", nil
+			}
+		}
+		return "", errors.New("command not supported")
+	}
+	p := NewAsusProvider(runner)
+	p.readFile = func(path string) ([]byte, error) {
+		switch path {
+		case "/proc/net/arp":
+			// ARP contains an incomplete entry on br0 for the device on br20, and a valid entry for a br0 device
+			return []byte("IP address       HW type     Flags       HW address            Mask     Device\n" +
+				"10.100.1.8       0x1         0x0         10:2c:b1:73:3d:00     *        br0\n" +
+				"10.100.1.50      0x1         0x2         02:00:00:00:00:01     *        br0\n"), nil
+		case "/proc/net/dev":
+			return []byte("Inter-|   Receive                                                |  Transmit\n" +
+				" face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n" +
+				"  eth0: 1000 10 0 0 0 0 0 0 1000 10 0 0 0 0 0 0\n" +
+				"  eth1: 1000 10 0 0 0 0 0 0 1000 10 0 0 0 0 0 0\n" +
+				"  eth2: 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n" +
+				"  eth3: 5000 50 0 0 0 0 0 0 5000 50 0 0 0 0 0 0\n"), nil
+		case "/sys/class/net/eth0/carrier", "/sys/class/net/eth1/carrier", "/sys/class/net/eth3/carrier":
+			return []byte("1\n"), nil
+		case "/sys/class/net/eth2/carrier":
+			return []byte("0\n"), nil
+		case "/sys/class/net/eth0/speed":
+			return []byte("2500\n"), nil
+		case "/sys/class/net/eth1/speed", "/sys/class/net/eth3/speed":
+			return []byte("1000\n"), nil
+		case "/sys/class/net/eth0/duplex", "/sys/class/net/eth1/duplex", "/sys/class/net/eth3/duplex":
+			return []byte("full\n"), nil
+		case "/sys/class/net/br0/brif/eth0/port_no":
+			return []byte("0x1\n"), nil
+		case "/sys/class/net/br0/brif/eth1/port_no":
+			return []byte("0x2\n"), nil
+		case "/sys/class/net/br20/brif/eth0.20/port_no":
+			return []byte("0x1\n"), nil
+		case "/sys/class/net/br20/brif/eth3/port_no":
+			return []byte("0x2\n"), nil
+		}
+		return nil, os.ErrNotExist
+	}
+	p.readDir = func(path string) ([]os.DirEntry, error) {
+		switch path {
+		case "/sys/class/net":
+			return []os.DirEntry{
+				testDirEntry("eth0"), testDirEntry("eth1"), testDirEntry("eth2"), testDirEntry("eth3"),
+				testDirEntry("br0"), testDirEntry("br20"),
+			}, nil
+		case "/sys/class/net/br0/brif":
+			return []os.DirEntry{testDirEntry("eth0"), testDirEntry("eth1")}, nil
+		case "/sys/class/net/br20/brif":
+			return []os.DirEntry{testDirEntry("eth0.20"), testDirEntry("eth3")}, nil
+		}
+		return nil, os.ErrNotExist
+	}
+
+	ports, _, _, err := p.GetPortTableContext(context.Background())
+	if err != nil {
+		t.Fatalf("GetPortTableContext failed: %v", err)
+	}
+
+	// Port 2 (eth1 on br0):
+	// Should have client 02:00:00:00:00:01 with IP 10.100.1.50 and VLAN 1
+	var port2, port4 *telemetry.Port
+	for i := range ports {
+		if ports[i].PortIdx == 2 {
+			port2 = &ports[i]
+		}
+		if ports[i].PortIdx == 4 {
+			port4 = &ports[i]
+		}
+	}
+	if port2 == nil || len(port2.MacTable) != 1 || port2.MacTable[0].Vlan != 1 {
+		t.Fatalf("expected port 2 to have MAC on VLAN 1, got %+v", port2)
+	}
+	if port2.LastConnection == nil || port2.LastConnection.IP != "10.100.1.50" {
+		t.Fatalf("expected port 2 last_connection IP 10.100.1.50, got %+v", port2.LastConnection)
+	}
+
+	// Port 4 (eth3 on br20):
+	// Should have client 10:2c:b1:73:3d:00 with VLAN 20
+	// LastConnection must NOT have stale/cross-bridge IP "10.100.1.8"
+	if port4 == nil || len(port4.MacTable) != 1 || port4.MacTable[0].Vlan != 20 {
+		t.Fatalf("expected port 4 to have MAC on VLAN 20, got %+v", port4)
+	}
+	if port4.LastConnection == nil {
+		t.Fatalf("expected port 4 to have last_connection, got nil")
+	}
+	if port4.LastConnection.MAC != "10:2c:b1:73:3d:00" {
+		t.Fatalf("expected port 4 last_connection MAC 10:2c:b1:73:3d:00, got %q", port4.LastConnection.MAC)
+	}
+	if port4.LastConnection.IP != "" {
+		t.Fatalf("expected port 4 last_connection IP to be empty (avoid stale/cross-bridge poisoning), got %q", port4.LastConnection.IP)
 	}
 }
 

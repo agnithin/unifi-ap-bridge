@@ -32,3 +32,5 @@ Thumbs.db
 # Temporary and local runtime files
 *.tmp
 *.log
+__pycache__/
+*.pyc
