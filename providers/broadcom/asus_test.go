@@ -657,6 +657,110 @@ func TestStaticInterfaceCacheExpiryAndFailedRefresh(t *testing.T) {
 	}
 }
 
+func TestStaticMetadataCaching(t *testing.T) {
+	now := time.Unix(100, 0)
+	counts := make(map[string]int)
+	runner := func(ctx context.Context, name string, args ...string) (string, error) {
+		cmd := name + " " + strings.Join(args, " ")
+		counts[cmd]++
+		switch cmd {
+		case "nvram get lan_hwaddr":
+			return "00:11:22:33:44:55", nil
+		case "nvram get et0macaddr":
+			return "00:11:22:33:44:50", nil
+		case "nvram get wl0_bss_enabled":
+			return "1", nil
+		case "nvram get wl_ifnames":
+			return "eth4", nil
+		case "wl -i eth4 txchain":
+			return "0x3", nil
+		case "wl -i eth4 chanspec":
+			return "6", nil
+		case "wl -i eth4 chanim_stats":
+			return "version: 3\nchanspec tx inbss obss nocat nopkt doze txop goodtx badtx glitch badplcp knoise idle timestamp\n0x1006 12 2 35 11 6 0 28 1 4 1317 42 -91 36 -1193366231", nil
+		case "wl -i eth4 ssid":
+			return `Current SSID: "test-ssid"`, nil
+		case "wl -i eth4 bssid":
+			return "00:11:22:33:44:56", nil
+		case "wl -i eth4 assoclist":
+			return "assoclist", nil
+		default:
+			return "", nil
+		}
+	}
+
+	p := NewAsusProvider(runner)
+	p.now = func() time.Time { return now }
+
+	// First calls
+	if _, err := p.nvramGetContext(context.Background(), "lan_hwaddr"); err != nil {
+		t.Fatalf("lan_hwaddr: %v", err)
+	}
+	if _, err := p.nvramGetContext(context.Background(), "et0macaddr"); err != nil {
+		t.Fatalf("et0macaddr: %v", err)
+	}
+	if _, err := p.nvramGetContext(context.Background(), "wl0_bss_enabled"); err != nil {
+		t.Fatalf("wl0_bss_enabled: %v", err)
+	}
+	if _, err := p.GetRadiosContext(context.Background()); err != nil {
+		t.Fatalf("GetRadiosContext: %v", err)
+	}
+	if _, err := p.GetVAPsContext(context.Background(), nil); err != nil {
+		t.Fatalf("GetVAPsContext: %v", err)
+	}
+
+	for _, k := range []string{"nvram get lan_hwaddr", "nvram get et0macaddr", "nvram get wl0_bss_enabled", "wl -i eth4 txchain", "wl -i eth4 ssid", "wl -i eth4 bssid"} {
+		if counts[k] != 1 {
+			t.Fatalf("expected 1 call for %q, got %d", k, counts[k])
+		}
+	}
+
+	// Repeated calls within TTL should hit cache
+	now = now.Add(1 * time.Minute)
+	if _, err := p.nvramGetContext(context.Background(), "lan_hwaddr"); err != nil {
+		t.Fatalf("lan_hwaddr 2: %v", err)
+	}
+	if _, err := p.nvramGetContext(context.Background(), "et0macaddr"); err != nil {
+		t.Fatalf("et0macaddr 2: %v", err)
+	}
+	if _, err := p.nvramGetContext(context.Background(), "wl0_bss_enabled"); err != nil {
+		t.Fatalf("wl0_bss_enabled 2: %v", err)
+	}
+	if _, err := p.GetRadiosContext(context.Background()); err != nil {
+		t.Fatalf("GetRadiosContext 2: %v", err)
+	}
+	if _, err := p.GetVAPsContext(context.Background(), nil); err != nil {
+		t.Fatalf("GetVAPsContext 2: %v", err)
+	}
+
+	for _, k := range []string{"nvram get lan_hwaddr", "nvram get et0macaddr", "nvram get wl0_bss_enabled", "wl -i eth4 txchain", "wl -i eth4 ssid", "wl -i eth4 bssid"} {
+		if counts[k] != 1 {
+			t.Fatalf("expected cache hit (1 call) for %q, got %d", k, counts[k])
+		}
+	}
+
+	// After TTL expires, commands should be called again
+	now = now.Add(stableCacheTTL)
+	if _, err := p.nvramGetContext(context.Background(), "lan_hwaddr"); err != nil {
+		t.Fatalf("lan_hwaddr 3: %v", err)
+	}
+	if _, err := p.GetRadiosContext(context.Background()); err != nil {
+		t.Fatalf("GetRadiosContext 3: %v", err)
+	}
+	if _, err := p.GetVAPsContext(context.Background(), nil); err != nil {
+		t.Fatalf("GetVAPsContext 3: %v", err)
+	}
+	if counts["nvram get lan_hwaddr"] != 2 {
+		t.Fatalf("expected 2 calls for 'nvram get lan_hwaddr' after TTL, got %d", counts["nvram get lan_hwaddr"])
+	}
+	if counts["wl -i eth4 txchain"] != 2 {
+		t.Fatalf("expected 2 calls for 'wl -i eth4 txchain' after TTL, got %d", counts["wl -i eth4 txchain"])
+	}
+	if counts["wl -i eth4 ssid"] != 2 {
+		t.Fatalf("expected 2 calls for 'wl -i eth4 ssid' after TTL, got %d", counts["wl -i eth4 ssid"])
+	}
+}
+
 func TestCollectionDeadlineStopsLaterInterfaceCommands(t *testing.T) {
 	var calls atomic.Int32
 	runner := func(ctx context.Context, name string, args ...string) (string, error) {

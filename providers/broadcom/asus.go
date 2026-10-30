@@ -337,19 +337,33 @@ func (p *AsusProvider) wlCmdContext(ctx context.Context, iface string, args ...s
 	return p.runCommand(ctx, "wl", fullArgs...)
 }
 
+func (p *AsusProvider) staticGet(key string) (string, bool) {
+	p.cacheMu.Lock()
+	defer p.cacheMu.Unlock()
+	entry, ok := p.staticCache[key]
+	if ok && p.now().Before(entry.expires) {
+		return entry.value, true
+	}
+	return "", false
+}
+
+func (p *AsusProvider) staticSet(key, value string) {
+	p.cacheMu.Lock()
+	defer p.cacheMu.Unlock()
+	p.staticCache[key] = staticCacheEntry{value: value, expires: p.now().Add(stableCacheTTL)}
+}
+
 func (p *AsusProvider) nvramGetContext(ctx context.Context, key string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	stable := key == "wl_ifnames" || strings.HasPrefix(key, "wl") && strings.HasSuffix(key, "_vifnames")
+	stable := key == "wl_ifnames" ||
+		(strings.HasPrefix(key, "wl") && (strings.HasSuffix(key, "_vifnames") || strings.HasSuffix(key, "_bss_enabled"))) ||
+		key == "lan_hwaddr" || key == "et0macaddr"
 	if stable {
-		p.cacheMu.Lock()
-		entry, ok := p.staticCache["nvram:"+key]
-		if ok && p.now().Before(entry.expires) {
-			p.cacheMu.Unlock()
-			return entry.value, nil
+		if val, ok := p.staticGet("nvram:" + key); ok {
+			return val, nil
 		}
-		p.cacheMu.Unlock()
 	}
 	out, err := p.runCommand(ctx, "nvram", "get", key)
 	if err != nil {
@@ -357,9 +371,7 @@ func (p *AsusProvider) nvramGetContext(ctx context.Context, key string) (string,
 	}
 	out = strings.TrimSpace(out)
 	if stable {
-		p.cacheMu.Lock()
-		p.staticCache["nvram:"+key] = staticCacheEntry{value: out, expires: p.now().Add(stableCacheTTL)}
-		p.cacheMu.Unlock()
+		p.staticSet("nvram:"+key, out)
 	}
 	return out, nil
 }
@@ -474,7 +486,15 @@ func (p *AsusProvider) GetRadiosContext(ctx context.Context) ([]telemetry.Radio,
 			hasVHT = true
 		}
 
-		if chainRaw, e := p.wlCmdContext(ctx, iface, "txchain"); e == nil && len(strings.Fields(chainRaw)) > 0 {
+		cacheKey := "wl:" + iface + ":txchain"
+		chainRaw, ok := p.staticGet(cacheKey)
+		if !ok {
+			if raw, e := p.wlCmdContext(ctx, iface, "txchain"); e == nil {
+				chainRaw = raw
+				p.staticSet(cacheKey, chainRaw)
+			}
+		}
+		if len(strings.Fields(chainRaw)) > 0 {
 			if mask, e := strconv.ParseUint(strings.Fields(chainRaw + " ")[0], 0, 32); e == nil && mask != 0 {
 				nss = bits.OnesCount32(uint32(mask))
 			}
@@ -570,9 +590,14 @@ func (p *AsusProvider) GetVAPsContext(ctx context.Context, wlanMapping map[strin
 		if bssEnabled == "0" {
 			continue
 		}
-		ssidRaw, err := p.wlCmdContext(ctx, iface, "ssid")
-		if err != nil {
-			return nil, fmt.Errorf("read %s SSID: %w", iface, err)
+		ssidKey := "wl:" + iface + ":ssid"
+		ssidRaw, ok := p.staticGet(ssidKey)
+		if !ok {
+			var err error
+			ssidRaw, err = p.wlCmdContext(ctx, iface, "ssid")
+			if err != nil {
+				return nil, fmt.Errorf("read %s SSID: %w", iface, err)
+			}
 		}
 		var ssid string
 		parts := strings.Split(ssidRaw, "\"")
@@ -582,14 +607,25 @@ func (p *AsusProvider) GetVAPsContext(ctx context.Context, wlanMapping map[strin
 		if ssid == "" {
 			continue
 		}
+		if !ok {
+			p.staticSet(ssidKey, ssidRaw)
+		}
 
-		bssidRaw, err := p.wlCmdContext(ctx, iface, "bssid")
-		if err != nil {
-			return nil, fmt.Errorf("read %s BSSID: %w", iface, err)
+		bssidKey := "wl:" + iface + ":bssid"
+		bssidRaw, ok := p.staticGet(bssidKey)
+		if !ok {
+			var err error
+			bssidRaw, err = p.wlCmdContext(ctx, iface, "bssid")
+			if err != nil {
+				return nil, fmt.Errorf("read %s BSSID: %w", iface, err)
+			}
 		}
 		bssid, err := inform.NormalizeMAC(bssidRaw)
 		if err != nil {
 			return nil, fmt.Errorf("read %s BSSID: invalid value", iface)
+		}
+		if !ok {
+			p.staticSet(bssidKey, bssidRaw)
 		}
 
 		chanspecRaw, err := p.wlCmdContext(ctx, iface, "chanspec")

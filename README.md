@@ -81,7 +81,7 @@ The prior bridge sent an uplink object shaped like a REST response and omitted t
   * Defaults non-positive configured intervals to 10 seconds; three consecutive HTTP 401/404 rejections are required before adoption recovery. HTTP 400 does not clear identity.
   * Rejects malformed adoption keys and enforces addon directory `0755` / SSH directory `0700`.
 * **Built-in CLI Companion (`unifi-bridge`):**
-  * Provides quick command-line diagnostics and operations: `unifi-bridge status`, `sync`, `update check`, `update apply`, `reset`, `start`, `stop`, `restart`, `check`, `logs`.
+  * Provides quick command-line diagnostics and operations: `unifi-bridge status`, `sync`, `update check`, `update apply`, `reset`, `start`, `stop`, `enable`, `disable`, `restart`, `check`, `logs`.
   * Interactive text console menu for easy terminal administration.
 * **Automated Health Watchdog:**
   * Automatic cron watchdog via Asuswrt `cru` checking process health every 5 minutes and respawning on failures.
@@ -180,7 +180,9 @@ unifi-bridge update apply      # Download and install latest update across clust
 unifi-bridge check             # Probe UniFi controller inform endpoint connectivity
 unifi-bridge logs              # Follow live daemon logs (tail -f /tmp/unifi-bridge.log)
 unifi-bridge restart           # Gracefully restart the bridge daemon
-unifi-bridge stop              # Stop the daemon
+unifi-bridge stop              # Stop the daemon temporarily (watchdog restarts unless disabled)
+unifi-bridge disable           # Persistently disable the bridge daemon
+unifi-bridge enable            # Persistently enable and start the bridge daemon
 unifi-bridge start             # Start the daemon
 ```
 

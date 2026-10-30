@@ -219,12 +219,66 @@ cmd_start() {
 cmd_stop() {
     if ! is_running; then
         printf "${C_YELLOW}UniFi AP Bridge is not running.${C_RESET}\n"
+        printf "${C_YELLOW}Note: The watchdog cron job checks every 5 minutes and will restart the service unless disabled.${C_RESET}\n"
+        printf "To persistently disable the service, use: ${C_BOLD}%s disable${C_RESET}\n" "$0"
         return 0
     fi
     printf "${C_YELLOW}Stopping UniFi AP Bridge (PID: %s)...${C_RESET}\n" "$(get_pid)"
     killall unifi-bridge 2>/dev/null || true
     sleep 1
     printf "${C_GREEN}Stopped successfully.${C_RESET}\n"
+    printf "${C_YELLOW}Note: The watchdog cron job checks every 5 minutes and will restart the service unless disabled.${C_RESET}\n"
+    printf "To persistently disable the service, use: ${C_BOLD}%s disable${C_RESET}\n" "$0"
+}
+
+cmd_disable() {
+    printf "${C_YELLOW}Disabling UniFi AP Bridge...${C_RESET}\n"
+    BRIDGE_BIN="/tmp/unifi-bridge/unifi-bridge"
+    [ -x "$BRIDGE_BIN" ] || BRIDGE_BIN="$INSTALL_DIR/bin/unifi-bridge"
+    if [ -x "$BRIDGE_BIN" ] && [ -f "$CONFIG_FILE" ]; then
+        printf '{"enabled":false}\n' | "$BRIDGE_BIN" -config "$CONFIG_FILE" -apply-settings >/dev/null 2>&1 || true
+    elif [ -f "$CONFIG_FILE" ]; then
+        sed -i 's/"enabled"[[:space:]]*:[[:space:]]*true/"enabled": false/' "$CONFIG_FILE" 2>/dev/null || true
+    fi
+    SETTINGS_FILE="/jffs/addons/custom_settings.txt"
+    if [ -f "$SETTINGS_FILE" ]; then
+        tmp_settings="${SETTINGS_FILE}.tmp.$$"
+        { grep -v "^unifibridge_enabled" "$SETTINGS_FILE" 2>/dev/null || true; } > "$tmp_settings"
+        echo "unifibridge_enabled 0" >> "$tmp_settings"
+        chmod 600 "$tmp_settings" && mv -f "$tmp_settings" "$SETTINGS_FILE" 2>/dev/null || true
+    fi
+    if is_running; then
+        killall unifi-bridge 2>/dev/null || true
+        sleep 1
+    fi
+    # Publish disabled status to WebUI
+    if [ -x "$BRIDGE_BIN" ] && [ -f "$CONFIG_FILE" ]; then
+        "$BRIDGE_BIN" -config "$CONFIG_FILE" >/dev/null 2>&1 || true
+    fi
+    printf "${C_GREEN}UniFi AP Bridge disabled successfully. Watchdog will not restart it.${C_RESET}\n"
+}
+
+cmd_enable() {
+    printf "${C_GREEN}Enabling UniFi AP Bridge...${C_RESET}\n"
+    BRIDGE_BIN="/tmp/unifi-bridge/unifi-bridge"
+    [ -x "$BRIDGE_BIN" ] || BRIDGE_BIN="$INSTALL_DIR/bin/unifi-bridge"
+    if [ -x "$BRIDGE_BIN" ] && [ -f "$CONFIG_FILE" ]; then
+        printf '{"enabled":true}\n' | "$BRIDGE_BIN" -config "$CONFIG_FILE" -apply-settings >/dev/null 2>&1 || true
+    elif [ -f "$CONFIG_FILE" ]; then
+        sed -i 's/"enabled"[[:space:]]*:[[:space:]]*false/"enabled": true/' "$CONFIG_FILE" 2>/dev/null || true
+    fi
+    SETTINGS_FILE="/jffs/addons/custom_settings.txt"
+    if [ -f "$SETTINGS_FILE" ]; then
+        tmp_settings="${SETTINGS_FILE}.tmp.$$"
+        { grep -v "^unifibridge_enabled" "$SETTINGS_FILE" 2>/dev/null || true; } > "$tmp_settings"
+        echo "unifibridge_enabled 1" >> "$tmp_settings"
+        chmod 600 "$tmp_settings" && mv -f "$tmp_settings" "$SETTINGS_FILE" 2>/dev/null || true
+    fi
+    if ! is_running; then
+        cmd_start
+    else
+        printf "${C_GREEN}Enabled successfully (already running with PID: %s).${C_RESET}\n" "$(get_pid)"
+    fi
 }
 
 cmd_restart() {
@@ -288,14 +342,16 @@ cmd_menu() {
         echo " 1) Detailed Service Status"
         echo " 2) Live Heartbeat Log (tail -f)"
         echo " 3) Restart Service"
-        echo " 4) Stop Service"
+        echo " 4) Stop Service (Temporary)"
         echo " 5) Start Service"
-        echo " 6) Test Controller Reachability"
-        echo " 7) Check for Updates / Apply Update"
-        echo " 8) Re-mount WebUI Tab"
+        echo " 6) Disable Service (Persistent)"
+        echo " 7) Enable Service (Persistent)"
+        echo " 8) Test Controller Reachability"
+        echo " 9) Check for Updates / Apply Update"
+        echo " 10) Re-mount WebUI Tab"
         echo " e) Exit"
         echo ""
-        printf " Enter selection [1-8 or e]: "
+        printf " Enter selection [1-10 or e]: "
         read -r choice
         case "$choice" in
             1)
@@ -319,9 +375,17 @@ cmd_menu() {
                 sleep 2 ;;
             6)
                 echo ""
+                cmd_disable
+                sleep 2 ;;
+            7)
+                echo ""
+                cmd_enable
+                sleep 2 ;;
+            8)
+                echo ""
                 cmd_test
                 printf "\nPress Enter to return to menu..."; read -r _ ;;
-            7)
+            9)
                 echo ""
                 printf "${C_CYAN}Choose branch track ([m]ain / [d]ev, default main): ${C_RESET}"
                 read -r trk
@@ -335,7 +399,7 @@ cmd_menu() {
                     cmd_update apply "$b"
                 fi
                 printf "\nPress Enter to return to menu..."; read -r _ ;;
-            8)
+            10)
                 echo ""
                 printf "${C_CYAN}Re-mounting WebUI tab...${C_RESET}\n"
                 /jffs/addons/unifi-bridge/start.sh
@@ -368,6 +432,10 @@ case "${1:-}" in
         cmd_start ;;
     stop)
         cmd_stop ;;
+    enable)
+        cmd_enable ;;
+    disable)
+        cmd_disable ;;
     restart)
         cmd_restart ;;
     reset|re-adopt)
@@ -383,6 +451,6 @@ case "${1:-}" in
     "")
         cmd_menu ;;
     *)
-        echo "Usage: $0 {status|sync|update [check|apply] [branch]|start|stop|restart|reset|logs|test}"
+        echo "Usage: $0 {status|sync|update [check|apply] [branch]|start|stop|enable|disable|restart|reset|logs|test}"
         exit 1 ;;
 esac
