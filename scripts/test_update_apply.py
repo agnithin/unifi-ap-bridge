@@ -16,7 +16,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
 COMMIT = "a" * 40
-PINNED_UPDATER_SHA = "2f2dc19723cf442a2ff5ea7ebd9e8b10b56b6a0c24ab2441eca602c14407547a"
+PINNED_UPDATER_SHA = "828729e2f2813b8671fa647a7c081b15951e06292ed3e2923334b67346710153"
 MEMBERS = [
     "apply_config.sh", "bundle.json", "install.sh", "start.sh", "sync_nodes.sh",
     "unifi-bridge-armv7", "unifi-bridge.asp", "unifi-bridge.sh", "update.sh",
