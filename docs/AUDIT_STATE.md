@@ -3,7 +3,7 @@
 > **Current Delivery Status (October 2026):**
 > - **Main AP (`10.100.1.10`):** Running commit `d9b6674` (v1.2.8 dev).
 > - **Node AP (`10.100.1.11`):** Running commit `d9b6674` (v1.2.8 dev).
-> - **Published dev Release:** `dev-c0dd00fe26d7cd0ac4f6e0fe7bb7ce2b28088ad0` ([Release Assets](https://github.com/agnithin/unifi-ap-bridge/releases)).
+> - **Published dev Release:** `dev-0524d48360d463045ebe598ab1414fa2b9640840` ([Release Assets](https://github.com/agnithin/unifi-ap-bridge/releases)).
 > - **Controller Integration:** UniFi Cloud Gateway Max (`10.100.1.1`), Network Application 10.6.109. Both APs adopted as U6IW via GCM encryption.
 > - **Historical Evidence:** Detailed day-by-day deployment logs from October 24–28, 2026 are archived in [docs/archive/2026-10-28-audit-state-history.md](archive/2026-10-28-audit-state-history.md). Independent review report is in [docs/audit/2026-10-29-unifi-ap-bridge-homelab-review.md](audit/2026-10-29-unifi-ap-bridge-homelab-review.md).
 
