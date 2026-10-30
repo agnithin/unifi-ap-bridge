@@ -120,18 +120,41 @@ commits_match() {
     [ -n "$1" ] && [ -n "$2" ] || return 1
     [ "$1" = "$2" ] && return 0
     c1="$1"; c2="$2"
-    if [ "${#c1}" -ge 7 ] && [ "${#c2}" -ge 7 ]; then
-        p1=$(printf '%s' "$c1" | cut -c1-7)
-        p2=$(printf '%s' "$c2" | cut -c1-7)
-        [ "$p1" = "$p2" ] && return 0
+    # Require exact match if both are full (>= 40 chars) hashes.
+    # Only permit short-prefix matching when at least one input is abbreviated (< 40 chars).
+    if [ "${#c1}" -lt 40 ] || [ "${#c2}" -lt 40 ]; then
+        if [ "${#c1}" -ge 7 ] && [ "${#c2}" -ge 7 ]; then
+            p1=$(printf '%s' "$c1" | cut -c1-7)
+            p2=$(printf '%s' "$c2" | cut -c1-7)
+            [ "$p1" = "$p2" ] && return 0
+        fi
     fi
     return 1
 }
 
 extract_json_field() {
+    # 1. Try jq if installed and executable
     if which jq >/dev/null 2>&1 || [ -x /usr/bin/jq ]; then
         res=$(printf '%s' "$1" | jq -c "$2" 2>/dev/null)
         [ -n "$res" ] && [ "$res" != "null" ] && { printf '%s' "$res"; return 0; }
+    fi
+    # 2. Try unifi-bridge binary -extract-json helper if available
+    field_name="${2#\.}"
+    field_name="${field_name%% *}"
+    field_name="${field_name%%\/\/*}"
+    bridge_bin="/jffs/addons/unifi-bridge/unifi-bridge"
+    if [ ! -x "$bridge_bin" ]; then
+        bridge_bin=$(which unifi-bridge 2>/dev/null || true)
+    fi
+    if [ -x "$bridge_bin" ] && [ -n "$field_name" ]; then
+        res=$(printf '%s' "$1" | "$bridge_bin" -extract-json "$field_name" 2>/dev/null)
+        [ -n "$res" ] && [ "$res" != "null" ] && { printf '%s' "$res"; return 0; }
+    fi
+    # 3. If neither parser is available, distinguish missing parser from empty data
+    if [ -n "$1" ] && [ "$1" != "{}" ]; then
+        # Input has content but couldn't be parsed
+        printf '%s' "$3"
+        return 0
     fi
     printf '%s' "$3"
 }
@@ -279,9 +302,11 @@ main_raw_json=$(sed -e '1s/^[^{]*{/{/' -e '$s/};[[:space:]]*$/}/' "$main_status_
 main_ports=$(extract_json_field "$main_raw_json" '.ports // []' '[]')
 main_radios=$(extract_json_field "$main_raw_json" '.radio_stats // []' '[]')
 main_system=$(extract_json_field "$main_raw_json" '.system_stats // {}' '{}')
+main_stage_errors=$(extract_json_field "$main_raw_json" '.sample_stage_errors // {}' '{}')
 [ -n "$main_ports" ] || main_ports="[]"
 [ -n "$main_radios" ] || main_radios="[]"
 [ -n "$main_system" ] || main_system="{}"
+[ -n "$main_stage_errors" ] || main_stage_errors="{}"
 
 # Initialize JSON output
 main_version_json=$(json_escape "$main_version")
@@ -328,7 +353,8 @@ nodes_json="${nodes_json}
       \"sync_status\": \"Local\",
       \"ports\": ${main_ports},
       \"radio_stats\": ${main_radios},
-      \"system_stats\": ${main_system}
+      \"system_stats\": ${main_system},
+      \"stage_errors\": ${main_stage_errors}
     }"
 
 # 2. Iterate Satellite Nodes
@@ -346,6 +372,7 @@ for node_ip in $NODE_IPS; do
     node_ports="[]"
     node_radios="[]"
     node_system="{}"
+    node_stage_errors="{}"
     node_updated=""
     node_inform=""
     node_freshness="unknown"
@@ -490,9 +517,11 @@ REMOTE
             node_ports=$(extract_json_field "$node_raw_json" '.ports // []' '[]')
             node_radios=$(extract_json_field "$node_raw_json" '.radio_stats // []' '[]')
             node_system=$(extract_json_field "$node_raw_json" '.system_stats // {}' '{}')
+            node_stage_errors=$(extract_json_field "$node_raw_json" '.sample_stage_errors // {}' '{}')
             [ -n "$node_ports" ] || node_ports="[]"
             [ -n "$node_radios" ] || node_radios="[]"
             [ -n "$node_system" ] || node_system="{}"
+            [ -n "$node_stage_errors" ] || node_stage_errors="{}"
             if [ "$ACTION" = "update" ]; then
                 node_stage="verification_pending"
                 if [ "$remote_operation_id" = "$OPERATION_ID" ] && [ "$remote_operation_name" = "update" ] && [ "$remote_operation_status" = "FAILED" ]; then
@@ -603,7 +632,8 @@ REMOTE
       \"sync_status\": \"${sync_status_json}\",
       \"ports\": ${node_ports},
       \"radio_stats\": ${node_radios},
-      \"system_stats\": ${node_system}
+      \"system_stats\": ${node_system},
+      \"stage_errors\": ${node_stage_errors}
     }"
 done
 

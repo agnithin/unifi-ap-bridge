@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -158,9 +160,11 @@ func updateWebUIStatus(host *providers.HostInfo, modelProfile models.ModelProfil
 			"last_result":      health.CommandResult,
 			"observed_at":      health.CommandObservedAt,
 		},
-		"status_updated_at": time.Now().Unix(),
-		"sample_fresh":      sampleFresh,
-		"sample_updated_at": sampleCompletedAt.Unix(),
+		"status_updated_at":  time.Now().Unix(),
+		"sample_fresh":       sampleFresh,
+		"sample_updated_at":  sampleCompletedAt.Unix(),
+		"pending_state_save": health.PendingStateSave,
+		"state_save_error":   health.StateSaveError,
 		"sample_age_sec": func() int64 {
 			if sampleCompletedAt.IsZero() {
 				return -1
@@ -228,12 +232,38 @@ func main() {
 	packetCaptureAllowed := flag.Bool("allow-packet-capture", false, "Explicitly allow a short private LAN packet capture")
 
 	dumpFlag := flag.Bool("dump", false, "Dump rendered inform JSON payload to stdout")
+	extractJSONFlag := flag.String("extract-json", "", "Extract a JSON field from stdin and print to stdout")
 	versionFlag := flag.Bool("version", false, "Print version information and exit")
 	flag.BoolVar(versionFlag, "v", false, "Print version information and exit (shorthand)")
 	flag.Parse()
 
 	if *versionFlag {
 		fmt.Printf("unifi-bridge %s (commit: %s, built: %s)\n", version, commit, buildDate)
+		return
+	}
+
+	if *extractJSONFlag != "" {
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			os.Exit(1)
+		}
+		str := strings.TrimSpace(string(data))
+		if idx := strings.IndexByte(str, '{'); idx >= 0 {
+			str = str[idx:]
+		}
+		if idx := strings.LastIndexByte(str, '}'); idx >= 0 {
+			str = str[:idx+1]
+		}
+		var obj map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(str), &obj); err != nil {
+			os.Exit(1)
+		}
+		raw, ok := obj[*extractJSONFlag]
+		if !ok || len(raw) == 0 || string(raw) == "null" {
+			os.Exit(2)
+		}
+		os.Stdout.Write(raw)
+		os.Stdout.WriteString("\n")
 		return
 	}
 
@@ -439,7 +469,8 @@ func main() {
 		telemetry.AssignRadioStationCounts(radioStats, vaps)
 		telemetry.AttachVAPClientSignals(vaps)
 		telemetry.AttachRadioDriverStats(radios, radioStats)
-		stationTimeline.Observe(vaps, sample.CompletedAt, true)
+		stationSampleComplete := sample.StageErrors == nil || sample.StageErrors["stations"] == ""
+		stationTimeline.Observe(vaps, sample.CompletedAt, stationSampleComplete)
 		health.StationEvents = stationTimeline.Events()
 		_, radioFailed := sample.StageErrors["radio_stats"]
 		rfHistory.Observe(sample.CompletedAt, radioStats, !radioFailed)
@@ -564,11 +595,19 @@ func main() {
 			return fmt.Errorf("failed to apply controller response: %w", err)
 		}
 		if changed {
-			if err := stateMgr.Save(); err != nil {
-				logEvent("[unifi-bridge] Warning: failed to save state: %v", err)
-			}
+			health.PendingStateSave = true
 			logEvent("[unifi-bridge] Adoption state updated: adopted=%v, mode=%s",
 				stateMgr.IsAdopted(), stateMgr.GetMode())
+		}
+		if health.PendingStateSave {
+			if err := stateMgr.Save(); err != nil {
+				health.StateSaveError = err.Error()
+				logEvent("[unifi-bridge] Warning: failed to save adoption state (will retry): %v", err)
+			} else {
+				health.PendingStateSave = false
+				health.StateSaveError = ""
+				logEvent("[unifi-bridge] Adoption state persisted to disk")
+			}
 		}
 
 		health.LastSuccess = time.Now()

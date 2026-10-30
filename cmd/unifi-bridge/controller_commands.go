@@ -50,6 +50,7 @@ func startPlatformReboot() error {
 type platformLocateController struct {
 	mu         sync.Mutex
 	cancel     context.CancelFunc
+	done       chan struct{}
 	ledPath    string
 	origBright string
 	period     time.Duration
@@ -83,10 +84,15 @@ func (c *platformLocateController) Execute(active bool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Stop any active locate blinking
-	if c.cancel != nil {
-		c.cancel()
-		c.cancel = nil
+	// Check if previous worker finished on its own (e.g. natural timeout)
+	if c.done != nil {
+		select {
+		case <-c.done:
+			c.cancel = nil
+			c.done = nil
+			c.origBright = ""
+		default:
+		}
 	}
 
 	path := c.findLEDPath()
@@ -96,7 +102,14 @@ func (c *platformLocateController) Execute(active bool) error {
 	}
 
 	if !active {
-		// Restore original brightness if we had saved one
+		if c.cancel != nil {
+			c.cancel()
+			if c.done != nil {
+				<-c.done
+			}
+			c.cancel = nil
+			c.done = nil
+		}
 		if c.origBright != "" {
 			_ = os.WriteFile(path, []byte(c.origBright+"\n"), 0o644)
 			c.origBright = ""
@@ -104,15 +117,27 @@ func (c *platformLocateController) Execute(active bool) error {
 		return nil
 	}
 
-	// Read and save original brightness before blinking
-	orig := "255"
-	if data, err := os.ReadFile(path); err == nil {
-		val := strings.TrimSpace(string(data))
-		if val != "" {
-			orig = val
+	// If locate is already active, stop the prior worker but preserve origBright
+	if c.cancel != nil {
+		c.cancel()
+		if c.done != nil {
+			<-c.done
 		}
+		c.cancel = nil
+		c.done = nil
 	}
-	c.origBright = orig
+
+	// Read and save original brightness before blinking if not already preserved
+	if c.origBright == "" {
+		orig := "255"
+		if data, err := os.ReadFile(path); err == nil {
+			val := strings.TrimSpace(string(data))
+			if val != "" {
+				orig = val
+			}
+		}
+		c.origBright = orig
+	}
 
 	timeout := c.timeout
 	if timeout <= 0 {
@@ -126,12 +151,16 @@ func (c *platformLocateController) Execute(active bool) error {
 		period = 250 * time.Millisecond
 	}
 
-	go func(ctx context.Context, ledPath, origVal string, d time.Duration) {
-		ticker := time.NewTicker(d)
-		defer ticker.Stop()
+	done := make(chan struct{})
+	c.done = done
+
+	go func(ctx context.Context, ledPath, origVal string, d time.Duration, done chan struct{}) {
+		defer close(done)
 		defer func() {
 			_ = os.WriteFile(ledPath, []byte(origVal+"\n"), 0o644)
 		}()
+		ticker := time.NewTicker(d)
+		defer ticker.Stop()
 		state := false
 		for {
 			select {
@@ -149,7 +178,7 @@ func (c *platformLocateController) Execute(active bool) error {
 				_ = os.WriteFile(ledPath, []byte(target), 0o644)
 			}
 		}
-	}(ctx, path, orig, period)
+	}(ctx, path, c.origBright, period, done)
 
 	return nil
 }

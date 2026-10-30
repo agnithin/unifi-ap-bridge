@@ -1182,3 +1182,32 @@ func TestGetStations_SkipsDepartedStation(t *testing.T) {
 		t.Fatalf("expected surviving station 16:ae:f6:a7:ee:2b, got %s", stations[0].MAC)
 	}
 }
+
+func TestGetStations_RetainsStationOnGenericDetailError(t *testing.T) {
+	mockRunner := func(ctx context.Context, name string, args ...string) (string, error) {
+		full := name + " " + strings.Join(args, " ")
+		switch {
+		case strings.Contains(full, "wl -i eth6 assoclist"):
+			return "assoclist 16:ae:f6:a7:ee:2b 16:ae:f6:a7:ee:2c", nil
+		case strings.Contains(full, "wl -i eth6 sta_info 16:ae:f6:a7:ee:2b"):
+			return "flags: 0x1\nrates: 1201 Mbps (11ax 80MHz 2ss)\nrssi: -71\nnoise: -90\ntx ucast bytes: 1048576\nrx ucast bytes: 524288\ntx ucast pkts: 1000\nrx ucast pkts: 500", nil
+		case strings.Contains(full, "wl -i eth6 sta_info 16:ae:f6:a7:ee:2c"):
+			// Generic driver timeout or failure, NOT recognized departure
+			return "", errors.New("driver read timeout")
+		default:
+			return "", nil
+		}
+	}
+
+	provider := NewAsusProvider(mockRunner)
+	stations, err := provider.getStationsForIfaceContext(context.Background(), "eth6", "eth6", "00:11:22:33:44:57", "TestSSID", 161, "5g")
+	if err != nil {
+		t.Fatalf("getStationsForIfaceContext should succeed: %v", err)
+	}
+	if len(stations) != 2 {
+		t.Fatalf("expected 2 stations (none dropped on generic error), got %d", len(stations))
+	}
+	if !provider.isStationSampleIncomplete() {
+		t.Fatalf("expected sample to be marked incomplete due to sta_info failure")
+	}
+}

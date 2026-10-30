@@ -495,8 +495,15 @@ function updateDiagnosticsUI(st) {
       for (var sn = 0; sn < lastClusterData.nodes.length; sn++) {
         var nd = lastClusterData.nodes[sn];
         if (nd.role && nd.role.indexOf("Main") !== -1) continue;
-        if (!nd.radio_stats || !nd.radio_stats.length) continue;
-        var nodePrefix = (nd.name ? nd.name.replace(/^ZenWiFi_XT8-/, "Node ") : "Node") + " · ";
+        var isNodeFresh = nd.freshness === "fresh";
+        var staleSuffix = isNodeFresh ? "" : " (Stale)";
+        var nodePrefix = (nd.name ? nd.name.replace(/^ZenWiFi_XT8-/, "Node ") : "Node") + staleSuffix + " · ";
+        if (!nd.radio_stats || !nd.radio_stats.length) {
+          if (nd.stage_errors && nd.stage_errors.radio_stats) {
+            appendDiagnosticRow(radioBody, [diagnosticCellText(nodePrefix + "RF unavailable (" + nd.stage_errors.radio_stats + ")")]);
+          }
+          continue;
+        }
         for (var nr = 0; nr < nd.radio_stats.length; nr++) {
           var nRadio = nd.radio_stats[nr] || {};
           appendDiagnosticRow(radioBody, [diagnosticCellText(nodePrefix + (nRadio.name || "")), diagnosticNumber(nRadio.channel, ""),
@@ -686,8 +693,18 @@ function renderUnifiedPortsTable(cl, st) {
   for (var i = 0; i < nodes.length; i++) {
     var nd = nodes[i];
     var isMain = nd.role && nd.role.indexOf("Main") !== -1;
-    var apLabel = escapeHTML(nd.name) + (isMain ? ' <span style="font-size:10px; color:#f1c40f;">(Main)</span>' : ' <span style="font-size:10px; color:#3498db;">(Node)</span>');
+    var isFresh = nd.freshness ? (nd.freshness === "fresh") : (st ? st.sample_fresh !== false : true);
+    var staleBadge = isFresh ? "" : ' <span style="font-size:10px; color:#e67e22;">(Stale)</span>';
+    var apLabel = escapeHTML(nd.name) + (isMain ? ' <span style="font-size:10px; color:#f1c40f;">(Main)</span>' : ' <span style="font-size:10px; color:#3498db;">(Node)</span>') + staleBadge;
+    var rowStyle = isFresh ? 'border-bottom:1px solid #3e4d66;' : 'border-bottom:1px solid #3e4d66; opacity:0.65;';
     var ports = nd.ports || [];
+    if (ports.length === 0) {
+      var emptyMsg = (nd.stage_errors && nd.stage_errors.ports) ? ("Port telemetry unavailable (" + escapeHTML(nd.stage_errors.ports) + ")") : "No port telemetry available";
+      html += '<tr style="' + rowStyle + '">';
+      html += '<td class="settingvalue" style="font-weight:bold; color:#fff;">' + apLabel + '</td>';
+      html += '<td colspan="6" class="settingvalue" style="color:#e67e22; font-style:italic;">' + emptyMsg + '</td>';
+      html += '</tr>';
+    }
     for (var p = 0; p < ports.length; p++) {
       var pt = ports[p] || {};
       var isUp = pt.up === true;
@@ -721,7 +738,7 @@ function renderUnifiedPortsTable(cl, st) {
       var txFormatted = formatBytes(pt.tx_bytes);
       var trafficStr = isUp ? (rxFormatted + " / " + txFormatted) : "-";
 
-      html += '<tr style="border-bottom:1px solid #3e4d66;">';
+      html += '<tr style="' + rowStyle + '">';
       html += '<td class="settingvalue" style="font-weight:bold; color:#fff;">' + apLabel + '</td>';
       html += '<td class="settingvalue" style="font-weight:bold; color:#ecf0f1;">' + escapeHTML(pName) + '</td>';
       html += '<td class="settingvalue" style="color:#bdc3c7;"><code>' + escapeHTML(pt.ifname || "") + '</code></td>';

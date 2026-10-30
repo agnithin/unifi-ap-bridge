@@ -119,37 +119,142 @@ func TestControllerLocateExecution(t *testing.T) {
 }
 
 func TestPlatformLocateController(t *testing.T) {
-	tmpDir := t.TempDir()
-	ledFile := filepath.Join(tmpDir, "brightness")
-	if err := os.WriteFile(ledFile, []byte("255\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	t.Run("basic start stop", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		ledFile := filepath.Join(tmpDir, "brightness")
+		if err := os.WriteFile(ledFile, []byte("255\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 
-	ctrl := &platformLocateController{
-		ledPath: ledFile,
-		period:  10 * time.Millisecond,
-		timeout: 80 * time.Millisecond,
-	}
+		ctrl := &platformLocateController{
+			ledPath: ledFile,
+			period:  10 * time.Millisecond,
+			timeout: 80 * time.Millisecond,
+		}
 
-	// Start locate
-	if err := ctrl.Execute(true); err != nil {
-		t.Fatalf("Execute(true) failed: %v", err)
-	}
+		// Start locate
+		if err := ctrl.Execute(true); err != nil {
+			t.Fatalf("Execute(true) failed: %v", err)
+		}
 
-	// Allow several blinks
-	time.Sleep(35 * time.Millisecond)
+		// Allow several blinks
+		time.Sleep(35 * time.Millisecond)
 
-	// Stop locate
-	if err := ctrl.Execute(false); err != nil {
-		t.Fatalf("Execute(false) failed: %v", err)
-	}
+		// Stop locate
+		if err := ctrl.Execute(false); err != nil {
+			t.Fatalf("Execute(false) failed: %v", err)
+		}
 
-	// Verify brightness is restored to 255
-	data, err := os.ReadFile(ledFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != "255\n" {
-		t.Fatalf("expected brightness 255\\n, got %q", string(data))
-	}
+		// Verify brightness is restored to 255
+		data, err := os.ReadFile(ledFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != "255\n" {
+			t.Fatalf("expected brightness 255\\n, got %q", string(data))
+		}
+	})
+
+	t.Run("repeated start then stop preserves original brightness", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		ledFile := filepath.Join(tmpDir, "brightness")
+		if err := os.WriteFile(ledFile, []byte("255\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		ctrl := &platformLocateController{
+			ledPath: ledFile,
+			period:  10 * time.Millisecond,
+			timeout: 100 * time.Millisecond,
+		}
+
+		if err := ctrl.Execute(true); err != nil {
+			t.Fatalf("Execute(true) failed: %v", err)
+		}
+		time.Sleep(15 * time.Millisecond) // mid-blink
+
+		// Second start while active
+		if err := ctrl.Execute(true); err != nil {
+			t.Fatalf("second Execute(true) failed: %v", err)
+		}
+		time.Sleep(15 * time.Millisecond)
+
+		// Stop
+		if err := ctrl.Execute(false); err != nil {
+			t.Fatalf("Execute(false) failed: %v", err)
+		}
+
+		data, err := os.ReadFile(ledFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != "255\n" {
+			t.Fatalf("expected brightness 255\\n, got %q", string(data))
+		}
+	})
+
+	t.Run("natural timeout restores brightness", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		ledFile := filepath.Join(tmpDir, "brightness")
+		if err := os.WriteFile(ledFile, []byte("180\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		ctrl := &platformLocateController{
+			ledPath: ledFile,
+			period:  10 * time.Millisecond,
+			timeout: 40 * time.Millisecond,
+		}
+
+		if err := ctrl.Execute(true); err != nil {
+			t.Fatalf("Execute(true) failed: %v", err)
+		}
+
+		// Wait for timeout to expire and defer to run
+		time.Sleep(60 * time.Millisecond)
+
+		data, err := os.ReadFile(ledFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != "180\n" {
+			t.Fatalf("expected brightness 180\\n, got %q", string(data))
+		}
+
+		// Subsequent stop should be clean no-op
+		if err := ctrl.Execute(false); err != nil {
+			t.Fatalf("Execute(false) after timeout failed: %v", err)
+		}
+	})
+
+	t.Run("initially off LED restores to off", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		ledFile := filepath.Join(tmpDir, "brightness")
+		if err := os.WriteFile(ledFile, []byte("0\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		ctrl := &platformLocateController{
+			ledPath: ledFile,
+			period:  10 * time.Millisecond,
+			timeout: 80 * time.Millisecond,
+		}
+
+		if err := ctrl.Execute(true); err != nil {
+			t.Fatalf("Execute(true) failed: %v", err)
+		}
+		time.Sleep(25 * time.Millisecond)
+
+		if err := ctrl.Execute(false); err != nil {
+			t.Fatalf("Execute(false) failed: %v", err)
+		}
+
+		data, err := os.ReadFile(ledFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != "0\n" {
+			t.Fatalf("expected brightness 0\\n, got %q", string(data))
+		}
+	})
 }

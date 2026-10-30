@@ -60,3 +60,90 @@ func TestConfigNormalizesInvalidInterval(t *testing.T) {
 		}
 	}
 }
+
+func TestAdoptionSaveRetryOnTransientFailure(t *testing.T) {
+	tmpDir := t.TempDir()
+	// Create a state path inside a read-only directory to simulate transient storage failure
+	readOnlyDir := filepath.Join(tmpDir, "ro_dir")
+	if err := os.Mkdir(readOnlyDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(readOnlyDir, "state.json")
+
+	stateMgr, err := inform.NewStateManager(statePath, "00:11:22:33:44:55")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	health := &exchangeHealth{}
+
+	// Controller sends an adoption response that changes state
+	setDefPayload := map[string]any{
+		"_type":    "setparam",
+		"mgmt_cfg": "authkey=0123456789abcdef0123456789abcdef\ncfgversion=a1b2c3d4e5f6\nuse_aes_gcm=true\n",
+	}
+
+	changed, err := stateMgr.ApplyControllerResponse(setDefPayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("expected state change")
+	}
+
+	if changed {
+		health.PendingStateSave = true
+	}
+
+	// First attempt to save fails because directory is read-only
+	if health.PendingStateSave {
+		if err := stateMgr.Save(); err != nil {
+			health.StateSaveError = err.Error()
+		} else {
+			health.PendingStateSave = false
+			health.StateSaveError = ""
+		}
+	}
+
+	if !health.PendingStateSave || health.StateSaveError == "" {
+		t.Fatalf("expected pending state save with error, got pending=%v err=%q", health.PendingStateSave, health.StateSaveError)
+	}
+
+	// Subsequent heartbeat receives a noop response (changed == false)
+	noopPayload := map[string]any{"_type": "noop"}
+	changed2, err := stateMgr.ApplyControllerResponse(noopPayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed2 {
+		t.Fatal("noop response should not change state")
+	}
+
+	// Restore write permissions to simulate restored storage
+	if err := os.Chmod(readOnlyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Retry occurs because PendingStateSave is true even though changed2 is false
+	if health.PendingStateSave {
+		if err := stateMgr.Save(); err != nil {
+			health.StateSaveError = err.Error()
+		} else {
+			health.PendingStateSave = false
+			health.StateSaveError = ""
+		}
+	}
+
+	if health.PendingStateSave || health.StateSaveError != "" {
+		t.Fatalf("expected state save to succeed on retry, got pending=%v err=%q", health.PendingStateSave, health.StateSaveError)
+	}
+
+	// Verify state file was actually written with the adopted auth key
+	savedMgr, err := inform.NewStateManager(statePath, "00:11:22:33:44:55")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !savedMgr.IsAdopted() {
+		t.Fatal("persisted state was not marked adopted")
+	}
+}

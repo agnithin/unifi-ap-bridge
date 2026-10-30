@@ -30,8 +30,11 @@ jobs:
 
       - name: Verify daemon and cluster behavior
         run: |
+          go vet ./...
+          go test -race ./cmd/unifi-bridge
           go test ./...
           python3 scripts/test_sync_nodes.py
+          python3 scripts/test_watchdog.py
           python3 scripts/test_update_backend.py
           python3 scripts/test_update_apply.py
           python3 scripts/test_startup.py

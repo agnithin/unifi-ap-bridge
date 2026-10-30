@@ -104,6 +104,8 @@ type AsusProvider struct {
 	readFile          func(string) ([]byte, error)
 	readDir           func(string) ([]os.DirEntry, error)
 	parentCache       *verifiedParent
+	staIncompleteMu   sync.Mutex
+	stationIncomplete bool
 }
 
 type verifiedParent struct {
@@ -149,7 +151,28 @@ func NewAsusProviderWithOptions(runner CmdRunner, options AsusProviderOptions) *
 	return &AsusProvider{runner: runner, compactRadioNames: options.CompactRadioNames, expectedUplinkMAC: expectedUplinkMAC, staticCache: make(map[string]staticCacheEntry), retryBaselines: make(map[string]retryCounterBaseline), vapCounterState: newVAPCounterTracker(), now: time.Now, readFile: os.ReadFile, readDir: os.ReadDir}
 }
 
+func (p *AsusProvider) markStationIncomplete(iface, mac string) {
+	p.staIncompleteMu.Lock()
+	defer p.staIncompleteMu.Unlock()
+	p.stationIncomplete = true
+}
+
+func (p *AsusProvider) isStationSampleIncomplete() bool {
+	p.staIncompleteMu.Lock()
+	defer p.staIncompleteMu.Unlock()
+	return p.stationIncomplete
+}
+
+func (p *AsusProvider) resetStationSampleIncomplete() bool {
+	p.staIncompleteMu.Lock()
+	defer p.staIncompleteMu.Unlock()
+	val := p.stationIncomplete
+	p.stationIncomplete = false
+	return val
+}
+
 func (p *AsusProvider) Collect(ctx context.Context, mapping map[string]string) (*providers.Sample, error) {
+	p.resetStationSampleIncomplete()
 	ctx = context.WithValue(ctx, sampleCommandCacheKey{}, &sampleCommandCache{results: make(map[string]commandResult)})
 	ctx = context.WithValue(ctx, sampleFileCacheKey{}, &sampleFileCache{values: make(map[string][]byte), errors: make(map[string]error)})
 	ctx = context.WithValue(ctx, sampleParentCacheKey{}, &sampleParentCache{})
@@ -172,6 +195,9 @@ func (p *AsusProvider) Collect(ctx context.Context, mapping map[string]string) (
 	p.applyRetryInterval(vaps, started)
 	p.vapCounterState.Observe(vaps, started)
 	sample := &providers.Sample{Radios: radios, VAPs: vaps, StartedAt: started, StageErrors: make(map[string]string)}
+	if p.resetStationSampleIncomplete() {
+		sample.StageErrors["stations"] = "incomplete station details"
+	}
 	setStageError := func(stage string, err error) error {
 		if err == nil {
 			return nil
@@ -676,6 +702,21 @@ func (p *AsusProvider) getStationsForIface(iface, vapName, bssid, ssid string, c
 	return stations
 }
 
+func isStationDepartedOutput(err error, output string) bool {
+	var msg string
+	if err != nil {
+		msg = strings.ToLower(err.Error())
+	}
+	out := strings.ToLower(output)
+	return strings.Contains(msg, "bad address") ||
+		strings.Contains(msg, "not associated") ||
+		strings.Contains(msg, "not found") ||
+		strings.Contains(msg, "no such device") ||
+		strings.Contains(out, "bad address") ||
+		strings.Contains(out, "not associated") ||
+		strings.Contains(out, "not found")
+}
+
 func (p *AsusProvider) getStationsForIfaceContext(ctx context.Context, iface, vapName, bssid, ssid string, channel int, band string) ([]telemetry.Station, error) {
 	stations := []telemetry.Station{}
 	assocRaw, err := p.wlCmdContext(ctx, iface, "assoclist")
@@ -686,19 +727,17 @@ func (p *AsusProvider) getStationsForIfaceContext(ctx context.Context, iface, va
 		return stations, nil
 	}
 
-	lines := strings.Split(assocRaw, "\n")
-
-	for _, line := range lines {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		fields := strings.Fields(line)
-		if len(fields) == 0 {
+	rawMACs := []string{}
+	for _, field := range strings.Fields(assocRaw) {
+		if field == "assoclist" {
 			continue
 		}
-		rawMAC := fields[0]
-		if len(fields) >= 2 && fields[0] == "assoclist" {
-			rawMAC = fields[1]
+		rawMACs = append(rawMACs, field)
+	}
+
+	for _, rawMAC := range rawMACs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 
 		normMAC, err := inform.NormalizeMAC(rawMAC)
@@ -719,14 +758,26 @@ func (p *AsusProvider) getStationsForIfaceContext(ctx context.Context, iface, va
 
 		// Enrich with sta_info (RSSI, generation, rates)
 		infoRaw, err := p.wlCmdContext(ctx, iface, "sta_info", rawMAC)
-		if err != nil {
+		if err != nil || len(infoRaw) == 0 {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
-			// Station disconnected or roamed between assoclist and sta_info read.
-			continue
-		}
-		if len(infoRaw) == 0 {
+			// Check if the driver explicitly indicates client is no longer associated
+			if isStationDepartedOutput(err, infoRaw) {
+				// Client departed between assoclist and sta_info read.
+				continue
+			}
+			// Bounded recheck: confirm if client is still in assoclist
+			recheckRaw, recheckErr := p.wlCmdContext(ctx, iface, "assoclist")
+			if recheckErr == nil && !strings.Contains(recheckRaw, rawMAC) {
+				// Confirmed departed on assoclist recheck
+				continue
+			}
+			// Station is still associated or driver command had a generic failure/timeout.
+			// Retain station in sample to prevent false disconnect/departure events,
+			// but mark station sample as incomplete.
+			p.markStationIncomplete(iface, rawMAC)
+			stations = append(stations, sta)
 			continue
 		}
 		parsed := ParseStaInfo(infoRaw, band)

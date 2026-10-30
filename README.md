@@ -1,6 +1,6 @@
 # unifi-ap-bridge
 
-> **Current delivery status — 2026-10-27 PDT:** Both APs are running `edfdca5` with compact radio naming and Broadcom CCA diagnostics (v1.2.5 dev). Changed-settings/cluster save, Mac-only WLAN cache refresh and one real Main UniFi reboot passed. Three physical radios report20/40/80 MHz; the stale Auto row is resolved. Native radio utilization now reaches UniFi; bounded LAN packet capture passed a Main self-test. AirView now shows measured signal, airtime and retry averages for 2.4 GHz/lower 5 GHz. Upper 5 GHz AirView traffic/signal history is verified on both APs; interference and Locate remain pending. See [current audit state](docs/AUDIT_STATE.md).
+> **Current delivery status — 2026-10-29 PDT:** Both APs are deployed on `d9b6674` (v1.2.8 dev) with compact radio naming, Broadcom CCA interference diagnostics, unified ports/RF WebUI, and verified GCM adoption. Current `dev` development cycle focuses on release reliability and truthfulness: deterministic Locate LED synchronization, truthful station departure handling, jq-independent status extraction, and adoption persistence retry. See [current audit state](docs/AUDIT_STATE.md) and [audit review](docs/audit/2026-10-29-unifi-ap-bridge-homelab-review.md).
 
 A high-performance, ultra-lightweight standalone daemon and WebUI addon for **Asuswrt-Merlin** and Linux routers that bridges Broadcom Wi-Fi and switch telemetry into the **Ubiquiti UniFi Inform Protocol** (`:8080/inform`).
 
@@ -10,13 +10,9 @@ It emulates a genuine UniFi 6 Access Point—featuring native **UniFi 6 In-Wall 
 
 ## Current deployment
 
-Both APs run `edfdca5`, version `1.2.5 dev`, with `compact_radio_names: true`. Fresh GCM, the installed RF page and CCA status values were verified after sequential updates; signed-in Main browser rendering was subsequently verified. Each underwent a separate controlled forget/re-adoption for the radio identity migration. Protected config/key/cache, fresh GCM, watchdogs and clean transactions were verified; previous adoption states are retained privately. Main completed one real UniFi-triggered reboot and recovered its configuration, WLAN cache and daemon automatically. Reboot handling is enabled on both APs; Node's router was not rebooted for this test.
+Both APs run `d9b6674`, version `1.2.8 dev`, with `compact_radio_names: true`. Fresh GCM, the installed RF page, unified ports, and CCA status values are verified. Protected config/key/cache, fresh GCM, watchdogs and clean transactions are active; adoption states are retained privately. Both APs report channels 6/36/161 at 20/40/80 MHz and the correct gateway ports. Locate LED synchronization is supported with deterministic worker completion.
 
-Both APs report channels6/36/161 at20/40/80 MHz and the correct gateway ports. Main's extra Auto radio is gone after operator re-adoption. Passive scan retrieval passed, with driver result freshness explicitly unknown. Host tools correlate natural AP departure/arrival observations without claiming precise roaming latency. WLAN mapping refresh runs on demand from the Mac and both private caches are active; the explicit SSID option passed an end-to-end refresh. No new CT107 administrative access or timer is needed.
-
-Asus diagnostics, unchanged saves and changed-save/cluster propagation passed. Locate is observation-only pending a reliable firmware LED restoration contract; bounded LAN packet capture is implemented and self-tested on Main. AirView signal, airtime and retry display is accepted for 2.4 GHz/lower 5 GHz, and upper 5 GHz traffic and signal history is verified on both APs. UniFi interference remains unavailable.
-
-See [audit state](docs/AUDIT_STATE.md) and [architecture](docs/ARCHITECTURE.md).
+See [audit state](docs/AUDIT_STATE.md), [audit review](docs/audit/2026-10-29-unifi-ap-bridge-homelab-review.md), and [architecture](docs/ARCHITECTURE.md).
 
 ### v1.2.4 update-check fix
 

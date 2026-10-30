@@ -702,15 +702,26 @@ cmd_apply() {
     if [ "$branch" = "dev" ]; then
         if [ -n "$exact_commit" ]; then
             resolved_commit="$exact_commit"
+            release_tag="dev-${resolved_commit}"
         else
-            resolved_commit=$(curl -fsSL --connect-timeout 8 --max-time 20 \
+            # Prefer the newest successfully published immutable dev release
+            release_tag=$(curl -fsSL --connect-timeout 8 --max-time 20 \
                 -H 'Accept: application/vnd.github+json' \
-                'https://api.github.com/repos/agnithin/unifi-ap-bridge/commits/dev' 2>/dev/null |
-                awk -F'"' '/"sha"[[:space:]]*:/ { print $4; exit }')
+                'https://api.github.com/repos/agnithin/unifi-ap-bridge/releases?per_page=10' 2>/dev/null |
+                sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\(dev-[0-9a-f]\{40\}\)".*/\1/p' | head -n 1)
+            if [ -n "$release_tag" ]; then
+                resolved_commit="${release_tag#dev-}"
+            else
+                # Fallback to dev branch HEAD if release listing is unavailable
+                resolved_commit=$(curl -fsSL --connect-timeout 8 --max-time 20 \
+                    -H 'Accept: application/vnd.github+json' \
+                    'https://api.github.com/repos/agnithin/unifi-ap-bridge/commits/dev' 2>/dev/null |
+                    awk -F'"' '/"sha"[[:space:]]*:/ { print $4; exit }')
+                release_tag="dev-${resolved_commit}"
+            fi
         fi
         case "$resolved_commit" in *[!0-9a-f]*|'') resolved_commit="" ;; esac
         [ "${#resolved_commit}" -eq 40 ] || resolved_commit=""
-        release_tag="dev-${resolved_commit}"
         expected_version=$(curl -fsSL --connect-timeout 8 --max-time 20 \
             "${REPO_RAW}/${resolved_commit}/version.txt" 2>/dev/null | tr -d ' \t\r\n')
     else

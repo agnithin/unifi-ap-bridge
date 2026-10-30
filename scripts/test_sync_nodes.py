@@ -257,5 +257,21 @@ printf '%s %s\n' "$host" "$key" >> "$KNOWN_HOSTS_FIXTURE"
             res = subprocess.run(["sh", "-c", func + '\nversion_cmp "$1" "$2"', "test", v1, v2])
             self.assertEqual(res.returncode, expected, f"Failed comparing {v1} and {v2}")
 
+    def test_commits_match(self):
+        func = SOURCE[SOURCE.index("commits_match() {"):SOURCE.index("extract_json_field() {")]
+        cases = [
+            ("5cd9ce9a49da99a43a2183595a41d852b279e0a6", "5cd9ce9a49da99a43a2183595a41d852b279e0a6", 0),
+            ("5cd9ce9a49da99a43a2183595a41d852b279e0a6", "5cd9ce9fffffffffffffffffffffffffffffffff", 1),
+            ("5cd9ce9", "5cd9ce9a49da99a43a2183595a41d852b279e0a6", 0),
+            ("5cd9ce9a49da99a43a2183595a41d852b279e0a6", "5cd9ce9", 0),
+            ("5cd9ce9", "5cd9ce8", 1),
+            ("abc", "abc", 0),
+            ("abc", "abcdefg", 1),
+            ("", "5cd9ce9", 1),
+        ]
+        for c1, c2, expected in cases:
+            res = subprocess.run(["sh", "-c", func + '\ncommits_match "$1" "$2"', "test", c1, c2])
+            self.assertEqual(res.returncode, expected, f"Failed commits_match '{c1}' and '{c2}': expected {expected}, got {res.returncode}")
+
 if __name__ == "__main__":
     unittest.main()

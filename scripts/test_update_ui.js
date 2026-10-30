@@ -114,6 +114,11 @@ assert.ok(node('cluster_ports_tbody').innerHTML.includes('Main'));
 assert.ok(node('cluster_ports_tbody').innerHTML.includes('Node'));
 assert.ok(node('cluster_ports_tbody').innerHTML.includes('VLAN 20'));
 assert.ok(node('cluster_ports_tbody').innerHTML.includes('10:2c:b1:73:3d:00'));
+context.updateClusterUI({nodes:[
+  {name:'Node',role:'Satellite Node',status:'RUNNING',running:true,freshness:'stale',sync_status:'In Sync',ports:[]}
+]});
+assert.ok(node('cluster_ports_tbody').innerHTML.includes('(Stale)'));
+assert.ok(node('cluster_ports_tbody').innerHTML.includes('No port telemetry available'));
 context.updateClusterUI({nodes:[{name:'Main',role:'Main',status:'RUNNING',running:true,freshness:'stale',sync_status:'Local'}]});
 assert.equal(node('cluster_sync_badge').textContent,'CONFIGURATION UNVERIFIED','stale Main health must not be labeled healthy');
 context.updateClusterUI({nodes:[]});

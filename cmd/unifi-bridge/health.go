@@ -17,6 +17,8 @@ type exchangeHealth struct {
 	CommandObservation *inform.CommandObservation
 	CommandResult      *inform.CommandDispatchResult
 	CommandObservedAt  int64
+	PendingStateSave   bool
+	StateSaveError     string
 	LastAttempt        time.Time
 	LastSuccess        time.Time
 	rejections         int
