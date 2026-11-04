@@ -25,7 +25,7 @@ import (
 )
 
 var (
-	version   = "1.2.8"
+	version   = "1.2.9"
 	commit    = "none"
 	buildDate = "unknown"
 )
@@ -530,6 +530,7 @@ func main() {
 			SysStats:        sysStatsLegacy,
 			SystemStats:     systemStats,
 			FixedAPAvailable: true,
+			WifiCaps:         telemetry.DefaultU6IWWifiCaps,
 		}
 
 		if modelProfile.ModelCode == "U6IW" {

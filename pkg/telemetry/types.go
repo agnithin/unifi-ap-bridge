@@ -3,6 +3,15 @@ package telemetry
 // FirmwareCapSwitchPorts enables the controller's AP port-statistics merge.
 const FirmwareCapSwitchPorts = 1 << 4
 
+// WifiCapLockAP enables the controller's "Lock to Access Point" feature (UAP 5.76.0+).
+const WifiCapLockAP = 1 << 24
+
+// DefaultU6IWWifiCaps represents the standard capabilities bitmask for Wi-Fi 6 UAP models.
+// Value 22986453 includes: Vwire(1), Bandsteering(4), SpectrumScan(16), MinRateCtrl(512),
+// MultiAclList(1024), Meshv3(2048), OpenHostapd(8192), Element(32768), IPSet(262144),
+// QOSMarkBits(524288), WpaPpsk(1048576), and LockAP(16777216).
+const DefaultU6IWWifiCaps = 22986453
+
 type Station struct {
 	MAC        string `json:"mac"`
 	Radio      string `json:"radio"`                 // "ng" or "na"
@@ -273,4 +282,5 @@ type InformPayload struct {
 	SysStats         *SysStats      `json:"sys_stats,omitempty"`
 	SystemStats      *SystemStats   `json:"system-stats,omitempty"`
 	FixedAPAvailable bool           `json:"fixed_ap_available,omitempty"`
+	WifiCaps         int            `json:"wifi_caps,omitempty"`
 }

@@ -41,6 +41,23 @@ func TestAPInformUsesInterfaceNameAndLiveInterfaceTable(t *testing.T) {
 	if wire["fixed_ap_available"] != true {
 		t.Fatalf("expected fixed_ap_available: true, got %v", wire["fixed_ap_available"])
 	}
+	if wire["wifi_caps"] != nil {
+		t.Fatalf("omitted wifi_caps should not be in wire json when 0: %v", wire["wifi_caps"])
+	}
+	payload.WifiCaps = DefaultU6IWWifiCaps
+	raw, err = json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if wire["wifi_caps"] != float64(DefaultU6IWWifiCaps) {
+		t.Fatalf("expected wifi_caps: %d, got %v", DefaultU6IWWifiCaps, wire["wifi_caps"])
+	}
+	if int(wire["wifi_caps"].(float64))&WifiCapLockAP == 0 {
+		t.Fatalf("wifi_caps must contain WifiCapLockAP (bit 24): %v", wire["wifi_caps"])
+	}
 	interfaces, ok := wire["if_table"].([]any)
 	if !ok || len(interfaces) != 3 {
 		t.Fatal("missing AP interface telemetry")
