@@ -194,6 +194,8 @@ Radio names now identify physical radios even when two share 5 GHz, and each VAP
 
 ### Lifecycle and release boundaries
 
+- **Hardware and Interface Boundary (Strict Guardrail)**: The daemon is strictly a user-space telemetry agent. It must never manipulate kernel physical switch state, SerDes transceiver parameters, or PHY link registers. Specifically, executing `ethctl <iface> phy-reset` or `ifconfig eth0 down` on the active Broadcom BCM4908 / BCM54991E 2.5G uplink interface desynchronizes the SerDes lane with the switch ASIC. Because the kernel `bcm_enet` driver does not recover the SerDes link out-of-band, the port experiences a silent traffic blackhole while WiFi radios and LEDs remain active. All maintenance must remain strictly bounded to the user-space daemon lifecycle (`start.sh`, `stop.sh`, `unifi-bridge.sh`).
+
 `-is-enabled -config <path>` exits 0 for enabled and 3 for disabled before hardware/adoption access. Disabled status retains version, branch and model, including with older startup callers. Semantic settings no-ops avoid flash writes; concurrent settings/sync serialization remains pending.
 
 Current v1.2.5 updates use exact-commit all-assets bundles, checksums, coordinated mutation/start/update locks, private snapshots and rollback verification. Main and Node have both completed sequential updates with fresh GCM verification. Router reboot and changed-settings persistence acceptance are recorded separately in the current ledger. UniFi-triggered firmware updates and broad provisioning remain deferred.
