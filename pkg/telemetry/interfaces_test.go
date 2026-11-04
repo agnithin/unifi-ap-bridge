@@ -27,6 +27,20 @@ func TestAPInformUsesInterfaceNameAndLiveInterfaceTable(t *testing.T) {
 	if wire["uplink"] != "eth0" {
 		t.Fatalf("uplink must be an interface name, got %v", wire["uplink"])
 	}
+	if wire["fixed_ap_available"] != nil {
+		t.Fatalf("omitted fixed_ap_available should not be in wire json when false: %v", wire["fixed_ap_available"])
+	}
+	payload.FixedAPAvailable = true
+	raw, err = json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if wire["fixed_ap_available"] != true {
+		t.Fatalf("expected fixed_ap_available: true, got %v", wire["fixed_ap_available"])
+	}
 	interfaces, ok := wire["if_table"].([]any)
 	if !ok || len(interfaces) != 3 {
 		t.Fatal("missing AP interface telemetry")

@@ -529,6 +529,7 @@ func main() {
 			LLDPTable:       lldpEntries,
 			SysStats:        sysStatsLegacy,
 			SystemStats:     systemStats,
+			FixedAPAvailable: true,
 		}
 
 		if modelProfile.ModelCode == "U6IW" {

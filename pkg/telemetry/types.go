@@ -270,6 +270,7 @@ type InformPayload struct {
 	UplinkMAC       string         `json:"uplink_mac,omitempty"`
 	LastUplink      *LastUplink    `json:"last_uplink,omitempty"`
 	LLDPTable       []LLDPEntry    `json:"lldp_table,omitempty"`
-	SysStats        *SysStats      `json:"sys_stats,omitempty"`
-	SystemStats     *SystemStats   `json:"system-stats,omitempty"`
+	SysStats         *SysStats      `json:"sys_stats,omitempty"`
+	SystemStats      *SystemStats   `json:"system-stats,omitempty"`
+	FixedAPAvailable bool           `json:"fixed_ap_available,omitempty"`
 }
