@@ -70,6 +70,7 @@ graph TD
   * Emits raw `port_table` telemetry with `op_mode: "switch"`, `forward: "all"`, `autoneg: true`, `enabled: true`, and actual spanning-tree state/cost read from bridge sysfs when available; unknown values are omitted.
   * **Bridge FDB Inspection:** Inspects Linux bridge inventory across all active bridges (`/sys/class/net/<bridge>/brif/<iface>/port_no`) and queries `brctl showmacs <bridge>` mapped against completed entries in `/proc/net/arp` (`(flags & 0x02) != 0`). External wired clients learned on LAN interfaces (`eth1` &rarr; Port 2, `eth2` &rarr; Port 3, `eth3` &rarr; Port 4) populate that port's `mac_table` with their resolved VLAN (derived from 802.1Q subinterfaces, bridge names, or VLAN filtering); `last_connection` is set for unambiguous single clients only when learned on the matching bridge domain. FDB age is last-seen age, not connection uptime.
   * Allows UniFi Port Manager to associate downstream wired devices (such as smart home hubs or Ethernet clients) directly to their physical AP switch ports rather than dumping them onto the upstream gateway.
+  * **VLAN Security & Isolation Architecture:** For the complete Layer-2 security specification, AiMesh virtual AP slot mapping (`wl0.1`/`wl1.1` vs `wl0.2`/`wl1.2`), dynamic `/jffs/scripts/firewall-start` filters, kernel MAC shield, and autonomous node fail-closed boot protection, see [docs/VLAN_SECURITY_ARCHITECTURE.md](VLAN_SECURITY_ARCHITECTURE.md).
 
 ### 2.3 LLDP Neighbor Discovery & Topology Resolution
 * **The Topology Challenge:**

@@ -5,6 +5,7 @@
 > - **Node AP (`10.100.1.11`):** Running commit `d9b6674` (v1.2.8 dev).
 > - **Published dev Release:** `dev-0524d48360d463045ebe598ab1414fa2b9640840` ([Release Assets](https://github.com/agnithin/unifi-ap-bridge/releases)).
 > - **Controller Integration:** UniFi Cloud Gateway Max (`10.100.1.1`), Network Application 10.6.109. Both APs adopted as U6IW via GCM encryption.
+> - **VLAN Isolation & Fail-Closed Security:** Deployed and verified multi-layer L2 isolation across both APs (dynamic `/jffs/scripts/firewall-start` filters, autonomous node boot in MerVLAN, kernel `MERV_MAC` shield with 51 drop rules, and independent node cold reboot verified). See [docs/VLAN_SECURITY_ARCHITECTURE.md](VLAN_SECURITY_ARCHITECTURE.md).
 > - **Historical Evidence:** Detailed day-by-day deployment logs from October 24–28, 2026 are archived in [docs/archive/2026-10-28-audit-state-history.md](archive/2026-10-28-audit-state-history.md). Independent review report is in [docs/audit/2026-10-29-unifi-ap-bridge-homelab-review.md](audit/2026-10-29-unifi-ap-bridge-homelab-review.md).
 
 ---
