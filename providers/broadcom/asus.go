@@ -454,6 +454,9 @@ func (p *AsusProvider) GetRadiosContext(ctx context.Context) ([]telemetry.Radio,
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+		if isupRaw, isupErr := p.wlCmdContext(ctx, iface, "isup"); isupErr == nil && strings.TrimSpace(isupRaw) == "0" {
+			continue
+		}
 		chanspecRaw, err := p.wlCmdContext(ctx, iface, "chanspec")
 		if err != nil {
 			return nil, fmt.Errorf("read %s chanspec: %w", iface, err)
@@ -902,6 +905,9 @@ func (p *AsusProvider) GetRadioStatsContext(ctx context.Context) ([]telemetry.Ra
 	stats := make([]telemetry.RadioStat, 0, len(ifaces))
 
 	for _, iface := range ifaces {
+		if isupRaw, isupErr := p.wlCmdContext(ctx, iface, "isup"); isupErr == nil && strings.TrimSpace(isupRaw) == "0" {
+			continue
+		}
 		chanspecRaw, err := p.wlCmdContext(ctx, iface, "chanspec")
 		if err != nil {
 			return nil, fmt.Errorf("read %s chanspec: %w", iface, err)

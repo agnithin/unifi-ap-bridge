@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -291,5 +294,78 @@ func TestControllerKickAndMacFilterExecution(t *testing.T) {
 	}
 	if len(filteredMACs) != 2 {
 		t.Fatalf("expected 2 filtered MACs, got %v", filteredMACs)
+	}
+}
+
+func TestExecutePlatformMacFilterRollbackOnFailure(t *testing.T) {
+	ctx := context.Background()
+	ifaces := []string{"eth4", "eth5"}
+
+	// State tracker
+	type ifState struct {
+		mode string
+		macs []string
+	}
+	state := map[string]*ifState{
+		"eth4": {mode: "0", macs: nil},
+		"eth5": {mode: "0", macs: nil},
+	}
+
+	var calls []string
+	mockRunner := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		cmdStr := strings.Join(append([]string{name}, args...), " ")
+		calls = append(calls, cmdStr)
+
+		if len(args) >= 3 && args[0] == "-i" {
+			iface := args[1]
+			subcmd := args[2]
+
+			// Snapshot read
+			if subcmd == "macmode" && len(args) == 3 {
+				return []byte(state[iface].mode + "\n"), nil
+			}
+			if subcmd == "mac" && len(args) == 3 {
+				return []byte(strings.Join(state[iface].macs, " ") + "\n"), nil
+			}
+
+			// Mutation: fail deliberately on eth5 macmode 1
+			if iface == "eth5" && subcmd == "macmode" && len(args) == 4 && args[3] == "1" {
+				return nil, errors.New("simulated driver failure on eth5")
+			}
+
+			if subcmd == "mac" && len(args) > 3 {
+				if args[3] == "none" {
+					state[iface].macs = nil
+				} else {
+					state[iface].macs = args[3:]
+				}
+				return nil, nil
+			}
+			if subcmd == "macmode" && len(args) == 4 {
+				state[iface].mode = args[3]
+				return nil, nil
+			}
+			if subcmd == "deauthenticate" {
+				return nil, nil
+			}
+		}
+		return nil, nil
+	}
+
+	blocked := []string{"ee:28:41:7f:fa:ec"}
+	err := executePlatformMacFilter(ctx, ifaces, blocked, mockRunner)
+	if err == nil {
+		t.Fatal("expected error from simulated driver failure, got nil")
+	}
+
+	// Verify rollback occurred on eth4: eth4 must be restored to mode 0 and mac none
+	hasRollbackEth4 := false
+	for _, call := range calls {
+		if strings.Contains(call, "-i eth4 macmode 0") {
+			hasRollbackEth4 = true
+		}
+	}
+	if !hasRollbackEth4 {
+		t.Fatalf("expected rollback call for eth4, got calls: %v", calls)
 	}
 }

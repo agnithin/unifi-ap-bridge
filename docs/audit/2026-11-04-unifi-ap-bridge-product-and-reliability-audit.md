@@ -211,15 +211,15 @@ The proposed CT107 scheduled WLAN refresh conflicts with the operator's earlier 
 
 | Finding | Severity | Category | Status | Action Plan / Resolution | Target |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **F1** | High | Command Correctness | **Fix In Progress** | Bounded timeouts (`context.WithTimeout`), dynamic interface detection, return actual errors, no false-positive cache on failure. | v1.2.11 (Immediate) |
-| **F2** | High | Filter Safety | **Fix In Progress** | Fail-closed on malformed MAC inputs; snapshot prior filter state; verify driver readback (`wl mac` / `wl macmode`); reconcile after wireless restart. | v1.2.11 (Immediate) |
+| **F1** | High | Command Correctness | **Resolved** | Bounded timeouts (`context.WithTimeout`), dynamic interface detection (`wl isup`), return actual errors, no false-positive cache on failure. | v1.2.11 |
+| **F2** | High | Filter Safety | **Resolved** | Snapshot prior filter state; rollback all interfaces on partial failure; verify driver readback (`wl macmode`); fail-closed validation. | v1.2.12 |
 | **F3** | High | Product Parity | **Architectural Scope** | Formally document and enforce boundary: telemetry + aux commands are active; full SSID/radio provisioning deferred to Phase 2. Never echo fake radio parameter success. | Phase 2 |
-| **F4** | High | Watchdog Recovery | **Planned** | Add PID liveness (`kill -0`) and age-based stale lock eviction (>15m) in `scripts/watchdog.sh` before checking `recovery_blocked`. | v1.2.11 |
-| **F5** | High | Identity Reliability | **Fix In Progress** | Eliminate destructive unadoption on HTTP 401/404 transport errors; only reset adoption on authenticated AES-GCM reset packets; add `state.json.bak`. | v1.2.11 |
-| **F6** | Medium | State Durability | **Fix In Progress** | Add `f.Sync()` to temp file before rename, sync parent directory, maintain verified generation backup `state.json.bak`. | v1.2.11 |
-| **F7** | Medium | Wi-Fi Health Probing | **Planned** | Add data-plane liveness check (`wl isup` + gateway ping); route AP dead notifications to homelab Prometheus / Uptime Kuma external alerts. | v1.2.12 |
-| **F8** | Medium | Ops & Docs Automation | **In Progress** | Align docs to v1.2.10 reality (Locate, Kick, Lock AP); schedule automated `wlan-mapping.json` refresh via ops-broker (LXC 107) cron. | v1.2.12 |
-| **F9** | Medium | Client Steering & Lock to AP | **Evaluated** | Analysis of `fixed_ap_available`: Inform protocol does not push per-client lock ACLs; client roaming is 802.11 RSSI-driven. Evaluated API polling vs natural roaming. | v1.2.12 |
+| **F4** | High | Watchdog Recovery | **Resolved** | Added PID liveness (`kill -0`) and age-based stale lock eviction (>10m) in `scripts/watchdog.sh`. Unit tested in `scripts/test_watchdog.py`. | v1.2.11 |
+| **F5** | High | Identity Reliability | **Resolved** | Eliminated destructive unadoption on HTTP 401/404 transport errors; only reset adoption on authenticated AES-GCM reset packets; added `state.json.bak`. | v1.2.11 |
+| **F6** | Medium | State Durability | **Resolved** | Added `f.Sync()` to temp file before rename, parent directory sync, verified generation backup `state.json.bak`. | v1.2.11 |
+| **F7** | Medium | Wi-Fi Health Probing | **Resolved** | Added radio data-plane liveness check (`wl isup`) in provider to cleanly skip inactive radios; homelab external alerts for unreachable APs. | v1.2.12 |
+| **F8** | Medium | Ops & Docs Automation | **In Progress** | Align docs to current release reality; retain on-demand Mac WLAN mapping workflow. | v1.2.12 |
+| **F9** | Medium | Client Steering & Lock to AP | **Resolved** | Evaluated API polling vs natural roaming. Operator confirmed Option 3: natural 802.11 roaming, zero maintenance, zero outage risk. | v1.2.12 |
 
 ---
 

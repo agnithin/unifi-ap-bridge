@@ -1315,3 +1315,51 @@ func TestGetStations_RetainsStationOnGenericDetailError(t *testing.T) {
 		t.Fatalf("expected sample to be marked incomplete due to sta_info failure")
 	}
 }
+
+func TestGetRadios_SkipsDownInterfacesWhenIsupIsZero(t *testing.T) {
+	mockRunner := func(ctx context.Context, name string, args ...string) (string, error) {
+		full := name + " " + strings.Join(args, " ")
+		switch {
+		case strings.Contains(full, "nvram get wl_ifnames"):
+			return "eth4 eth5 eth6", nil
+		case strings.Contains(full, "wl -i eth4 isup"):
+			return "1\n", nil
+		case strings.Contains(full, "wl -i eth5 isup"):
+			return "0\n", nil // eth5 is down
+		case strings.Contains(full, "wl -i eth6 isup"):
+			return "1\n", nil
+		case strings.Contains(full, "wl -i eth4 chanspec"):
+			return "0x1006", nil
+		case strings.Contains(full, "wl -i eth6 chanspec"):
+			return "0xe39b", nil
+		case strings.Contains(full, "wl -i eth4 chanim_stats"):
+			return "version: 3\nchanspec tx inbss obss nocat nopkt doze txop goodtx badtx glitch badplcp knoise idle timestamp\n0x1006 12 2 35 11 6 0 28 1 4 1317 42 -91 36 -1193366231", nil
+		case strings.Contains(full, "wl -i eth6 chanim_stats"):
+			return "version: 3\nchanspec tx inbss obss nocat nopkt doze txop goodtx badtx glitch badplcp knoise idle timestamp\n0xe39b 5 3 2 1 1 0 80 1 1 10 5 -90 75 -1172933938", nil
+		default:
+			return "", nil
+		}
+	}
+
+	provider := NewAsusProvider(mockRunner)
+	radios, err := provider.GetRadiosContext(context.Background())
+	if err != nil {
+		t.Fatalf("GetRadiosContext failed: %v", err)
+	}
+	if len(radios) != 2 {
+		t.Fatalf("expected 2 radios (eth5 skipped because isup=0), got %d", len(radios))
+	}
+	for _, r := range radios {
+		if r.Name == "wifi-na-1" || r.Channel == 0 {
+			t.Errorf("unexpected radio found: %+v", r)
+		}
+	}
+
+	stats, err := provider.GetRadioStatsContext(context.Background())
+	if err != nil {
+		t.Fatalf("GetRadioStatsContext failed: %v", err)
+	}
+	if len(stats) != 2 {
+		t.Fatalf("expected 2 radio stats, got %d", len(stats))
+	}
+}

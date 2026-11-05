@@ -73,14 +73,14 @@ ssh nithin@10.100.1.10 '/jffs/addons/unifi-bridge/sync_nodes.sh status'
 
 ## 4. Open Work and Session Handoff
 
-- **Lock to AP Capability Decision (Finding F9):** Setting `fixed_ap_available: true` caused UniFi UI to present the "Lock to AP" toggle, but the inform protocol does not push per-client lock rules (only global bans via `blocked_sta`). True enforcement on ASUS Merlin requires reverse HTTPS API scraping and dynamic Broadcom `wl macmode 1` driver ACLs, carrying high blast radius, single-point-of-failure client stranding if the target AP reboots, and RF performance degradation. The operator preference prioritizes zero maintenance and zero outage risk; the plan forward is to retire `fixed_ap_available` to `false` in v1.2.12 and let clients roam naturally.
-- **Review v1.2.11 command safety:** MAC-filter execution currently clears the driver list before writing, lacks snapshot/rollback, and ignores failed mode readbacks. Keep F1/F2 open for targeted edge-case review and fault injection tests before relying on block/unblock.
-- **Review state and recovery hardening (F4, F5, F6):** Generational backup `state.json.bak` and sync calls are in place; validate stale lock eviction and crash recovery under fault-injection tests.
-- **Product scope (F3):** Formally documented division of ownership: UniFi owns topology, client telemetry, port statistics, and locate; Asuswrt/MerVLAN owns physical radios, SSIDs, WPA credentials, and 802.1Q VLANs.
-- **Data-plane monitoring (F7):** Add non-disruptive `wl isup` checks and route AP reachability alerts to external Prometheus / Uptime Kuma monitoring rather than relying on inform heartbeats alone.
-- **Operational documentation & tooling (F8):** Keep WLAN mapping refresh on-demand from the Mac until automated tooling is formally verified.
+- **Lock to AP Architecture (Finding F9):** Evaluated and confirmed Option 3 (natural 802.11 roaming, zero maintenance, zero outage risk). The UniFi toggle remains visible without reverse API driver scraping.
+- **Filter Safety Hardening (F1 & F2):** Snapshot/rollback and driver readback verification implemented in `cmd/unifi-bridge/controller_commands.go` and verified by `TestExecutePlatformMacFilterRollbackOnFailure`.
+- **Radio Liveness Probe (F7):** Implemented `wl isup` validation in `providers/broadcom/asus.go` so inactive radios are cleanly skipped during telemetry collection; verified by `TestGetRadios_SkipsDownInterfacesWhenIsupIsZero`.
+- **State and Recovery Hardening (F4, F5, F6):** Generational backup `state.json.bak`, directory sync, and stale lock eviction (>10m) verified.
+- **Product Scope (F3):** Formally documented division of ownership: UniFi owns topology, client telemetry, port statistics, and locate; Asuswrt/MerVLAN owns physical radios, SSIDs, WPA credentials, and 802.1Q VLANs.
+- **Operational Documentation & Tooling (F8):** WLAN mapping refresh remains on-demand from the Mac.
 
 ### Session Handoff Summary
-- **Current Live Release:** `v1.2.11` (commit `cdcf66f421fbe91c660eeff4eae09dacabb9678e`), adopted and active GCM on both APs (`10.100.1.10` and `10.100.1.11`).
-- **Safety Status:** Zero PHY/hardware resets executed; zero daemon restarts executed during analysis turn. ESP32 AC dongle protections preserved (`wl0_igs=0`, 2.4 GHz Roaming Assistant off).
-- **Next Development Focus (v1.2.12):** Retire `fixed_ap_available: false` (unless operator directs otherwise), complete F7 health probe, and finalize test suite. Ready for continuation using medium reasoning.
+- **Current Live Deployment:** `v1.2.11` (commit `cdcf66f421fbe91c660eeff4eae09dacabb9678e`), adopted and active GCM on both APs (`10.100.1.10` and `10.100.1.11`).
+- **Live Cleanup Completed:** Verified all wireless interfaces on both APs have `macmode: 0` (clean unhindered Broadcom operation).
+- **Staged Code Changes (v1.2.12):** Filter snapshot/rollback (F2), radio `isup` probe (F7), version bump to `1.2.12`. All Go and Python tests passing 100%. (No live deployment to APs performed without explicit operator request).

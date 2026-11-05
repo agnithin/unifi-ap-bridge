@@ -259,42 +259,99 @@ func startPlatformKick(mac string) error {
 	return lastErr
 }
 
+type platformCmdRunner func(ctx context.Context, name string, args ...string) ([]byte, error)
+
+var defaultPlatformCmdRunner platformCmdRunner = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return exec.CommandContext(ctx, name, args...).Output()
+}
+
+type macFilterSnapshot struct {
+	iface   string
+	mode    string
+	macList []string
+}
+
+func snapshotInterfaceMacFilter(ctx context.Context, iface string, runner platformCmdRunner) macFilterSnapshot {
+	snap := macFilterSnapshot{iface: iface, mode: "0"}
+	if modeOut, err := runner(ctx, "wl", "-i", iface, "macmode"); err == nil {
+		snap.mode = strings.TrimSpace(string(modeOut))
+	}
+	if macOut, err := runner(ctx, "wl", "-i", iface, "mac"); err == nil {
+		lines := strings.Fields(string(macOut))
+		for _, token := range lines {
+			if norm, err := inform.NormalizeMAC(token); err == nil {
+				snap.macList = append(snap.macList, norm)
+			}
+		}
+	}
+	return snap
+}
+
+func rollbackMacFilter(ctx context.Context, snaps []macFilterSnapshot, runner platformCmdRunner) {
+	for _, snap := range snaps {
+		_, _ = runner(ctx, "wl", "-i", snap.iface, "mac", "none")
+		if len(snap.macList) > 0 && snap.mode != "0" {
+			args := append([]string{"-i", snap.iface, "mac"}, snap.macList...)
+			_, _ = runner(ctx, "wl", args...)
+			_, _ = runner(ctx, "wl", "-i", snap.iface, "macmode", snap.mode)
+		} else {
+			_, _ = runner(ctx, "wl", "-i", snap.iface, "macmode", "0")
+		}
+	}
+}
+
+func executePlatformMacFilter(ctx context.Context, ifaces []string, blockedMACs []string, runner platformCmdRunner) error {
+	snaps := make([]macFilterSnapshot, 0, len(ifaces))
+	for _, iface := range ifaces {
+		snaps = append(snaps, snapshotInterfaceMacFilter(ctx, iface, runner))
+	}
+
+	for i, iface := range ifaces {
+		expectedMode := "0"
+		if len(blockedMACs) == 0 {
+			if _, err := runner(ctx, "wl", "-i", iface, "mac", "none"); err != nil {
+				rollbackMacFilter(ctx, snaps[:i], runner)
+				return fmt.Errorf("wl mac none failed on %s: %w", iface, err)
+			}
+			if _, err := runner(ctx, "wl", "-i", iface, "macmode", "0"); err != nil {
+				rollbackMacFilter(ctx, snaps[:i], runner)
+				return fmt.Errorf("wl macmode 0 failed on %s: %w", iface, err)
+			}
+		} else {
+			expectedMode = "1"
+			_, _ = runner(ctx, "wl", "-i", iface, "mac", "none")
+			args := append([]string{"-i", iface, "mac"}, blockedMACs...)
+			if _, err := runner(ctx, "wl", args...); err != nil {
+				rollbackMacFilter(ctx, snaps[:i], runner)
+				return fmt.Errorf("wl mac set failed on %s: %w", iface, err)
+			}
+			if _, err := runner(ctx, "wl", "-i", iface, "macmode", "1"); err != nil {
+				rollbackMacFilter(ctx, snaps[:i], runner)
+				return fmt.Errorf("wl macmode 1 failed on %s: %w", iface, err)
+			}
+			for _, mac := range blockedMACs {
+				_, _ = runner(ctx, "wl", "-i", iface, "deauthenticate", mac)
+			}
+		}
+		// Readback verification: verify driver accepted expected mode
+		readback, err := runner(ctx, "wl", "-i", iface, "macmode")
+		if err != nil {
+			rollbackMacFilter(ctx, snaps[:i], runner)
+			return fmt.Errorf("wl macmode readback failed on %s: %w", iface, err)
+		}
+		if actual := strings.TrimSpace(string(readback)); actual != expectedMode {
+			rollbackMacFilter(ctx, snaps[:i], runner)
+			return fmt.Errorf("macmode readback mismatch on %s: got %s, want %s", iface, actual, expectedMode)
+		}
+	}
+	return nil
+}
+
 func startPlatformMacFilter(blockedMACs []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), platformCommandTimeout)
 	defer cancel()
 
 	ifaces := getPlatformWirelessInterfaces()
-	for _, iface := range ifaces {
-		expectedMode := "0"
-		if len(blockedMACs) == 0 {
-			if err := exec.CommandContext(ctx, "wl", "-i", iface, "mac", "none").Run(); err != nil {
-				return fmt.Errorf("wl mac none failed on %s: %w", iface, err)
-			}
-			if err := exec.CommandContext(ctx, "wl", "-i", iface, "macmode", "0").Run(); err != nil {
-				return fmt.Errorf("wl macmode 0 failed on %s: %w", iface, err)
-			}
-		} else {
-			expectedMode = "1"
-			_ = exec.CommandContext(ctx, "wl", "-i", iface, "mac", "none").Run()
-			args := append([]string{"-i", iface, "mac"}, blockedMACs...)
-			if err := exec.CommandContext(ctx, "wl", args...).Run(); err != nil {
-				return fmt.Errorf("wl mac set failed on %s: %w", iface, err)
-			}
-			if err := exec.CommandContext(ctx, "wl", "-i", iface, "macmode", "1").Run(); err != nil {
-				return fmt.Errorf("wl macmode 1 failed on %s: %w", iface, err)
-			}
-			for _, mac := range blockedMACs {
-				_ = exec.CommandContext(ctx, "wl", "-i", iface, "deauthenticate", mac).Run()
-			}
-		}
-		// Readback verification: verify driver accepted expected mode
-		readback, err := exec.CommandContext(ctx, "wl", "-i", iface, "macmode").Output()
-		if err == nil {
-			if actual := strings.TrimSpace(string(readback)); actual != expectedMode {
-				return fmt.Errorf("macmode readback mismatch on %s: got %s, want %s", iface, actual, expectedMode)
-			}
-		}
-	}
-	return nil
+	return executePlatformMacFilter(ctx, ifaces, blockedMACs, defaultPlatformCmdRunner)
 }
 
