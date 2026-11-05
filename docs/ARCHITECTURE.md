@@ -1,6 +1,6 @@
 # Architecture & Technical Reference
 
-> **Current delivery status — 2026-11-04 PST:** Both APs run `cdcf66f` (v1.2.11 dev), with fresh adopted GCM status and no reported sample-stage errors. Earlier radio, topology and capture checks remain historical; v1.2.11 reliability changes require targeted review and live acceptance. See [the canonical live ledger](AUDIT_STATE.md).
+> **Current delivery status — 2026-11-05 PST:** Both APs run `61db1e5` (v1.2.12 dev), with fresh adopted GCM status and zero sample-stage errors. Includes command hardening (bounded timeouts, fail-closed MAC filters with atomic rollback), power-loss state durability with generational backup, radio liveness probing, and watchdog stale-lock eviction. See [the canonical live ledger](AUDIT_STATE.md).
 
 `unifi-ap-bridge` is a standalone, dependency-free daemon and WebUI extension engineered for Asuswrt-Merlin and Broadcom-based routers. It translates raw Linux and Broadcom wireless and switch telemetry into the Ubiquiti UniFi Inform protocol (`:8080/inform`).
 

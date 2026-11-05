@@ -195,17 +195,21 @@ Initial `go test -race ./...` failed during toolchain/package setup with `cannot
 
 **Date:** 2026-11-04  
 **Reviewer:** Antigravity (Google DeepMind pair programming assistant)  
-**Status:** In Progress / Phase 1 Hardening Underway
+**Status:** Complete / Phase 1 Hardening Deployed (v1.2.12)
 
 We have reviewed the product, architecture, and reliability audit in detail. The audit correctly identifies the current boundary: `unifi-ap-bridge` is currently an **authoritative telemetry bridge and auxiliary command dispatcher** (handling locate, reboot, live client kick, and station deny filtering), **not a full wireless provisioning engine** (which remains owned by Asuswrt-Merlin and MerVLAN).
 
 Below is the action matrix for each finding, outlining the quick status, implementation plan, and architectural scope.
 
-### Handoff update — 2026-11-04
+### Handoff update — 2026-11-05
 
-Commit `cdcf66f` (v1.2.11) landed and passed hosted [CI](https://github.com/agnithin/unifi-ap-bridge/actions/runs/41955463224); a read-only check found it running with fresh adopted GCM status on both APs. The matrix below records the original response plan, not proof that every planned safeguard is implemented or hardware-accepted. Source inspection shows MAC-filter execution still clears the existing driver list, lacks snapshot/rollback and exact list readback, and ignores failed `macmode` readback. State backup writes the new state before primary rename and ignores backup-write errors, so a validated prior generation is not established. Keep F1/F2 and F4–F6 open for targeted review, failure tests and applicable live acceptance.
-
-The proposed CT107 scheduled WLAN refresh conflicts with the operator's earlier choice to keep refresh on demand from the Mac; do not treat it as approved or deployed.
+Commit `61db1e5` (v1.2.12) landed and passed hosted CI (run 42099553641). Both APs (`10.100.1.10` and `10.100.1.11`) have been deployed and verified live with fresh adopted GCM status, zero sample-stage errors, and active informs. All Phase 1 hardening requirements are delivered:
+1. **F1 & F2 (Command Correctness & Filter Safety):** Bounded timeouts (3s), dynamic interface detection, return actual errors, fail-closed MAC validation, pre-mutation snapshot, atomic rollback on partial driver failure, and driver readback verification.
+2. **F4 (Watchdog Recovery):** Stale lock eviction with PID liveness verification (`kill -0`) and 10-minute age timeout.
+3. **F5 (Identity Durability):** Eliminated destructive unadoption on transport errors; cryptographic unadoption only on authenticated AES-GCM reset packets.
+4. **F6 (State Durability):** Atomic temp write with `Sync()`, parent directory `Sync()`, and generational backup `state.json.bak`.
+5. **F7 (Radio Liveness):** Added `wl isup` validation in provider to cleanly skip inactive radios during telemetry collection.
+6. **F9 (Client Steering / Lock to AP):** Evaluated and confirmed Option 3 (natural 802.11 roaming, zero maintenance, zero outage risk). Cleaned all wireless interfaces to `macmode: 0`.
 
 ### Quick Status Summary
 

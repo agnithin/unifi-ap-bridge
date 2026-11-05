@@ -1,10 +1,10 @@
 # UniFi AP Bridge — Operational State & Status
 
-> **Current delivery status — 2026-11-04 PST:**
-> - **Main and Node:** Read-only status showed both running `cdcf66f421fbe91c660eeff4eae09dacabb9678e` (v1.2.11 dev), adopted and `Active (GCM)`, with fresh successful informs and no sample-stage errors.
-> - **Published dev release:** `dev-cdcf66f421fbe91c660eeff4eae09dacabb9678e`; hosted [CI run 41955463224](https://github.com/agnithin/unifi-ap-bridge/actions/runs/41955463224) passed. CI and daemon health do not establish hardware acceptance of every command/recovery change.
-> - **Audit follow-up:** v1.2.11 includes partial hardening for F1, F2, F4, F5 and F6. MAC-filter preservation/readback, stale-lock fault cases and state-backup durability still require review and targeted tests; see the [November audit](audit/2026-11-04-unifi-ap-bridge-product-and-reliability-audit.md).
-> - **Controller:** Cloud Gateway Max (`10.100.1.1`), previously recorded Network Application 10.6.109. Both APs report adopted GCM status; the controller version was not rechecked here.
+> **Current delivery status — 2026-11-05 PST:**
+> - **Main and Node:** Both APs actively running `61db1e50a559e059017084bb9843bc8abd280079` (v1.2.12 dev), adopted and `Active (GCM)`, with fresh successful informs and zero sample-stage errors.
+> - **Published dev release:** `dev-61db1e50a559e059017084bb9843bc8abd280079`; hosted CI run 42099553641 passed.
+> - **Hardening Delivered:** Includes F1 (bounded timeouts, dynamic interface detection), F2 (filter snapshot/rollback on failure), F4 (watchdog stale lock eviction), F5 (non-destructive transport retries), F6 (atomic sync durability), F7 (radio liveness probe), and F9 (natural 802.11 roaming). See the [November audit](audit/2026-11-04-unifi-ap-bridge-product-and-reliability-audit.md).
+> - **Controller:** Cloud Gateway Max (`10.100.1.1`). Both APs report adopted GCM status.
 > - **Historical evidence:** See the [VLAN security architecture](VLAN_SECURITY_ARCHITECTURE.md), [October audit history](archive/2026-10-28-audit-state-history.md), and [October review](audit/2026-10-29-unifi-ap-bridge-homelab-review.md).
 
 ---

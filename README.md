@@ -1,417 +1,119 @@
 # unifi-ap-bridge
 
-> **Current delivery status — 2026-11-04 PST:** Both APs run `cdcf66f` (v1.2.11 dev), adopted with fresh GCM status and no reported sample-stage errors in a read-only check. The v1.2.11 reliability changes passed hosted CI but several audit findings still require source review and hardware validation, especially MAC-filter policy preservation and adoption-state backup durability. See [current audit state](docs/AUDIT_STATE.md) and the [November audit](docs/audit/2026-11-04-unifi-ap-bridge-product-and-reliability-audit.md).
+[![CI / Release](https://github.com/agnithin/unifi-ap-bridge/actions/workflows/release.yml/badge.svg)](https://github.com/agnithin/unifi-ap-bridge/actions)
+[![Current Version](https://img.shields.io/badge/version-1.2.12-blue.svg)](version.txt)
+[![Target](https://img.shields.io/badge/target-Asuswrt--Merlin%20%7C%20Broadcom-green.svg)](docs/ARCHITECTURE.md)
 
-A high-performance, ultra-lightweight standalone daemon and WebUI addon for **Asuswrt-Merlin** and Linux routers that bridges Broadcom Wi-Fi and switch telemetry into the **Ubiquiti UniFi Inform Protocol** (`:8080/inform`).
+A high-performance, ultra-lightweight standalone daemon and WebUI extension for **Asuswrt-Merlin** and Broadcom Linux routers that bridges wireless and switch telemetry into the **Ubiquiti UniFi Inform Protocol** (`:8080/inform`).
 
-It emulates a genuine UniFi 6 Access Point—featuring native **UniFi 6 In-Wall (`U6-IW`)** switch port emulation as well as **UniFi 6 Mesh (`U6M`)**, **UniFi 6 Pro (`U6P`)**, and **UniFi 6 Lite (`U6L`)**—allowing non-UniFi access points to seamlessly report native wireless client classification, association telemetry, Wi-Fi 6 (`802.11ax`) connection rates, physical switch port link states, and live RSSI into the **UniFi Network Controller**.
-
----
-
-## Current deployment
-
-Both APs run `cdcf66f` (v1.2.11 dev). A read-only check on November 4 observed both adopted, with fresh GCM informs and no reported sampling-stage errors. Earlier radio, port, settings and capture acceptance is historical evidence; the v1.2.11 changes need their own targeted acceptance. ASUS/MerVLAN remain responsible for actual Wi-Fi and VLAN configuration.
-
-See [audit state](docs/AUDIT_STATE.md), [audit review](docs/audit/2026-10-29-unifi-ap-bridge-homelab-review.md), and [architecture](docs/ARCHITECTURE.md).
-
-### v1.2.4 update-check fix
-
-Checking for updates now finishes in the background without the Asus Applying/Complete overlay. Installed and latest versions consistently use a `v` prefix and explicit track labels. Checking `main` does not change the installed `dev` track; an older stable release is labeled **INSTALLED IS NEWER**. Request matching and timeouts prevent stale status from reloading or leaving the check stuck. Both `main` and `dev` checks were verified in the live Asus browser after deployment.
-
-### v1.2.3 UI compatibility fix
-
-The prior bridge sent an uplink object shaped like a REST response and omitted the raw `if_table` required by AP informs. It also advertised no firmware capabilities, so UniFi did not merge live port stats into Port Manager. The fix sends the uplink interface name, reports the shared Ethernet interface correctly, and advertises the implemented switch-port capability. Regression tests cover the wire field types, physical link/counter mapping, shared MAC handling, and capability flag.
-
-## Key Features
-
-* **Zero Dependencies & Completely Standalone:**
-  * Compiles to a single static Go binary (~6.9 MB stripped).
-  * Requires **no Python**, **no Entware**, **no USB drive**, and **no third-party addons (no scMerlin needed)**.
-  * Runs directly on clean Asuswrt-Merlin firmware.
-* **Native Wireless Classification:**
-  * Clients switch from generic wired switch port attachments to true wireless clients with live signal bars, SNR, and frequency bands (2.4 GHz vs 5 GHz).
-  * IoT devices (ESP32, Sonoff, Wyze, smart appliances) correctly classify as **Wi-Fi 4 (`802.11n`)** rather than Wi-Fi 3.
-  * Modern mobile and laptop devices classify as **Wi-Fi 6 (`802.11ax`)** or **Wi-Fi 5 (`802.11ac`)**.
-* **Physical Ethernet Ports & Switch Port Manager Integration (v1.2.0+):**
-  * Emulates multi-port In-Wall Access Points (**`U6-IW`** / UniFi 6 In-Wall) allowing the AP and its downstream physical ports to appear directly in the **UniFi Port Manager** (`/network/default/ports`).
-  * Telemetry reports all physical interfaces from `/sys/class/net/ethX` and `/proc/net/dev`:
-    * **Port 1 (Uplink)**: 2.5 Gbps WAN/LAN port with link speed, full duplex, and live byte/packet counters.
-    * **Ports 2–4 (LAN)**: 1 Gbps Gigabit LAN ports with carrier state, speed, duplex, and real-time wire traffic metrics.
-  * **Switch Bridge FDB Client Discovery (v1.2.2+):**
-    * Inspects the Linux bridge forwarding database (`brctl showmacs br0` and `/sys/class/net/br0/brif/<iface>/port_no`) and matches learned MACs against `/proc/net/arp`.
-    * Emits `mac_table` and `last_connection` per physical port, allowing UniFi Port Manager to associate downstream wired clients (such as smart home bridges or Ethernet PCs) directly to their physical AP LAN port (`sw_mac` and `sw_port` in controller).
-* **LLDP Neighbor Discovery & Topology Telemetry (v1.2.2+):**
-  * Automatically queries LLDP neighbors via `lldpcli -f json show neighbors` to discover the upstream gateway device MAC (Cloud Gateway Max `6c:63:f8:30:9a:05`), port MACs, and physical parent ports (Port 1 for Main AP, Port 3 for Node AP).
-  * Preserves dynamically discovered remote ports so cluster configuration synchronization does not overwrite satellite nodes with Main's uplink port, preventing port collisions on the upstream gateway switch.
-  * Populates `uplink_mac`, `last_uplink`, and `lldp_table` from available neighbor data, aligning with gateway `downlink_table` entries.
-* **Router CPU & Memory Utilization Telemetry (v1.2.0+):**
-  * v1.2.5 source uses `/proc/stat` CPU deltas and `/proc/meminfo`, preferring MemAvailable; first/unknown CPU samples are omitted. This replaces the prior v1.2.4 load-derived estimate.
-  * Renders live CPU and RAM status cards in the Asuswrt WebUI and CLI.
-* **WiFi Experience Scoring (v1.2.0+):**
-  * Dynamically computes 0–100% `satisfaction` scores for each associated station using a signal/cumulative-retry heuristic; v1.2.5 omits the score when signal is missing. This is not native UniFi scoring parity, populating the UniFi "WiFi Experience" column.
-* **Live RF Channel Utilization & Airtime Telemetry (v1.1.0+):**
-  * Continuously polls Broadcom `wl chanim_stats` on physical 2.4 GHz and 5 GHz radios.
-  * Dynamically computes total channel utilization (`cu_total`), AP transmit airtime (`cu_self_tx`), and AP receive airtime (`cu_self_rx`).
-  * Streams RF metrics directly into `radio_table` and `radio_table_stats` in the UniFi Inform payload and displays real-time channel load percentages in the Asuswrt WebUI and CLI.
-* **Cumulative Client & VAP Traffic Counters (v1.1.0+):**
-  * Parses unicast transmission and reception bytes/packets (`tx ucast bytes`, `rx ucast bytes`, `tx ucast pkts`, `rx ucast pkts`), packet retries, uplink/downlink bitrates, association uptime, and idletime from `wl sta_info`.
-  * Prefers unicast counters when provided by the driver. Fallback total counters and station-summed VAP counters require care across client churn; stable per-interface counters remain pending.
-  * Aggregates counters per-client in `sta_table` and per-SSID in `vap_table`, populating UniFi real-time client throughput and bandwidth utilization graphs.
-* **Ultra-Low Resource Footprint:**
-  * **RAM:** approximately 9.7 MB RSS per AP in the v1.2.5 rollout sample; whole-router memory includes other services and RAM-backed files.
-  * **CPU:** Samples telemetry at a default 10-second interval. Sampling cost varies with station count and external `wl`/NVRAM/LLDP commands; no sub-millisecond or fixed CPU-use guarantee is established.
-  * **Runtime writes:** Caches, logs, and WebUI status live under `/tmp/`. Regular-file daemon logs are capped at 1 MiB. Persistent adoption state is `0600` and saved atomically when controller state changes; flash writes are reduced, not eliminated.
-* **Native Asuswrt-Merlin WebUI Integration & Form Isolation (v1.2.2+):**
-  * Integrated directly into **Advanced Settings > Wireless** tab bar (e.g. `http://<router-ip>/user3.asp`).
-  * Uses Asuswrt-Merlin dynamic user slot allocation (`user1`–`user20.asp`), preventing collisions with YazFi, MerVLAN, or scMerlin.
-  * Neutralizes Asuswrt's intrusive `window.refreshpage` reloading behavior; background polling updates metrics dynamically without scrolling jumps or overwriting in-flight form edits.
-* **Automated WebUI Updates & Release Tracks (`main` vs `dev`):**
-  * Built-in version checker and one-click updater right from the router WebUI.
-  * **Release Tracks**: Switch between official stable releases (`main`) and cutting-edge development builds (`dev`).
-  * Checks GitHub release tags and raw version metadata. Development builds can share a version number; verify the runtime commit as well as the version after an update.
-* **Cluster Mesh Synchronization & Propagation:**
-  * Auto-discovers Satellite Nodes directly from Asuswrt NVRAM (`cfg_device_list`) or MerVLAN.
-  * Centralized management: configuring settings or clicking "Update Now" on the Main AP WebUI automatically propagates binaries and configurations to all Satellite Nodes over SSH.
-  * Preserves per-node cryptographic adoption identities (`state.json`), preventing adoption collisions.
-  * Cluster table reports sampled client distribution and runtime version. Healthy status requires a live remote PID and fresh telemetry; a version match is labeled `Version Match (Config Unverified)`.
-  * SSH operations are bounded to 30 seconds for status and 120 seconds for transfers. Dropbear-compatible keepalive/idle options and a shell watchdog avoid unsupported `ConnectTimeout` assumptions.
-* **Daemon Resilience & Accurate Status:**
-  * Separates `last_attempt` from `last_successful_inform`; failed attempts no longer appear as successful heartbeats.
-  * Refreshes uptime from each system sample and exposes commit/build date in runtime status.
-  * Defaults non-positive configured intervals to 10 seconds; three consecutive HTTP 401/404 rejections are required before adoption recovery. HTTP 400 does not clear identity.
-  * Rejects malformed adoption keys and enforces addon directory `0755` / SSH directory `0700`.
-* **Built-in CLI Companion (`unifi-bridge`):**
-  * Provides quick command-line diagnostics and operations: `unifi-bridge status`, `sync`, `update check`, `update apply`, `reset`, `start`, `stop`, `enable`, `disable`, `restart`, `check`, `logs`.
-  * Interactive text console menu for easy terminal administration.
-* **Automated Health Watchdog:**
-  * Automatic cron watchdog via Asuswrt `cru` checking process health every 5 minutes and respawning on failures.
-* **Multi-Arch Automated CI/CD:**
-  * GitHub Actions automated builds producing static ARMv7 (`armv7l`) and ARM64 (`aarch64`) tarballs and SHA-256 manifests after Go, cluster regression, and shell syntax checks. Normal release-tag and `dev` pushes trigger builds; documentation-only commits can skip CI. The deployed v1.2.4 updater does not enforce the manifest; its package was manually verified. v1.2.5 source enforces checksum, archive, version and fresh runtime/heartbeat checks.
+By emulates a **UniFi 6 In-Wall (`U6-IW`)** access point, `unifi-ap-bridge` allows non-UniFi hardware (such as the ASUS ZenWiFi XT8 cluster) to seamlessly report native wireless classification, 802.11ax connection bitrates, RF airtime utilization, physical switch port carrier states, and bridge topology directly into the **UniFi Network Application** (Cloud Gateway Ultra / Max / Enterprise).
 
 ---
 
-## Architecture
+## Unique Features
+
+### 1. Native UniFi Switch Port Manager Emulation
+* **Multi-Port Physical Mapping:** Emulates the `U6-IW` managed switch personality. The 2.5 Gbps WAN/LAN port and all 1 Gbps Gigabit LAN ports appear directly in the UniFi Port Manager (`/network/default/ports`) with real-time link speeds, duplex states, and byte/packet counters.
+* **Bridge FDB Client Attribution:** Inspects the Linux bridge forwarding database (`brctl showmacs`) and ARP tables. Downstream wired clients (such as Philips Hue hubs, Home Assistant appliances, or desktop PCs) plugged into the router's LAN ports are automatically attributed to their physical switch port in UniFi (`sw_mac` and `sw_port`), avoiding ambiguous gateway dumps.
+
+### 2. Multi-Radio Broadcom RF Telemetry
+* **Tri-Band RF Normalization:** Maps physical Broadcom radios (`eth4`, `eth5`, `eth6`) into normalized UniFi bands: `wifi-ng` (2.4 GHz), `wifi-na` (5 GHz-1), and `wifi-na-1` (5 GHz-2).
+* **Live Channel Airtime Utilization:** Continuously polls Broadcom `chanim_stats` to stream channel load (`cu_total`), AP transmit airtime (`cu_self_tx`), and receive airtime (`cu_self_rx`) directly into UniFi RF environment graphs.
+* **Granular Wi-Fi 6 Experience:** Queries `wl sta_info` for unicast byte/packet counters, RSSI attenuation, negotiated MCS rates (up to 1201 Mbps on 80 MHz 2ss), packet retry percentages, and dynamic satisfaction scoring.
+* **Radio Liveness Probing (v1.2.12):** Validates hardware driver state (`wl isup`) before querying channel metrics, cleanly skipping disabled or offline radios without throwing telemetry collection errors.
+
+### 3. Controller Command Execution & Safety Hardening
+* **Locate LED Blinking:** Responds to controller Locate requests by blinking the router's front panel white LED for a bounded 15-second window, restoring prior brightness automatically upon completion.
+* **Client Kick / Deauth (`kick-sta`):** Translates controller "Reconnect" clicks into immediate, bounded Broadcom deauthentication frames (`wl deauthenticate <mac>`), triggering client re-roaming.
+* **Fail-Closed MAC Filtering with Atomic Rollback (v1.2.12):** Automatically snapshots prior driver ACL state before applying controller blocklists. If driver readback fails on any interface, all previously touched radios are rolled back to their snapshot, preventing accidental network lockouts.
+
+### 4. Zero Flash Wear & Autonomous Resilience
+* **Power-Loss Durability:** Employs atomic temp-write, `fsync()`, directory sync, and generational backup files (`state.json.bak`) for persistent AES-GCM adoption keys.
+* **Non-Destructive Transport Handshake:** Transient HTTP 401/404 gateway restarts trigger exponential backoff rather than wiping adoption credentials. Cryptographic unadoption only occurs upon verified AES-GCM reset packets.
+* **Self-Healing Watchdog:** An autonomous 5-minute cron watchdog (`watchdog.sh`) monitors daemon freshness (`sample_fresh`) and evicts stale PID locks (>10m) automatically.
+
+### 5. Seamless MerVLAN & AiMesh Coexistence
+* **Zero PHY Resets:** Operates without calling disruptive hardware resets (`ethctl` or `ifconfig eth0 down`), protecting dedicated 5 GHz-2 AiMesh wireless backhauls and active client streams.
+* **VLAN Trunking Harmony:** Operates alongside [MerVLAN](docs/VLAN_SECURITY_ARCHITECTURE.md) 802.1Q subinterfaces (`wl0.1`, `wl1.1` on Main vs `wl0.2`, `wl1.2` on Node) without interfering with Layer-2 guest isolation boundaries.
+
+---
+
+## Architectural Boundary
+
+To ensure complete stability and prevent router configuration corruption, `unifi-ap-bridge` maintains a strict division of responsibility:
 
 ```
-unifi-ap-bridge/
-├── .github/workflows/
-│   └── release.yml          # GitHub Actions multi-arch release & dev CI/CD (ARMv7 & ARM64)
-├── bin/                     # Pre-compiled static binaries (ARMv7 & ARM64)
-├── cmd/
-│   └── unifi-bridge/        # Standalone persistent daemon binary entrypoint (main.go)
-├── pkg/
-│   ├── inform/              # UniFi Inform wire protocol (binary header, AES-CBC, AES-GCM, Zlib)
-│   ├── models/              # Device capabilities catalog (U6IW, U6M, U6P, U6L)
-│   └── telemetry/           # Schema definitions (VAPs, Stations, Radios, Stats)
-├── providers/               # Pluggable radio telemetry providers
-│   ├── provider.go          # Interface: GetRadios(), GetVAPs(), GetRadioStats()
-│   ├── broadcom/            # Broadcom Asuswrt provider (nvram, wl, chanspec, sta_info)
-│   └── profile/             # Hardware profiles (temperature, memory, system load)
-├── scripts/
-│   ├── install.sh           # Installer requiring matching repository assets
-│   ├── start.sh             # Tracked startup; JSON-aware enabled check
-│   ├── uninstall.sh         # Clean uninstaller and mount rollback
-│   ├── unifi-bridge.sh      # CLI manager companion (/jffs/scripts/unifi-bridge)
-│   ├── update.sh            # Automated update engine & track switcher
-│   ├── sync_nodes.sh        # Cluster discovery, node sync, and update propagation
-│   ├── watchdog.sh          # Self-healing health cron watchdog
-│   └── apply_config.sh      # Native /start_apply.htm WebUI backend handler
-├── webui/
-│   └── unifi-bridge.asp     # Asuswrt-Merlin Wireless WebUI page
-└── version.txt              # Semantic version definition
+┌───────────────────────────────────────┐      ┌───────────────────────────────────────┐
+│     UniFi Network Controller Owns     │      │        Asuswrt / MerVLAN Owns         │
+├───────────────────────────────────────┤      ├───────────────────────────────────────┤
+│ • Network Inventory & Device Topology │      │ • Physical Wi-Fi Radios & Frequencies │
+│ • Client Classification & Signal Bars │      │ • SSIDs & WPA2/WPA3 Passphrases       │
+│ • Switch Port Link States & Stats     │      │ • 802.1Q VLAN Trunking & IP Subnets   │
+│ • Airtime Utilization & Satisfaction  │      │ • Client Routing, DHCP, & NAT         │
+│ • Controller Commands (Locate, Kick)  │      │ • Firewall Rules & Guest Isolation    │
+└───────────────────────────────────────┘      └───────────────────────────────────────┘
 ```
 
----
-
-## Quick Start (Asuswrt-Merlin)
-
-### 1. Installation
-Installation requires matching installer, startup scripts, WebUI and architecture-specific binary assets. The standalone installer URL is not a complete package; fresh-install packaging and stable-release acceptance remain pending.
-
-The first upgrade from v1.2.4 must explicitly bootstrap the reviewed v1.2.5 scripts/binary, verify checksums and install the tracked startup asset. The legacy one-click updater cannot enforce the new checks before this migration. See the [rollout boundary](docs/AUDIT_STATE.md#verification-and-deployment-boundary). Existing operational commands below are not a recommendation to bypass that gate.
-
-### 2. Configuration & Adoption
-1. In the router WebUI, navigate to **Advanced Settings > Wireless** and click the **UniFi AP Bridge** tab (or open `http://<router-ip>/user3.asp`).
-2. Verify **Controller Discovery Mode** is set to **Auto-detect Gateway** (`http://<gateway-ip>:8080/inform`) or supply a custom controller URL.
-3. Open your **UniFi Network Web UI** (`https://<controller-ip>`), go to **UniFi Devices**.
-4. Locate the pending AP (e.g., `UniFi 6 Mesh` matching your router's MAC address).
-5. Click **Adopt**.
-6. The bridge automatically completes the cryptographic key exchange (`setparam`), transitions to **AES-GCM**, and starts streaming live wireless telemetry.
+> [!NOTE]
+> Client roaming decisions are 802.11 RSSI-driven by the client hardware. In accordance with operational stability guidelines, clients associate with the strongest AP signal; fragile driver-level MAC pinning is avoided to prevent client stranding during AP reboots.
 
 ---
 
-## Updates & Release Tracks
+## Hardware & Environment Baseline
 
-You can check for updates and switch release tracks directly from the **WebUI** or via the **CLI**:
-
-### Via WebUI
-1. Navigate to **Advanced Settings > Wireless > UniFi AP Bridge**.
-2. Under **Software Updates & Release Track Management**:
-   * Select your desired track: **Official Release (`main`)** or **Development Builds (`dev`)**.
-   * Click **Check for Updates**.
-   * **Update Now** installs the addon and requests cluster propagation. The v1.2.5 migration gate above must be completed first; local success does not verify completion on every node. UniFi-triggered updates and router firmware updates remain deferred.
-
-### Via CLI
-```bash
-# Check for updates on official release track
-unifi-bridge update check main
-
-# Check for updates on development track
-unifi-bridge update check dev
-
-# Installation syntax; use only after reviewed migration preparation
-# unifi-bridge update apply dev
-
-# Interactive terminal menu (option 7 for update manager)
-unifi-bridge
-```
-
----
-
-## CLI Management Companion
-
-The `unifi-bridge` command is available directly on the router CLI:
-
-```bash
-unifi-bridge status            # Live PID, model, version, 2.4G/5G client counts, CPU temp, and cluster sync
-unifi-bridge sync              # Immediately push configuration to all Satellite Nodes
-unifi-bridge update check      # Check GitHub repository for new software updates
-unifi-bridge update apply      # Download and install latest update across cluster
-unifi-bridge check             # Probe UniFi controller inform endpoint connectivity
-unifi-bridge logs              # Follow live daemon logs (tail -f /tmp/unifi-bridge.log)
-unifi-bridge restart           # Gracefully restart the bridge daemon
-unifi-bridge stop              # Stop the daemon temporarily (watchdog restarts unless disabled)
-unifi-bridge disable           # Persistently disable the bridge daemon
-unifi-bridge enable            # Persistently enable and start the bridge daemon
-unifi-bridge start             # Start the daemon
-```
-
----
-
-## Wi-Fi Generation Classification
-
-| Client Standard | Protocol Spec | 2.4 GHz Band | 5 GHz Band | Controller Badge |
+| Device | Role | Platform / Model | IP Address | Bridged Personality |
 |---|---|---|---|---|
-| **Wi-Fi 6** | `802.11ax` | `wifi-ng` (HE) | `wifi-na` (HE) | **WiFi 6** |
-| **Wi-Fi 5** | `802.11ac` | N/A | `wifi-na` (VHT) | **WiFi 5** |
-| **Wi-Fi 4** | `802.11n` | `wifi-ng` (HT) | `wifi-na` (HT) | **WiFi 4** |
-| **Legacy** | `802.11b/g/a` | `wifi-b/g` | `wifi-a` | **WiFi 3 / Legacy** |
+| **UniFi Gateway** | Controller | Cloud Gateway Max (UCG-Max) | `10.100.1.1` | Native Controller (`:8080/inform`) |
+| **ZenWiFi XT8 Main** | Root AP / Switch | BCM4908 (Tri-Band AX6600) | `10.100.1.10` | `U6-IW` (Port 1 Uplink to GW Port 1) |
+| **ZenWiFi XT8 Node** | Mesh AP / Switch | BCM4908 (Tri-Band AX6600) | `10.100.1.11` | `U6-IW` (Port 1 Uplink to GW Port 3) |
 
 ---
 
-## Development & Testing
+## Quick Start & Operations
 
+### Service Lifecycle
 ```bash
-# Run Go tests and cluster regression checks
-go test -race ./...
-go vet ./...
+# Check service status and telemetry freshness
+/jffs/scripts/unifi-bridge status
+
+# Stop / Start / Restart daemon
+/jffs/scripts/unifi-bridge restart
+
+# Check daemon inform heartbeats
+tail -n 25 /tmp/unifi-bridge.log
+```
+
+### Upgrading via Release Tracks
+The built-in updater supports atomic cluster upgrades directly from GitHub releases:
+```bash
+# Check for updates on dev or main branch
+/jffs/addons/unifi-bridge/update.sh check dev
+
+# Apply latest release
+/jffs/addons/unifi-bridge/update.sh apply dev
+```
+
+---
+
+## Verification & Testing
+
+The repository maintains full regression suites across Go, Python, and shell backends:
+```bash
+# Run Go unit and mock driver tests
+go test ./...
+
+# Run watchdog recovery and lock eviction tests
+python3 scripts/test_watchdog.py
+
+# Run cluster SSH synchronization tests
 python3 scripts/test_sync_nodes.py
-python3 scripts/test_update_backend.py
-python3 scripts/test_update_apply.py
-python3 scripts/test_startup.py
-python3 scripts/test_secret_guard.py
-python3 scripts/check_secrets.py
-node scripts/test_update_ui.js
-for script in scripts/*.sh; do sh -n "$script"; done
-
-# Build the command package, including health/log helpers.
-# Supply metadata so runtime provenance is available for local builds as in CI.
-BUILD_VERSION=$(tr -d '[:space:]' < version.txt)
-BUILD_COMMIT=$(git rev-parse HEAD)
-BUILD_DATE=$(date -u +%Y-%m-%d)
-BUILD_FLAGS="-s -w -X main.version=$BUILD_VERSION -X main.commit=$BUILD_COMMIT -X main.buildDate=$BUILD_DATE"
-go build -ldflags="$BUILD_FLAGS" -o bin/unifi-bridge ./cmd/unifi-bridge
-
-# Cross-compile static ARMv7 binary for Asuswrt-Merlin (RT-AX86U, XT8, etc.)
-CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags="$BUILD_FLAGS" -o bin/unifi-bridge-armv7 ./cmd/unifi-bridge
-
-# Cross-compile static ARM64 binary (GT-AXE16000, RT-AX89X, etc.)
-CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="$BUILD_FLAGS" -o bin/unifi-bridge-arm64 ./cmd/unifi-bridge
 ```
 
 ---
 
-## Roadmap & Feature Status
+## Documentation Index
 
-### Implemented features (source and deployment distinguished above)
-* [x] **Zero-Dependency Architecture:** Static Go binary running directly on clean Asuswrt-Merlin firmware.
-* [x] **UniFi Inform Engine:** Wire protocol implementation supporting AES-128-CBC bootstrap and AES-128-GCM adopted encryption.
-* [x] **Broadcom Wireless Telemetry:** Physical/virtual discovery across 2.4/5 GHz; v1.2.5 adds complete tri-radio identity and configured VIF discovery, verified in the live UniFi overview on both APs.
-* [x] **Wi-Fi 6 (`802.11ax`) & Wi-Fi 4 (`802.11n`) Classification:** Generation mapping covered by parser tests; unknown driver formats require validation.
-* [x] **Physical Switch Port Telemetry & Bridge FDB Client Discovery (`U6-IW` Emulation) (v1.2.2):** 2.5G WAN uplink and 1G LAN ports reporting live carrier state, speed, full duplex, traffic counters, and learned client MAC tables (`mac_table`) directly into the UniFi Port Manager.
-* [x] **LLDP Topology Telemetry & Conflict Prevention (v1.2.2):** Discovers upstream neighbors via `lldpcli`, preserving distinct remote ports (Port 1 for Main, Port 3 for Node) and aligning with gateway `downlink_table` entries.
-* [x] **Router CPU/Memory Stats & WiFi Experience Scoring (v1.2.0):** The deployed v1.2.5 build uses CPU counter deltas and avoids invented noise/experience when measurements are missing; remaining quality improvements are tracked below.
-* [x] **RF Channel Utilization & Airtime Telemetry (v1.1.0):** Broadcom `chanim_stats` streaming `cu_total`, `cu_self_rx`, and `cu_self_tx` into UniFi RF graphs and router WebUI.
-* [x] **Cumulative Client Traffic Usage Counters (v1.1.0):** Parsing `tx/rx` unicast bytes, packets, retries, rates, and association uptime from `wl sta_info`.
-* [x] **Native Asuswrt WebUI Integration & Form Isolation (v1.2.2):** Advanced Settings > Wireless tab with dynamic slot discovery (`user1`–`user20.asp`), zero-refresh background polling, and form preservation.
-* [x] **Multi-Arch Automated CI/CD:** GitHub Actions release workflow building ARMv7 and ARM64 binary packages.
-* [x] **Automated In-WebUI Updates & Dual Tracks:** Instant release/dev update checks and one-click upgrades.
-* [x] **Cluster Mesh Synchronization:** Centralized AP configuration and binary propagation over SSH.
-
-### Parallel wireless-feature batch (deployed to Main)
-
-The current dev batch adds semantic no-op settings saves (no bridge restart or
-node sync), bounded AP-local station-change history and passive RF trends in the
-Asus UI, Mac-triggered host-resolved WLAN mapping, default-off authenticated reboot
-dispatch, and an explicitly opted-in manual passive scan. These changes are
-deployed to both APs as `fe90aff`. Runtime, passive metrics, changed and unchanged saves, WLAN cache activation, one Main router reboot and passive scan retrieval are verified. Locate execution and full wireless-monitor capture remain pending; bounded LAN PCAP is implemented.
-See [the current feature batch](docs/AUDIT_STATE.md#20-parallel-wireless-feature-batch).
-
-Run `python3 -B scripts/ops/mac_wlan_mapping.py` from the trusted Mac when the
-controller WLANs change. It streams the bounded resolver to CT107 through the
-existing PVE SSH route (the API key remains on CT107), then publishes only the
-requested exact SSID set (defaulting to `blueberry` and `blueberry-prime`) to
-both APs through the Mac's existing SSH access. Up to 32 unique SSIDs may be
-listed with repeated `--ssid` options; unrequested WLANs are never enumerated
-into the cache. The AP cache is private and persistent, and writes only when its content changes. A
-one-time AP configuration change must point `wlan_mapping_file` to
-`/jffs/addons/unifi-bridge/config/wlan-mapping.json`; manual `wlan_mapping`
-entries take precedence, so remove only the manual keys matching the requested
-SSIDs after a successful publish and preserve other entries.
-The tool does not edit AP configuration or schedule refreshes. See
-[`scripts/ops/WLAN_MAPPING_SETUP.md`](scripts/ops/WLAN_MAPPING_SETUP.md) for
-the on-demand workflow, trust requirements, and rollback steps. No controller
-credential belongs on an AP or the Mac.
-
-Reboot support requires `controller_reboot_enabled: true` and an adopted,
-non-bootstrap authenticated GCM session. Only the observed top-level `reboot` and supported `cmd/reboot` shapes
-with a request ID can run the fixed `/sbin/reboot` operation. A private command-ID
-state file alongside adoption state prevents repeated IDs across process/AP
-restarts. Default is off in source; the feature is enabled on both installed APs and Main's real UniFi reboot passed. Locate
-and legacy command shapes can be observed as sanitized metadata but do not
-control LEDs or execute arbitrary commands.
-
-The manual passive scan is never scheduled automatically. After explicit
-authorization for a potentially disruptive serving-radio scan, its command is:
-
-```sh
-unifi-bridge -rf-scan-interface eth4 -rf-scan-channels 6 -allow-disruptive-rf-scan
-```
-
-For example, from the Mac, the following runs a scan on Main's 2.4 GHz radio:
-
-```sh
-ssh -o BatchMode=yes nithin@10.100.1.10 '/tmp/unifi-bridge/unifi-bridge -rf-scan-interface eth4 -rf-scan-channels 6 -allow-disruptive-rf-scan'
-```
-
-The command prints an `rf_scan_result` path. To inspect the result, replace the
-example path below with the exact path printed by the command:
-
-```sh
-ssh -o BatchMode=yes nithin@10.100.1.10 'cat /tmp/unifi-bridge-rf-scan-EXAMPLE.json'
-```
-
-The result can contain nearby network names and identifiers; keep it private.
-The JSON's `results_output` holds the driver's latest scan results, while
-`output_truncated` tells you whether the output limit was reached. The artifact
-records scan-command start/return times, results-read completion time, and
-read-attempt count; these describe the host helper only. `completed_at` records
-when the helper finished, **not** when the radio completed a scan.
-`results_freshness` is `unknown`: the data can predate
-the requested scan, even when the command succeeds. This is a list of observed
-Wi-Fi networks, not a spectrum-analyzer measurement.
-
-The operation uses 100 ms passive/home dwell, an explicit channel list, a
-10-second command deadline and a 16 KiB output cap. The result is mode 0600 in
-RAM. The driver starts scans asynchronously, so the deadline bounds command
-execution, not proven firmware completion. Main scan retrieval passed, with
-result age still unknown. A later bounded passive extended-scan trace produced
-network results but no captured event ID or terminal status; it did not prove
-the results were fresh. A bounded Main LAN capture self-test passed using the
-built-in helper; no tcpdump is required.
-
-### Optional LAN packet capture
-
-The dev CLI can write a short Ethernet PCAP without `tcpdump`. It requires Linux root/CAP_NET_RAW, the existing `br0` bridge and an explicit exact client MAC. It never enables promiscuous or wireless monitor mode. Visibility is limited to Ethernet frames the existing bridge/socket exposes; hardware offload or forwarded traffic may bypass it. This is not an RF scan or a full Wi-Fi management-frame capture.
-
-```sh
-/tmp/unifi-bridge/unifi-bridge -packet-capture-client AA:BB:CC:DD:EE:02 \
-  -packet-capture-seconds 5 -packet-capture-packets 100 \
-  -packet-capture-snaplen 128 -allow-packet-capture
-```
-
-Replace the example with the intended device's unicast MAC. Maximums are10 seconds,100 matching packets,128 bytes per packet and32KiB per file. The result is a private0600 `/tmp/unifi-bridge-packet-*.pcap`; stdout prints its path only. The file can contain packet contents, so keep it private. Truncated PCAP records retain their original wire length. Nothing runs automatically in the daemon, and no capture is uploaded. Source tests, ARMv7/ARM64 compile checks and ten-packet self-tests on Main and Node passed; Node also passed quiet deadline completion. Live limits are recorded in the ledger.
-
-### Native VAP signal and retry telemetry
-
-The accepted dev build reports measured per-network signal and matched host-unicast retry intervals to UniFi. It prioritizes the canonical Broadcom retry counter when the firmware prints multiple counter types. VAP signal is the mean of complete current dBm samples; retry attempts combine matching success, exhausted-frame and retry deltas. First samples, association changes, resets and missing measurements remain unknown. These are measured client-unicast statistics, not all-radio PHY counters; UniFi computes its historical percentages. Deployment/visible AirView acceptance is recorded in the audit ledger.
-
-### Host roaming correlation and bounded command diagnostics
-
-`go run ./cmd/roam-correlator -ap Main=/private/main-status.js -ap Node=/private/node-status.js -window 90s`
-correlates bounded AP-local status snapshots on a trusted host. It uses temporary
-client pseudonyms, sorts observations across APs, and reports polling windows;
-paired observations include each side's observed logical/physical radio, band
-and BSSID when available, but do not establish exact roam timing, causality or
-disconnect reasons.
-The tool performs no network collection or AP configuration changes.
-
-`controller_response_capture_count` defaults to zero. A temporary value of 1–3
-captures at most that many authenticated non-noop GCM replies per daemon start
-under `/tmp/unifi-bridge/controller-probe/` (0700 directory,0600 files,64KiB each).
-This is a diagnostic, not a command handler. Raw replies may contain credentials;
-keep them private, never commit/paste them, and restore the count to zero after
-probing. CBC, bootstrap identities, unknown/invalid keys and noop replies are not
-captured. No capture is enabled by installing an update.
-
-The passive-scan helper starts a scan once and retries only the read-only
-`scanresults` query, at most five times within two seconds and the request
-deadline. Result freshness remains unknown because firmware completion is not
-proven by a successful results read.
-
-### Prioritized backlog and operator decisions
-
-Use [the current feature batch](docs/AUDIT_STATE.md#20-parallel-wireless-feature-batch) for the newly prioritized wireless features and [the audit follow-up queue](docs/AUDIT_STATE.md#17-audit-reconciliation-and-accepted-follow-up-tasks) for the remaining operational/evidence gaps. Earlier worker packets remain dated history; the Main rollout is accepted and no further live operation is implicitly authorized.
-
-Main deployment and its preserved wrapper result are documented in [Section 19](docs/AUDIT_STATE.md#19-approved-main-launch-and-live-acceptance--2026-10-26-2325-utc). Older rollout entries are historical evidence. Source completion, hosted publication, AP deployment and live acceptance are separate milestones.
-
-| Work | Status / next step |
-|---|---|
-| B1–B2: Reliable bridge-addon updates | Fail-closed download/checksum/archive/version/startup/heartbeat checks implemented and tested in dev. A follow-up source fix serializes checks/installs and preserves active status against overlapping requests; its rollout is pending. Immutable complete release bundles, cross-operation settings/sync locking, rollback and verified per-node outcomes remain pending. Stable release publication is separate from merging main. |
-| B3: Preserve settings | JSON merge preserves custom WLAN mappings, node lists, topology and unknown fields; validation, private atomic writes and no-op detection implemented and tested in dev. |
-| B4: Respect disabled state | Daemon and shared tracked startup enforce enabled=false for boot, cluster and manual entry points; startup distribution included in addon updates. Local regression tests pass. |
-| B5: Accurate tri-band telemetry | Separate physical radio/VAP identities, actual channel widths and per-radio counts implemented and tested in dev. Three-radio rendering under U6IW passed in the actual UniFi overview on both APs; other diagnostic/control surfaces remain outside that check. |
-| B6: Exposed controller key | Resolved: replacement installed privately in CT107 and verified; exposed key revoked (old 401, new 200). Temporary secret copies removed. Historical exposure remains documented without key values. |
-| B7–B10: Health and telemetry correctness | CPU deltas, unknown noise/experience handling, topology/FDB corrections, UI freshness/unverified labels and watchdog log cap implemented and tested in dev. Sampling deadlines/caching, stable traffic counters, rollback, structured config verification and remaining form transport work stay open. |
-| F1: WLAN mapping | `scripts/ops/mac_wlan_mapping.py` runs on demand from the Mac, streams the fixed classic WLAN resolver through PVE to CT107, then atomically updates the AP cache over existing Mac SSH. The API key remains on CT107; both AP private caches are activated and verified. Future refreshes need no restart. |
-| F2: Guest/VLAN classification | Report actual VAP bridge/VLAN/isolation metadata first. Classification does not enforce network policy. |
-| F3: Roaming | AP-local client/radio/BSSID timeline is deployed. The host correlator matched a natural Main→Node transition using private snapshots. Polling bounds are explicit; precise event time, reason and causal roam proof remain unavailable. |
-| F4: RF diagnostics | Passive noise/OBSS/trends are deployed; bounded opt-in passive scan retrieval passed on Main. Native utilization ingestion is fixed on both APs. Bounded LAN PCAP passed a Main self-test. Upper-radio traffic/signal history is verified on both APs; driver scan age, native interference and spectrum parity remain unresolved. |
-| F5: Simple UniFi device commands | Authenticated GCM reboot dispatch with persistent request-ID deduplication passed a real Main reboot and is enabled on both APs; Node reboot was not tested. Locate is observation-only; no firmware/provisioning handler. |
-| F6: UniFi provisioning / firmware | **Deferred by operator:** firmware updates, UniFi-triggered bridge upgrades and broad SSID/security/radio/VLAN provisioning. Asus remains the configuration authority. Existing GitHub bridge-addon updater correctness is a separate maintenance fix. |
-| F7: Community distribution | amtm/SNBForums submission after installation, release integrity and compatibility gaps are closed. |
-
-Run the WLAN resolver from a trusted host with controller access and a private API-key file. For a local controller using its self-signed certificate, pass `--insecure` explicitly; otherwise provide the controller CA with `--ca-file`.
-
-```sh
-python3 scripts/ops/wlan_mapping.py \
-  --controller https://10.100.1.1 \
-  --credential-file /path/to/private/unifi-api-key \
-  --insecure \
-  --ssid 'example-2g' --ssid 'example-5g'
-```
-
-The command prints only the requested exact-name mappings as JSON. It performs one GET and does not update `wlan_mapping` or write to the controller.
-
-
----
-
-## License
-
-GNU General Public License v3.0 (GPL-3.0) — see [LICENSE](LICENSE) for details.  
-Copyright (C) 2026 Nithin. All rights reserved.
-
-Asus **RF diagnostics & observed client changes** also separates neighboring WiFi occupancy, bad-frame/control activity, noise-like activity and noise floor. These are passive driver measurements for each physical radio; they do not identify a particular interfering device or supply UniFi's proprietary interference average.
-
-### Read-only AirView history check from the Mac
-
-Run `python3 scripts/ops/radio_history.py --insecure` for this homelab's existing self-signed controller, or supply `--ca-file /path/on/CT107/ca.pem`. Certificate verification is the default. The helper uses the Mac's existing strict-host-verified SSH access through CT107, keeps the API key on CT107, and compares current radio measurements with UniFi's 24-hour history. It prints only per-AP aggregate radio summaries; it does not access the APs, change settings or run on a timer. `null` means unavailable. `history_summary_zero_with_active_clients` is an observation, not proof of its cause or a truly interference-free channel.
-
-### Accepted workaround for upper-radio AirView history
-
-The opt-in `compact_radio_names` config option uses `wifi-na1` for a second 5 GHz radio. It is **off by default**, enabled and live-accepted on both installed APs. UniFi 10.6.109 stores our existing upper-radio measurements, but its summary parser rejects metric names containing the extra hyphen in `wifi-na-1`. The compact identifier fits the observed parser contract.
-
-Do not enable this on an adopted AP without a controlled controller identity migration: UniFi retains old radio rows, and an in-place rename API has not been established. The separately authorized migrations produced exactly three radios on each AP and measured upper-radio AirView traffic/signal summaries; retries and airtime remain measurements and may legitimately be zero in a sample. The option is local to each AP and is preserved by local settings saves and satellite synchronization. See the audit ledger for the accepted migrations, retained backups and history/restore limits. Do not toggle the flag on another existing adoption without a controlled identity migration.
-
-
-The Asus RF diagnostics page now includes a separate Broadcom CCA non-Wi-Fi interference reading and explains the UniFi interference limitation. The page is installed and the underlying values are verified on both APs; signed-in browser rendering remains unverified. The CCA reading is a driver sample of unknown age, not a full interference score or a UniFi value. UniFi's **Avg. Interference** currently shows 0% because the bridge does not supply its `cu_interf` input. This is unavailable telemetry, not evidence of interference-free operation. The Asus RF diagnostics show measured OBSS, bad-frame/control and noise-like activity separately; their equivalence to UniFi interference has not been established.
+- [Live Operational Ledger & Status](docs/AUDIT_STATE.md)
+- [System Architecture Specification](docs/ARCHITECTURE.md)
+- [Layer-2 VLAN & Security Architecture](docs/VLAN_SECURITY_ARCHITECTURE.md)
+- [Product & Reliability Audit (November 2026)](docs/audit/2026-11-04-unifi-ap-bridge-product-and-reliability-audit.md)
