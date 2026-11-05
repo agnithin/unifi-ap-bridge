@@ -219,6 +219,7 @@ The proposed CT107 scheduled WLAN refresh conflicts with the operator's earlier 
 | **F6** | Medium | State Durability | **Fix In Progress** | Add `f.Sync()` to temp file before rename, sync parent directory, maintain verified generation backup `state.json.bak`. | v1.2.11 |
 | **F7** | Medium | Wi-Fi Health Probing | **Planned** | Add data-plane liveness check (`wl isup` + gateway ping); route AP dead notifications to homelab Prometheus / Uptime Kuma external alerts. | v1.2.12 |
 | **F8** | Medium | Ops & Docs Automation | **In Progress** | Align docs to v1.2.10 reality (Locate, Kick, Lock AP); schedule automated `wlan-mapping.json` refresh via ops-broker (LXC 107) cron. | v1.2.12 |
+| **F9** | Medium | Client Steering & Lock to AP | **Evaluated** | Analysis of `fixed_ap_available`: Inform protocol does not push per-client lock ACLs; client roaming is 802.11 RSSI-driven. Evaluated API polling vs natural roaming. | v1.2.12 |
 
 ---
 
@@ -281,4 +282,17 @@ The proposed CT107 scheduled WLAN refresh conflicts with the operator's earlier 
 * **Response / Action:**
   1. **Automate Mapping Refresh:** Move mapping generation into a scheduled script on LXC 107 (ops-broker) that queries the UniFi controller API directly and deploys `wlan-mapping.json` to APs automatically.
   2. **Doc Synchronization:** Update `README.md` and legacy docs to remove obsolete claims (e.g. marking Locate as unimplemented).
+
+#### F9 — Medium: "Lock to AP" Controller Mechanism vs Native Broadcom 802.11 Roaming
+* **Audit Assessment:** Setting `"fixed_ap_available": true` in the inform heartbeat signals to the UniFi Controller that the AP supports client locking. However, live investigation confirms:
+  1. **Inform Protocol Omission:** UniFi Network Controller records `fixed_ap_enabled: true` and `fixed_ap_mac` on client user objects (`/rest/user`), but **never pushes client lock deny rules down to APs via the inform protocol**. In the inform schema, `setparam: blocked_sta` is used exclusively for global, network-wide client bans.
+  2. **Native Ubiquiti vs Broadcom Architecture:** Genuine UniFi APs run Ubiquiti's proprietary `stamgr` daemon to intercept association requests and reject non-preferred clients. ASUS Merlin runs Broadcom kernel drivers (`wl`) without `stamgr`; the driver naturally accepts any valid association request unless an explicit Broadcom MAC deny list (`wl macmode 1`) is active.
+  3. **Reconnect Mechanics:** Clicking "Reconnect" sends `_type: "cmd", cmd: "kick-sta"`, which drops the client. In standard 802.11 Wi-Fi, the client immediately scans and reconnects to the strongest RSSI (e.g., Google TV sees Node AP at -60 dBm vs Main AP at -72 dBm).
+* **Architectural Options & Operational Impact:**
+  * **Option A (Automated Controller API Polling + Dynamic Driver ACLs):** Poll `/proxy/network/api/s/default/rest/user` every 30–60s and write `wl macmode 1` deny lists to Broadcom radios on non-preferred APs.
+    * *Cons:* Requires reverse HTTPS credentials on APs; high blast radius if driver glitches or enters `macmode 2` (dropping all clients); single-point-of-failure device stranding if the locked AP goes offline; RF penalty from forcing clients onto weak -75 dBm signals across floors.
+  * **Option B (Retire `fixed_ap_available` & Rely on Natural 802.11 Roaming — Recommended):** Set `"fixed_ap_available": false` in inform payload.
+    * *Pros:* Zero maintenance, zero risk of Wi-Fi outages, preserves natural client roaming to the strongest AP, and honest UniFi UI status (greys out lock toggle rather than failing silently).
+* **Resolution Plan:** Present trade-offs to operator. If zero maintenance and low risk of failure are prioritized, transition `fixed_ap_available` to `false` in v1.2.12.
+
 
