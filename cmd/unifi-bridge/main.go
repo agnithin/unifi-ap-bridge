@@ -25,7 +25,7 @@ import (
 )
 
 var (
-	version   = "1.2.9"
+	version   = "1.2.10"
 	commit    = "none"
 	buildDate = "unknown"
 )
@@ -414,6 +414,8 @@ func main() {
 	responseCapture := &controllerResponseCapture{dir: controllerResponseCaptureDir, remaining: cfg.ControllerResponseCaptureCount}
 	rebootDispatcher := inform.NewRebootDispatcher(cfg.ControllerRebootEnabled, startPlatformReboot, filepath.Join(filepath.Dir(cfg.StatePath), "controller-command-state.json"))
 	locateDispatcher := inform.NewLocateDispatcher(startPlatformLocate)
+	kickDispatcher := inform.NewKickDispatcher(startPlatformKick)
+	macFilterDispatcher := inform.NewMacFilterDispatcher(startPlatformMacFilter)
 	wlanMappingCache := telemetry.NewWLANMappingCache(cfg.WlanMappingFile)
 	stationTimeline := telemetry.NewStationTimeline(64, 512)
 	rfHistory := telemetry.NewPassiveRFHistory(60, 8)
@@ -582,7 +584,7 @@ func main() {
 			logEvent("[unifi-bridge] Controller response capture unavailable")
 		}
 
-		observation, commandResult := authenticatedControllerCommand(respPacket, key, adopted, rebootDispatcher, locateDispatcher, time.Now())
+		observation, commandResult := authenticatedControllerCommand(respPacket, key, adopted, rebootDispatcher, locateDispatcher, kickDispatcher, macFilterDispatcher, time.Now())
 		if observation != nil {
 			health.CommandObservation = observation
 			health.CommandResult = commandResult

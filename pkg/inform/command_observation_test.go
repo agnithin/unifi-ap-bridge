@@ -36,6 +36,16 @@ func TestObserveAuthenticatedCommandSanitizesDocumentedShapes(t *testing.T) {
 			payload:  map[string]any{"_type": "cmd", "cmd": "unset-locate", "_id": "request", "time": float64(1790000000), "datetime": "2026-10-26T12:00:00Z"},
 			wantType: "cmd", wantAction: "stop-locate", wantID: true, wantTime: true,
 		},
+		{
+			name:     "observed kick-sta",
+			payload:  map[string]any{"_type": "cmd", "cmd": "kick-sta", "mac": "ee:28:41:7f:fa:ec", "_id": "request", "time": float64(1790000000), "datetime": "2026-10-26T12:00:00Z"},
+			wantType: "cmd", wantAction: "kick-sta", wantID: true, wantTime: true,
+		},
+		{
+			name:     "observed blocked-sta setparam",
+			payload:  map[string]any{"_type": "setparam", "blocked_sta": "ee:28:41:7f:fa:ec\n", "_id": "request", "time": float64(1790000000)},
+			wantType: "setparam", wantAction: "set-blocked-sta", wantID: true, wantTime: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

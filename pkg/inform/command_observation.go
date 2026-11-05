@@ -8,6 +8,7 @@ type CommandObservation struct {
 	Action       string `json:"action"`
 	HasID        bool   `json:"has_id"`
 	HasTimestamp bool   `json:"has_timestamp"`
+	TargetMAC    string `json:"target_mac,omitempty"`
 }
 
 // ObserveAuthenticatedCommand recognizes only command shapes supported by
@@ -15,9 +16,9 @@ type CommandObservation struct {
 // authenticated AES-GCM response has been successfully decoded. CBC responses
 // do not provide authentication and must not be observed through this API.
 //
-// Main captures confirm a top-level `_type: reboot` request and a
-// `_type: cmd, cmd: set-locate` request after GCM authentication. The locate
-// shape is observed only; this package does not change LED state.
+// Main captures confirm a top-level `_type: reboot` request, a
+// `_type: cmd, cmd: set-locate` request, and a `_type: cmd, cmd: kick-sta`
+// request after GCM authentication.
 func ObserveAuthenticatedCommand(payload map[string]any, authenticated bool) (CommandObservation, bool) {
 	if !authenticated || payload == nil {
 		return CommandObservation{}, false
@@ -25,6 +26,8 @@ func ObserveAuthenticatedCommand(payload map[string]any, authenticated bool) (Co
 
 	typ, _ := payload["_type"].(string)
 	action := ""
+	targetMAC := ""
+
 	switch typ {
 	case "reboot": // legacy documented form
 		action = "reboot"
@@ -37,7 +40,20 @@ func ObserveAuthenticatedCommand(payload map[string]any, authenticated bool) (Co
 			action = "locate"
 		case "unset-locate":
 			action = "stop-locate"
+		case "kick-sta":
+			action = "kick-sta"
+			if rawMAC, ok := payload["mac"].(string); ok {
+				if normMAC, err := NormalizeMAC(rawMAC); err == nil {
+					targetMAC = normMAC
+				}
+			}
 		default:
+			return CommandObservation{}, false
+		}
+	case "setparam", "setstate":
+		if _, ok := payload["blocked_sta"]; ok {
+			action = "set-blocked-sta"
+		} else {
 			return CommandObservation{}, false
 		}
 	default:
@@ -49,6 +65,7 @@ func ObserveAuthenticatedCommand(payload map[string]any, authenticated bool) (Co
 		Action:       action,
 		HasID:        nonEmptyString(payload["_id"]),
 		HasTimestamp: validTimestamp(payload["time"]) || nonEmptyString(payload["datetime"]),
+		TargetMAC:    targetMAC,
 	}, true
 }
 

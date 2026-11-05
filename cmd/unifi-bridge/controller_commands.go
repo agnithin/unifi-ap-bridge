@@ -15,7 +15,16 @@ import (
 // Only authenticated replies for an already adopted, non-bootstrap identity
 // reach the opt-in dispatchers. Packet.Mode is the verified response mode,
 // rather than an assumption based on the mode of the outgoing request.
-func authenticatedControllerCommand(packet *inform.Packet, key []byte, adopted bool, rebootDispatcher *inform.RebootDispatcher, locateDispatcher *inform.LocateDispatcher, now time.Time) (*inform.CommandObservation, *inform.CommandDispatchResult) {
+func authenticatedControllerCommand(
+	packet *inform.Packet,
+	key []byte,
+	adopted bool,
+	rebootDispatcher *inform.RebootDispatcher,
+	locateDispatcher *inform.LocateDispatcher,
+	kickDispatcher *inform.KickDispatcher,
+	macFilterDispatcher *inform.MacFilterDispatcher,
+	now time.Time,
+) (*inform.CommandObservation, *inform.CommandDispatchResult) {
 	if packet == nil || packet.Mode != inform.ModeGCM || !adopted || len(key) != 16 ||
 		bytes.Equal(key, inform.DefaultBootstrapKey[:]) {
 		return nil, nil
@@ -25,11 +34,27 @@ func authenticatedControllerCommand(packet *inform.Packet, key []byte, adopted b
 		return nil, nil
 	}
 	var result inform.CommandDispatchResult
-	if observation.Action == "reboot" && rebootDispatcher != nil {
-		result = rebootDispatcher.Dispatch(packet.Payload, inform.CommandEligibility{AuthenticatedGCM: true, Adopted: true}, now)
-	} else if (observation.Action == "locate" || observation.Action == "stop-locate") && locateDispatcher != nil {
-		result = locateDispatcher.Dispatch(packet.Payload, inform.CommandEligibility{AuthenticatedGCM: true, Adopted: true}, now)
+	eligibility := inform.CommandEligibility{AuthenticatedGCM: true, Adopted: true}
+
+	switch observation.Action {
+	case "reboot":
+		if rebootDispatcher != nil {
+			result = rebootDispatcher.Dispatch(packet.Payload, eligibility, now)
+		}
+	case "locate", "stop-locate":
+		if locateDispatcher != nil {
+			result = locateDispatcher.Dispatch(packet.Payload, eligibility, now)
+		}
+	case "kick-sta":
+		if kickDispatcher != nil {
+			result = kickDispatcher.Dispatch(packet.Payload, eligibility, now)
+		}
+	case "set-blocked-sta":
+		if macFilterDispatcher != nil {
+			result = macFilterDispatcher.Dispatch(packet.Payload, eligibility)
+		}
 	}
+
 	if result.Type == "" {
 		return &observation, nil
 	}
@@ -186,3 +211,48 @@ func (c *platformLocateController) Execute(active bool) error {
 func startPlatformLocate(active bool) error {
 	return defaultLocateController.Execute(active)
 }
+
+func getPlatformWirelessInterfaces() []string {
+	out, err := exec.Command("nvram", "get", "wl_ifnames").Output()
+	if err == nil {
+		fields := strings.Fields(string(out))
+		if len(fields) > 0 {
+			candidates := append(fields, "wl0.1", "wl0.2", "wl0.3", "wl1.1", "wl1.2", "wl1.3", "wl2.1", "wl2.2", "wl2.3")
+			return candidates
+		}
+	}
+	return []string{"eth4", "eth5", "eth6", "wl0.1", "wl1.1", "wl2.1"}
+}
+
+func startPlatformKick(mac string) error {
+	normMAC, err := inform.NormalizeMAC(mac)
+	if err != nil {
+		return err
+	}
+	ifaces := getPlatformWirelessInterfaces()
+	for _, iface := range ifaces {
+		_ = exec.Command("wl", "-i", iface, "deauthenticate", normMAC).Run()
+	}
+	return nil
+}
+
+func startPlatformMacFilter(blockedMACs []string) error {
+	ifaces := getPlatformWirelessInterfaces()
+	for _, iface := range ifaces {
+		if len(blockedMACs) == 0 {
+			_ = exec.Command("wl", "-i", iface, "mac", "none").Run()
+			_ = exec.Command("wl", "-i", iface, "macmode", "0").Run()
+		} else {
+			_ = exec.Command("wl", "-i", iface, "mac", "none").Run()
+			args := append([]string{"-i", iface, "mac"}, blockedMACs...)
+			_ = exec.Command("wl", args...).Run()
+			_ = exec.Command("wl", "-i", iface, "macmode", "1").Run() // 1 = Deny in Broadcom wl
+			// Immediately deauthenticate currently associated blocked stations
+			for _, mac := range blockedMACs {
+				_ = exec.Command("wl", "-i", iface, "deauthenticate", mac).Run()
+			}
+		}
+	}
+	return nil
+}
+

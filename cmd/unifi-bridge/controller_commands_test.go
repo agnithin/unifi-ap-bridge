@@ -31,7 +31,7 @@ func TestControllerCommandsRequireActualGCMAdoptedPrivateIdentity(t *testing.T) 
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
 			dispatcher := inform.NewRebootDispatcher(tc.enabled, func() error { calls++; return nil }, filepath.Join(t.TempDir(), "commands.json"))
-			observation, result := authenticatedControllerCommand(&inform.Packet{Mode: tc.mode, Payload: payload}, tc.key, tc.adopted, dispatcher, nil, time.Now())
+			observation, result := authenticatedControllerCommand(&inform.Packet{Mode: tc.mode, Payload: payload}, tc.key, tc.adopted, dispatcher, nil, nil, nil, time.Now())
 			if calls != tc.wantCalls || (observation != nil) != tc.wantObservation {
 				t.Fatalf("calls=%d observation=%v", calls, observation)
 			}
@@ -61,7 +61,7 @@ func TestControllerObservedTopLevelRebootEnvelopeRemainsDefaultOffAndGated(t *te
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
 			dispatcher := inform.NewRebootDispatcher(tc.enabled, func() error { calls++; return nil }, filepath.Join(t.TempDir(), "commands.json"))
-			observation, result := authenticatedControllerCommand(&inform.Packet{Mode: tc.mode, Payload: payload}, key, tc.adopted, dispatcher, nil, time.Now())
+			observation, result := authenticatedControllerCommand(&inform.Packet{Mode: tc.mode, Payload: payload}, key, tc.adopted, dispatcher, nil, nil, nil, time.Now())
 			if calls != tc.want {
 				t.Fatalf("executor calls=%d want=%d", calls, tc.want)
 			}
@@ -81,7 +81,7 @@ func TestControllerObservedTopLevelRebootEnvelopeRemainsDefaultOffAndGated(t *te
 func TestControllerLocateIsObservedWithoutAction(t *testing.T) {
 	calls := 0
 	dispatcher := inform.NewRebootDispatcher(true, func() error { calls++; return nil }, filepath.Join(t.TempDir(), "commands.json"))
-	observation, result := authenticatedControllerCommand(&inform.Packet{Mode: inform.ModeGCM, Payload: map[string]any{"_type": "cmd", "cmd": "set-locate", "_id": "fixture-only", "time": float64(1790000000), "datetime": "2026-10-27T12:00:00Z", "extra": "must not be retained"}}, []byte("0123456789abcdef"), true, dispatcher, nil, time.Now())
+	observation, result := authenticatedControllerCommand(&inform.Packet{Mode: inform.ModeGCM, Payload: map[string]any{"_type": "cmd", "cmd": "set-locate", "_id": "fixture-only", "time": float64(1790000000), "datetime": "2026-10-27T12:00:00Z", "extra": "must not be retained"}}, []byte("0123456789abcdef"), true, dispatcher, nil, nil, nil, time.Now())
 	if observation == nil || observation.Action != "locate" || result != nil || calls != 0 {
 		t.Fatalf("observation=%v result=%v calls=%d", observation, result, calls)
 	}
@@ -99,7 +99,7 @@ func TestControllerLocateExecution(t *testing.T) {
 
 	// set-locate
 	payloadSet := map[string]any{"_type": "cmd", "cmd": "set-locate", "_id": "locate-1"}
-	obs, res := authenticatedControllerCommand(&inform.Packet{Mode: inform.ModeGCM, Payload: payloadSet}, key, true, nil, locateDispatcher, time.Now())
+	obs, res := authenticatedControllerCommand(&inform.Packet{Mode: inform.ModeGCM, Payload: payloadSet}, key, true, nil, locateDispatcher, nil, nil, time.Now())
 	if obs == nil || obs.Action != "locate" || res == nil || res.Status != "started" {
 		t.Fatalf("set-locate failed: obs=%v res=%v", obs, res)
 	}
@@ -109,7 +109,7 @@ func TestControllerLocateExecution(t *testing.T) {
 
 	// unset-locate
 	payloadUnset := map[string]any{"_type": "cmd", "cmd": "unset-locate", "_id": "locate-2"}
-	obs, res = authenticatedControllerCommand(&inform.Packet{Mode: inform.ModeGCM, Payload: payloadUnset}, key, true, nil, locateDispatcher, time.Now())
+	obs, res = authenticatedControllerCommand(&inform.Packet{Mode: inform.ModeGCM, Payload: payloadUnset}, key, true, nil, locateDispatcher, nil, nil, time.Now())
 	if obs == nil || obs.Action != "stop-locate" || res == nil || res.Status != "started" {
 		t.Fatalf("unset-locate failed: obs=%v res=%v", obs, res)
 	}
@@ -257,4 +257,39 @@ func TestPlatformLocateController(t *testing.T) {
 			t.Fatalf("expected brightness 0\\n, got %q", string(data))
 		}
 	})
+}
+
+func TestControllerKickAndMacFilterExecution(t *testing.T) {
+	key := []byte("0123456789abcdef")
+	var kickedMAC string
+	kickDispatcher := inform.NewKickDispatcher(func(mac string) error {
+		kickedMAC = mac
+		return nil
+	})
+
+	var filteredMACs []string
+	macFilterDispatcher := inform.NewMacFilterDispatcher(func(blockedMACs []string) error {
+		filteredMACs = blockedMACs
+		return nil
+	})
+
+	// Test kick-sta
+	payloadKick := map[string]any{"_type": "cmd", "cmd": "kick-sta", "mac": "ee:28:41:7f:fa:ec", "_id": "kick-1"}
+	obs, res := authenticatedControllerCommand(&inform.Packet{Mode: inform.ModeGCM, Payload: payloadKick}, key, true, nil, nil, kickDispatcher, nil, time.Now())
+	if obs == nil || obs.Action != "kick-sta" || res == nil || res.Status != "kicked" {
+		t.Fatalf("kick-sta failed: obs=%v res=%v", obs, res)
+	}
+	if kickedMAC != "ee:28:41:7f:fa:ec" {
+		t.Fatalf("kickedMAC=%s", kickedMAC)
+	}
+
+	// Test blocked-sta setparam
+	payloadFilter := map[string]any{"_type": "setparam", "blocked_sta": "ee:28:41:7f:fa:ec\n38:ab:41:ff:95:05\n"}
+	obs, res = authenticatedControllerCommand(&inform.Packet{Mode: inform.ModeGCM, Payload: payloadFilter}, key, true, nil, nil, nil, macFilterDispatcher, time.Now())
+	if obs == nil || obs.Action != "set-blocked-sta" || res == nil || res.Status != "updated" {
+		t.Fatalf("blocked-sta failed: obs=%v res=%v", obs, res)
+	}
+	if len(filteredMACs) != 2 {
+		t.Fatalf("expected 2 filtered MACs, got %v", filteredMACs)
+	}
 }
