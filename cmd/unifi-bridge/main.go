@@ -25,7 +25,7 @@ import (
 )
 
 var (
-	version   = "1.2.10"
+	version   = "1.2.11"
 	commit    = "none"
 	buildDate = "unknown"
 )
@@ -564,13 +564,10 @@ func main() {
 		}
 
 		respRaw, err := client.Post(ctx, packet)
-		resetAdoption := health.observePost(err)
+		isRejected := health.observePost(err)
 		if err != nil {
-			if adopted && resetAdoption {
-				logEvent("[unifi-bridge] Controller rejected 3 consecutive informs; resetting adoption state")
-				if resetErr := stateMgr.Reset(); resetErr != nil {
-					return fmt.Errorf("failed to persist adoption reset: %w", resetErr)
-				}
+			if adopted && isRejected {
+				logEvent("[unifi-bridge] Warning: Controller returned repeated HTTP 401/404 rejections; preserving adoption identity and backing off")
 			}
 			return err
 		}

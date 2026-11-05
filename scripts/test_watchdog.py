@@ -141,6 +141,24 @@ class WatchdogTests(unittest.TestCase):
         self.assertTrue(self.alive.exists())
         self.assertIn("refusing to start a duplicate", (self.tmpfs / "unifi-bridge-watchdog.log").read_text())
 
+    def test_stale_start_lock_dead_pid_evicted_and_recovered(self):
+        lock = self.tmpfs / "unifi-bridge-start.lock"
+        lock.mkdir()
+        (lock / "pid").write_text("99999\n")
+        self.run_watchdog()
+        self.assertEqual(self.launches.read_text().count("launch"), 1)
+        self.assertFalse(lock.exists())
+        self.assertIn("evicting stale lock", (self.tmpfs / "unifi-bridge-watchdog.log").read_text())
+
+    def test_stale_mutation_lock_dead_pid_evicted_and_recovered(self):
+        lock = self.tmpfs / "unifi-bridge-mutation.lock"
+        lock.mkdir()
+        (lock / "pid").write_text("88888\n")
+        self.run_watchdog()
+        self.assertEqual(self.launches.read_text().count("launch"), 1)
+        self.assertFalse(lock.exists())
+        self.assertIn("evicting stale lock", (self.tmpfs / "unifi-bridge-watchdog.log").read_text())
+
 
 if __name__ == "__main__":
     unittest.main()

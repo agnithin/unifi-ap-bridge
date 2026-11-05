@@ -17,7 +17,7 @@ func TestMacFilterDispatcherUpdatesDenyList(t *testing.T) {
 
 	payload := map[string]any{
 		"_type":       "setparam",
-		"blocked_sta": "ee:28:41:7f:fa:ec\n38:ab:41:ff:95:05\ninvalid-mac\n",
+		"blocked_sta": "ee:28:41:7f:fa:ec\n38:ab:41:ff:95:05\n\n",
 	}
 
 	res := dispatcher.Dispatch(payload, CommandEligibility{AuthenticatedGCM: true, Adopted: true})
@@ -68,5 +68,25 @@ func TestMacFilterDispatcherRejectsIneligible(t *testing.T) {
 	res = errDispatcher.Dispatch(payload, CommandEligibility{AuthenticatedGCM: true, Adopted: true})
 	if res.Status != "failed" {
 		t.Fatalf("expected failed, got %+v", res)
+	}
+}
+
+func TestMacFilterDispatcherFailsClosedOnMalformedMAC(t *testing.T) {
+	calls := 0
+	dispatcher := NewMacFilterDispatcher(func(blockedMACs []string) error {
+		calls++
+		return nil
+	})
+
+	payload := map[string]any{
+		"_type":       "setparam",
+		"blocked_sta": "ee:28:41:7f:fa:ec\nnot-a-mac\n",
+	}
+	res := dispatcher.Dispatch(payload, CommandEligibility{AuthenticatedGCM: true, Adopted: true})
+	if res.Status != "invalid_mac" {
+		t.Fatalf("expected invalid_mac, got %+v", res)
+	}
+	if calls != 0 {
+		t.Fatalf("executor should not have been called on malformed input: calls=%d", calls)
 	}
 }

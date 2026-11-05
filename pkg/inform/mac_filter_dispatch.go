@@ -46,9 +46,15 @@ func (d *MacFilterDispatcher) Dispatch(payload map[string]any, eligibility Comma
 	macMap := make(map[string]struct{})
 	for _, line := range strings.Split(rawBlocked, "\n") {
 		line = strings.TrimSpace(line)
-		if norm, err := NormalizeMAC(line); err == nil && norm != "" {
-			macMap[norm] = struct{}{}
+		if line == "" {
+			continue
 		}
+		norm, err := NormalizeMAC(line)
+		if err != nil || norm == "" {
+			result.Status = "invalid_mac"
+			return result
+		}
+		macMap[norm] = struct{}{}
 	}
 
 	macList := make([]string, 0, len(macMap))

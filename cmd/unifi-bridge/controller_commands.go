@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -212,16 +213,32 @@ func startPlatformLocate(active bool) error {
 	return defaultLocateController.Execute(active)
 }
 
+const platformCommandTimeout = 3 * time.Second
+
 func getPlatformWirelessInterfaces() []string {
-	out, err := exec.Command("nvram", "get", "wl_ifnames").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), platformCommandTimeout)
+	defer cancel()
+
+	candidates := []string{"eth4", "eth5", "eth6"}
+	out, err := exec.CommandContext(ctx, "nvram", "get", "wl_ifnames").Output()
 	if err == nil {
-		fields := strings.Fields(string(out))
-		if len(fields) > 0 {
-			candidates := append(fields, "wl0.1", "wl0.2", "wl0.3", "wl1.1", "wl1.2", "wl1.3", "wl2.1", "wl2.2", "wl2.3")
-			return candidates
+		if fields := strings.Fields(string(out)); len(fields) > 0 {
+			candidates = fields
 		}
 	}
-	return []string{"eth4", "eth5", "eth6", "wl0.1", "wl1.1", "wl2.1"}
+	allCandidates := append(candidates, "wl0.1", "wl0.2", "wl1.1", "wl1.2", "wl2.1", "wl2.2")
+
+	var active []string
+	for _, iface := range allCandidates {
+		isupOut, isupErr := exec.CommandContext(ctx, "wl", "-i", iface, "isup").Output()
+		if isupErr == nil && strings.TrimSpace(string(isupOut)) == "1" {
+			active = append(active, iface)
+		}
+	}
+	if len(active) == 0 {
+		return candidates
+	}
+	return active
 }
 
 func startPlatformKick(mac string) error {
@@ -229,27 +246,52 @@ func startPlatformKick(mac string) error {
 	if err != nil {
 		return err
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), platformCommandTimeout)
+	defer cancel()
+
 	ifaces := getPlatformWirelessInterfaces()
+	var lastErr error
 	for _, iface := range ifaces {
-		_ = exec.Command("wl", "-i", iface, "deauthenticate", normMAC).Run()
+		if err := exec.CommandContext(ctx, "wl", "-i", iface, "deauthenticate", normMAC).Run(); err != nil {
+			lastErr = err
+		}
 	}
-	return nil
+	return lastErr
 }
 
 func startPlatformMacFilter(blockedMACs []string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), platformCommandTimeout)
+	defer cancel()
+
 	ifaces := getPlatformWirelessInterfaces()
 	for _, iface := range ifaces {
+		expectedMode := "0"
 		if len(blockedMACs) == 0 {
-			_ = exec.Command("wl", "-i", iface, "mac", "none").Run()
-			_ = exec.Command("wl", "-i", iface, "macmode", "0").Run()
+			if err := exec.CommandContext(ctx, "wl", "-i", iface, "mac", "none").Run(); err != nil {
+				return fmt.Errorf("wl mac none failed on %s: %w", iface, err)
+			}
+			if err := exec.CommandContext(ctx, "wl", "-i", iface, "macmode", "0").Run(); err != nil {
+				return fmt.Errorf("wl macmode 0 failed on %s: %w", iface, err)
+			}
 		} else {
-			_ = exec.Command("wl", "-i", iface, "mac", "none").Run()
+			expectedMode = "1"
+			_ = exec.CommandContext(ctx, "wl", "-i", iface, "mac", "none").Run()
 			args := append([]string{"-i", iface, "mac"}, blockedMACs...)
-			_ = exec.Command("wl", args...).Run()
-			_ = exec.Command("wl", "-i", iface, "macmode", "1").Run() // 1 = Deny in Broadcom wl
-			// Immediately deauthenticate currently associated blocked stations
+			if err := exec.CommandContext(ctx, "wl", args...).Run(); err != nil {
+				return fmt.Errorf("wl mac set failed on %s: %w", iface, err)
+			}
+			if err := exec.CommandContext(ctx, "wl", "-i", iface, "macmode", "1").Run(); err != nil {
+				return fmt.Errorf("wl macmode 1 failed on %s: %w", iface, err)
+			}
 			for _, mac := range blockedMACs {
-				_ = exec.Command("wl", "-i", iface, "deauthenticate", mac).Run()
+				_ = exec.CommandContext(ctx, "wl", "-i", iface, "deauthenticate", mac).Run()
+			}
+		}
+		// Readback verification: verify driver accepted expected mode
+		readback, err := exec.CommandContext(ctx, "wl", "-i", iface, "macmode").Output()
+		if err == nil {
+			if actual := strings.TrimSpace(string(readback)); actual != expectedMode {
+				return fmt.Errorf("macmode readback mismatch on %s: got %s, want %s", iface, actual, expectedMode)
 			}
 		}
 	}

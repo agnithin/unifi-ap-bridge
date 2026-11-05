@@ -12,6 +12,12 @@ WATCHDOG_STATE="/tmp/unifi-bridge-watchdog-state"
 WATCHDOG_OBSERVED="/tmp/unifi-bridge-watchdog-observed"
 STATUS_FILE="/tmp/var/wwwext/unifi-bridge/status.js"
 
+if [ -f "$WATCHDOG_LOG" ] && [ "$(wc -c < "$WATCHDOG_LOG")" -gt 1048576 ]; then : > "$WATCHDOG_LOG"; fi
+
+log_watchdog() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Watchdog: $*" >> "$WATCHDOG_LOG"
+}
+
 if ! mkdir "$WATCHDOG_LOCK" 2>/dev/null; then
     owner=$(cat "$WATCHDOG_LOCK/pid" 2>/dev/null || true)
     case "$owner" in
@@ -30,6 +36,7 @@ trap 'exit 1' HUP INT TERM
 # Startup, settings and activation own lifecycle changes while their locks or
 # transaction journal are present. The watchdog never enters those windows.
 MUTATION_LOCK="/tmp/unifi-bridge-mutation.lock"
+START_LOCK="/tmp/unifi-bridge-start.lock"
 mutation_lock_owned=0
 release_mutation_lock() {
     if [ "$mutation_lock_owned" -eq 1 ] && [ "$(cat "$MUTATION_LOCK/pid" 2>/dev/null)" = "$$" ]; then
@@ -38,25 +45,65 @@ release_mutation_lock() {
 }
 trap 'release_mutation_lock; rm -rf "$WATCHDOG_LOCK"' EXIT
 
+is_lock_stale() {
+    lock_path="$1"
+    [ -d "$lock_path" ] || return 1
+    owner=$(cat "$lock_path/pid" 2>/dev/null || true)
+    case "$owner" in
+        *[0-9]*)
+            case "$owner" in
+                *[!0-9]*) ;;
+                *)
+                    if ! /bin/kill -0 "$owner" 2>/dev/null; then
+                        return 0
+                    fi
+                    return 1
+                    ;;
+            esac
+            ;;
+    esac
+    lock_time=$(date -r "$lock_path" +%s 2>/dev/null || true)
+    case "$lock_time" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    now_sec=$(date +%s 2>/dev/null || true)
+    case "$now_sec" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    lock_age=$((now_sec - lock_time))
+    [ "$lock_age" -gt 600 ] && return 0
+    return 1
+}
+
+evict_stale_lock() {
+    lock_path="$1"
+    if is_lock_stale "$lock_path"; then
+        owner=$(cat "$lock_path/pid" 2>/dev/null || echo "none")
+        log_watchdog "evicting stale lock $lock_path (owner $owner)"
+        stale_dir="$lock_path.stale.$$"
+        mv "$lock_path" "$stale_dir" 2>/dev/null || return 1
+        rm -rf "$stale_dir"
+        return 0
+    fi
+    return 1
+}
+
 recovery_blocked() {
-    [ -d "/tmp/unifi-bridge-start.lock" ] && return 0
+    evict_stale_lock "$START_LOCK"
+    [ -d "$START_LOCK" ] && return 0
     [ -f "$INSTALL_DIR/.update-transaction/active" ] && return 0
     if [ -d "$MUTATION_LOCK" ]; then
         owner=$(cat "$MUTATION_LOCK/pid" 2>/dev/null || true)
         [ "$mutation_lock_owned" -eq 1 ] && [ "$owner" = "$$" ] && return 1
-        return 0
+        evict_stale_lock "$MUTATION_LOCK"
+        [ -d "$MUTATION_LOCK" ] && return 0
     fi
     return 1
 }
 
 acquire_recovery_lock() {
     if ! mkdir "$MUTATION_LOCK" 2>/dev/null; then
-        owner=$(cat "$MUTATION_LOCK/pid" 2>/dev/null || true)
-        case "$owner" in ''|*[!0-9]*) return 1 ;; esac
-        /bin/kill -0 "$owner" 2>/dev/null && return 1
-        stale_lock="$MUTATION_LOCK.stale.$$"
-        mv "$MUTATION_LOCK" "$stale_lock" 2>/dev/null || return 1
-        rm -rf "$stale_lock"
+        evict_stale_lock "$MUTATION_LOCK" || return 1
         mkdir "$MUTATION_LOCK" 2>/dev/null || return 1
     fi
     echo "$$" > "$MUTATION_LOCK/pid" || { rmdir "$MUTATION_LOCK" 2>/dev/null || true; return 1; }
@@ -68,12 +115,7 @@ acquire_recovery_lock() {
 
 recovery_blocked && exit 0
 
-if [ -f "$WATCHDOG_LOG" ] && [ "$(wc -c < "$WATCHDOG_LOG")" -gt 1048576 ]; then : > "$WATCHDOG_LOG"; fi
 [ -f "$CONFIG_FILE" ] || exit 0
-
-log_watchdog() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Watchdog: $*" >> "$WATCHDOG_LOG"
-}
 
 read_field() {
     sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p" "$STATUS_FILE" 2>/dev/null | head -n 1

@@ -61,12 +61,30 @@ func (sm *StateManager) Load() error {
 	defer sm.mu.Unlock()
 
 	data, err := os.ReadFile(sm.statePath)
+	if err != nil && errors.Is(err, os.ErrNotExist) {
+		bakFile := sm.statePath + ".bak"
+		if bakData, bakErr := os.ReadFile(bakFile); bakErr == nil {
+			data = bakData
+			err = nil
+		}
+	}
 	if err != nil {
 		return err
 	}
 
 	var loaded SessionState
 	if err := json.Unmarshal(data, &loaded); err != nil {
+		bakFile := sm.statePath + ".bak"
+		if bakData, bakErr := os.ReadFile(bakFile); bakErr == nil {
+			if bakUnmarshalErr := json.Unmarshal(bakData, &loaded); bakUnmarshalErr == nil && loaded.Schema == 1 && loaded.MAC == sm.mac {
+				if loaded.AuthKeyHex != "" && validAuthKey(loaded.AuthKeyHex) {
+					loaded.Adopted = true
+					loaded.Mode = ModeGCM
+				}
+				sm.state = loaded
+				return nil
+			}
+		}
 		return ErrStateCorrupted
 	}
 
@@ -101,11 +119,40 @@ func (sm *StateManager) Save() error {
 	}
 
 	tmpFile := sm.statePath + ".tmp"
-	if err := os.WriteFile(tmpFile, data, 0600); err != nil {
+	f, err := os.OpenFile(tmpFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmpFile)
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmpFile)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmpFile)
 		return err
 	}
 
-	return os.Rename(tmpFile, sm.statePath)
+	bakFile := sm.statePath + ".bak"
+	if _, err := os.Stat(sm.statePath); err == nil {
+		_ = os.WriteFile(bakFile, data, 0600)
+	}
+
+	if err := os.Rename(tmpFile, sm.statePath); err != nil {
+		return err
+	}
+
+	if df, err := os.Open(dir); err == nil {
+		_ = df.Sync()
+		_ = df.Close()
+	}
+
+	return nil
 }
 
 func (sm *StateManager) GetKey() []byte {
