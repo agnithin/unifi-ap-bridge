@@ -1,12 +1,11 @@
 # UniFi AP Bridge — Operational State & Status
 
-> **Current Delivery Status (October 2026):**
-> - **Main AP (`10.100.1.10`):** Running commit `d9b6674` (v1.2.8 dev).
-> - **Node AP (`10.100.1.11`):** Running commit `d9b6674` (v1.2.8 dev).
-> - **Published dev Release:** `dev-0524d48360d463045ebe598ab1414fa2b9640840` ([Release Assets](https://github.com/agnithin/unifi-ap-bridge/releases)).
-> - **Controller Integration:** UniFi Cloud Gateway Max (`10.100.1.1`), Network Application 10.6.109. Both APs adopted as U6IW via GCM encryption.
-> - **VLAN Isolation & Fail-Closed Security:** Deployed and verified multi-layer L2 isolation across both APs (dynamic `/jffs/scripts/firewall-start` filters, autonomous node boot in MerVLAN, kernel `MERV_MAC` shield with 51 drop rules, and independent node cold reboot verified). See [docs/VLAN_SECURITY_ARCHITECTURE.md](VLAN_SECURITY_ARCHITECTURE.md).
-> - **Historical Evidence:** Detailed day-by-day deployment logs from October 24–28, 2026 are archived in [docs/archive/2026-10-28-audit-state-history.md](archive/2026-10-28-audit-state-history.md). Independent review report is in [docs/audit/2026-10-29-unifi-ap-bridge-homelab-review.md](audit/2026-10-29-unifi-ap-bridge-homelab-review.md).
+> **Current delivery status — 2026-11-04 PST:**
+> - **Main and Node:** Read-only status showed both running `cdcf66f421fbe91c660eeff4eae09dacabb9678e` (v1.2.11 dev), adopted and `Active (GCM)`, with fresh successful informs and no sample-stage errors.
+> - **Published dev release:** `dev-cdcf66f421fbe91c660eeff4eae09dacabb9678e`; hosted [CI run 41955463224](https://github.com/agnithin/unifi-ap-bridge/actions/runs/41955463224) passed. CI and daemon health do not establish hardware acceptance of every command/recovery change.
+> - **Audit follow-up:** v1.2.11 includes partial hardening for F1, F2, F4, F5 and F6. MAC-filter preservation/readback, stale-lock fault cases and state-backup durability still require review and targeted tests; see the [November audit](audit/2026-11-04-unifi-ap-bridge-product-and-reliability-audit.md).
+> - **Controller:** Cloud Gateway Max (`10.100.1.1`), previously recorded Network Application 10.6.109. Both APs report adopted GCM status; the controller version was not rechecked here.
+> - **Historical evidence:** See the [VLAN security architecture](VLAN_SECURITY_ARCHITECTURE.md), [October audit history](archive/2026-10-28-audit-state-history.md), and [October review](audit/2026-10-29-unifi-ap-bridge-homelab-review.md).
 
 ---
 
@@ -37,13 +36,14 @@ The bridge daemon is supervised by a 5-minute cron watchdog (`watchdog.sh`).
   Clears `/jffs/addons/unifi-bridge/state.json` and restarts the daemon into unadopted discovery mode.
 
 ### WLAN Mapping Cache Invalidation & Refresh
-The bridge caches SSID-to-WLAN ObjectId mappings at `/jffs/addons/unifi-bridge/wlan_mapping.json`.
-- The cache merges valid partial updates into previous entries and retains last-good lookups during transient network outages.
-- If an SSID is renamed, deleted, or reassigned in the UniFi controller, remove the cached file on both APs to trigger a clean re-resolution:
-  ```bash
-  rm -f /jffs/addons/unifi-bridge/wlan_mapping.json
-  ```
-- The next periodic sample or daemon restart will query the trusted controller host helper and construct a fresh mapping file atomically.
+The on-demand Mac helper publishes the configured cache at
+`/jffs/addons/unifi-bridge/config/wlan-mapping.json`; its controller credential
+stays on CT107. After a WLAN change, use the documented exact-SSID refresh in
+[WLAN_MAPPING_SETUP.md](../scripts/ops/WLAN_MAPPING_SETUP.md). There is no
+verified scheduled CT107 refresh. Published entries merge into the running
+last-known-good map, so removing an SSID from the file does not necessarily
+remove it from memory until a reviewed restart. Do not delete a different cache
+path or assume the daemon will query the controller itself.
 
 ### Routine Verification Commands
 ```bash
@@ -71,8 +71,13 @@ ssh nithin@10.100.1.10 '/jffs/addons/unifi-bridge/sync_nodes.sh status'
 
 ---
 
-## 4. Next Deployment Actions (When On Local Network)
+## 4. Open Work and Session Handoff
 
-1. **Verify Staged Build:** Check published dev bundle containing Locate worker completion synchronization, station departure guards, JSON projection resilience, and static fork reduction.
-2. **Canary Rollout to Node AP:** Update satellite node (`10.100.1.11`) first via `/jffs/addons/unifi-bridge/update.sh apply dev`, verify clean adoption and station counters.
-3. **Rollout to Main AP:** Update Main router (`10.100.1.10`), verify cluster synchronization panel in WebUI and UniFi Controller topology.
+- **Review v1.2.11 command safety first:** MAC-filter execution still clears a driver list, has no snapshot/rollback or exact list verification, and ignores a failed mode readback. Confirm ownership and prevent policy loss before relying on block/unblock.
+- **Review state and recovery hardening:** the backup write uses the newly marshaled state before primary rename, ignores backup-write errors, and directory sync errors are ignored; it does not yet establish a validated previous generation. Validate stale locks and interrupted transactions with fault-injection and hardware-safe checks.
+- **Product scope:** Controller configuration-version acknowledgments do not establish ASUS WLAN/radio configuration was applied. Full provisioning is separate work; ASUS/MerVLAN own live settings today.
+- **Operational follow-up:** Verify independent data-plane alerts, and keep WLAN refresh on demand from the Mac unless the operator explicitly changes that decision. The proposed CT107 cron in the November audit is not an approved or deployed change.
+- **Wireless limits:** UniFi interference mapping, fresh scan-result identity, and wireless monitor-mode capture remain unproven. Locate support exists in source; validate against current firmware before claiming its restore behavior has been newly accepted.
+
+The November 4 status check was read-only. No bridge rollout, router reboot,
+controller write, radio change or credential change was performed for this handoff.

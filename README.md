@@ -1,6 +1,6 @@
 # unifi-ap-bridge
 
-> **Current delivery status — 2026-10-29 PDT:** Both APs are deployed on `d9b6674` (v1.2.8 dev) with compact radio naming, Broadcom CCA interference diagnostics, unified ports/RF WebUI, and verified GCM adoption. Current `dev` development cycle focuses on release reliability and truthfulness: deterministic Locate LED synchronization, truthful station departure handling, jq-independent status extraction, and adoption persistence retry. See [current audit state](docs/AUDIT_STATE.md) and [audit review](docs/audit/2026-10-29-unifi-ap-bridge-homelab-review.md).
+> **Current delivery status — 2026-11-04 PST:** Both APs run `cdcf66f` (v1.2.11 dev), adopted with fresh GCM status and no reported sample-stage errors in a read-only check. The v1.2.11 reliability changes passed hosted CI but several audit findings still require source review and hardware validation, especially MAC-filter policy preservation and adoption-state backup durability. See [current audit state](docs/AUDIT_STATE.md) and the [November audit](docs/audit/2026-11-04-unifi-ap-bridge-product-and-reliability-audit.md).
 
 A high-performance, ultra-lightweight standalone daemon and WebUI addon for **Asuswrt-Merlin** and Linux routers that bridges Broadcom Wi-Fi and switch telemetry into the **Ubiquiti UniFi Inform Protocol** (`:8080/inform`).
 
@@ -10,7 +10,7 @@ It emulates a genuine UniFi 6 Access Point—featuring native **UniFi 6 In-Wall 
 
 ## Current deployment
 
-Both APs run `d9b6674`, version `1.2.8 dev`, with `compact_radio_names: true`. Fresh GCM, the installed RF page, unified ports, and CCA status values are verified. Protected config/key/cache, fresh GCM, watchdogs and clean transactions are active; adoption states are retained privately. Both APs report channels 6/36/161 at 20/40/80 MHz and the correct gateway ports. Locate LED synchronization is supported with deterministic worker completion.
+Both APs run `cdcf66f` (v1.2.11 dev). A read-only check on November 4 observed both adopted, with fresh GCM informs and no reported sampling-stage errors. Earlier radio, port, settings and capture acceptance is historical evidence; the v1.2.11 changes need their own targeted acceptance. ASUS/MerVLAN remain responsible for actual Wi-Fi and VLAN configuration.
 
 See [audit state](docs/AUDIT_STATE.md), [audit review](docs/audit/2026-10-29-unifi-ap-bridge-homelab-review.md), and [architecture](docs/ARCHITECTURE.md).
 

@@ -201,6 +201,12 @@ We have reviewed the product, architecture, and reliability audit in detail. The
 
 Below is the action matrix for each finding, outlining the quick status, implementation plan, and architectural scope.
 
+### Handoff update — 2026-11-04
+
+Commit `cdcf66f` (v1.2.11) landed and passed hosted [CI](https://github.com/agnithin/unifi-ap-bridge/actions/runs/41955463224); a read-only check found it running with fresh adopted GCM status on both APs. The matrix below records the original response plan, not proof that every planned safeguard is implemented or hardware-accepted. Source inspection shows MAC-filter execution still clears the existing driver list, lacks snapshot/rollback and exact list readback, and ignores failed `macmode` readback. State backup writes the new state before primary rename and ignores backup-write errors, so a validated prior generation is not established. Keep F1/F2 and F4–F6 open for targeted review, failure tests and applicable live acceptance.
+
+The proposed CT107 scheduled WLAN refresh conflicts with the operator's earlier choice to keep refresh on demand from the Mac; do not treat it as approved or deployed.
+
 ### Quick Status Summary
 
 | Finding | Severity | Category | Status | Action Plan / Resolution | Target |
