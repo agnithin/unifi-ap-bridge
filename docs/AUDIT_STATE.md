@@ -81,6 +81,6 @@ ssh nithin@10.100.1.10 '/jffs/addons/unifi-bridge/sync_nodes.sh status'
 - **Operational Documentation & Tooling (F8):** WLAN mapping refresh remains on-demand from the Mac.
 
 ### Session Handoff Summary
-- **Current Live Deployment:** `v1.2.11` (commit `cdcf66f421fbe91c660eeff4eae09dacabb9678e`), adopted and active GCM on both APs (`10.100.1.10` and `10.100.1.11`).
+- **Current Live Deployment:** `v1.2.12` (commit `61db1e50a559e059017084bb9843bc8abd280079`), adopted and active GCM on both APs (`10.100.1.10` and `10.100.1.11`).
 - **Live Cleanup Completed:** Verified all wireless interfaces on both APs have `macmode: 0` (clean unhindered Broadcom operation).
-- **Staged Code Changes (v1.2.12):** Filter snapshot/rollback (F2), radio `isup` probe (F7), version bump to `1.2.12`. All Go and Python tests passing 100%. (No live deployment to APs performed without explicit operator request).
+- **All Phase 1 Hardening Deployed:** Filter snapshot/rollback (F2), radio `isup` probe (F7), watchdog stale lock eviction (F4), state sync durability (F6), transport error safety (F5). All Go and Python tests passing 100%.
