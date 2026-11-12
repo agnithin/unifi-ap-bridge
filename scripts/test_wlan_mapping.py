@@ -56,21 +56,35 @@ class WlanMappingTests(unittest.TestCase):
         self.assertNotIn("external_id", json.dumps(result))
         self.assertNotIn("x_passphrase", json.dumps(result))
 
-    def test_duplicate_missing_and_uuid_ids_fail_closed(self) -> None:
+    def test_duplicate_missing_and_malformed_ids_fail_closed(self) -> None:
         duplicate = {"meta": {"rc": "ok"}, "data": self.rows["data"] + [self.rows["data"][0]]}
         with self.assertRaisesRegex(ValueError, "exactly one"):
             wlan_mapping.resolve_mapping(duplicate, ["allowed"])
         with self.assertRaisesRegex(ValueError, "exactly one"):
             wlan_mapping.resolve_mapping(self.rows, ["missing"])
-        uuid_row = {"meta": {"rc": "ok"}, "data": [{"name": "allowed", "_id": "550e8400-e29b-41d4-a716-446655440000"}]}
+        malformed_row = {"meta": {"rc": "ok"}, "data": [{"name": "allowed", "_id": "not-a-valid-id-12345"}]}
         with self.assertRaisesRegex(ValueError, "legacy ObjectId"):
-            wlan_mapping.resolve_mapping(uuid_row, ["allowed"])
+            wlan_mapping.resolve_mapping(malformed_row, ["allowed"])
         duplicate_id = {"meta": {"rc": "ok"}, "data": [
             {"name": "allowed", "_id": "0123456789abcdef01234567"},
             {"name": "other", "_id": "0123456789abcdef01234567"},
         ]}
         with self.assertRaisesRegex(ValueError, "duplicate legacy ObjectIds"):
             wlan_mapping.resolve_mapping(duplicate_id, ["allowed", "other"])
+
+    def test_supports_modern_unifi_uuid_and_legacy_object_id(self) -> None:
+        uuid_rows = {
+            "meta": {"rc": "ok"},
+            "data": [
+                {"name": "blueberry", "_id": "025ee20f-f052-45e7-be69-eac49a305bb4"},
+                {"name": "blueberry-prime", "_id": "85f55ea7-95d2-46af-a1c4-b4f94a0c6da0"},
+            ],
+        }
+        res = wlan_mapping.resolve_mapping(uuid_rows, ["blueberry", "blueberry-prime"])
+        self.assertEqual(res, {
+            "blueberry": "025ee20f-f052-45e7-be69-eac49a305bb4",
+            "blueberry-prime": "85f55ea7-95d2-46af-a1c4-b4f94a0c6da0",
+        })
 
     def test_explicit_allowlist_is_deduplicated_and_bounded(self) -> None:
         self.assertEqual(wlan_mapping.normalize_ssids(["allowed", "allowed"]), ["allowed"])

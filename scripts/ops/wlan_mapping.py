@@ -31,8 +31,15 @@ class RejectRedirects(HTTPRedirectHandler):
         raise HTTPError(req.full_url, code, "UniFi redirect rejected", headers, fp)
 
 
+UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z")
+OBJECT_ID_RE = re.compile(r"[0-9a-fA-F]{24}\Z")
+
+
 def valid_legacy_id(value: Any) -> bool:
-    return isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{24}", value) is not None
+    """Validate either a classic 24-hex MongoDB ObjectId or modern UniFi RFC 4122 UUID."""
+    if not isinstance(value, str):
+        return False
+    return OBJECT_ID_RE.fullmatch(value) is not None or UUID_RE.fullmatch(value) is not None
 
 
 def normalize_ssids(requested_ssids: list[str]) -> list[str]:

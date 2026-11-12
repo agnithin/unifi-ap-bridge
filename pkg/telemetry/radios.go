@@ -2,14 +2,33 @@ package telemetry
 
 import "encoding/hex"
 
-// ValidLegacyWlanID reports whether id is a 12-byte legacy UniFi ObjectId.
-// Integration API UUIDs are a different identifier and must not be used here.
+// ValidLegacyWlanID reports whether id is a valid UniFi WLAN identifier:
+// either a 12-byte legacy 24-hex ObjectId or a modern 36-char RFC 4122 UUID.
 func ValidLegacyWlanID(id string) bool {
-	if len(id) != 24 {
-		return false
+	if len(id) == 24 {
+		_, err := hex.DecodeString(id)
+		return err == nil
 	}
-	_, err := hex.DecodeString(id)
-	return err == nil
+	if len(id) == 36 {
+		return isValidUUID(id)
+	}
+	return false
+}
+
+func isValidUUID(u string) bool {
+	for i := 0; i < len(u); i++ {
+		c := u[i]
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if c != '-' {
+				return false
+			}
+		} else {
+			if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // AssignRadioStationCounts associates a VAP with its physical radio, not merely

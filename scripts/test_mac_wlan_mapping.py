@@ -39,15 +39,22 @@ class MacWlanMappingTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "invalid mapping JSON"):
             mac_wlan_mapping.validate_mapping(b'{"iot":"0123456789abcdef01234567","iot":"abcdef0123456789abcdef01"}', ["iot"])
 
-    def test_mapping_validation_rejects_extra_names_and_uuid_ids(self) -> None:
+    def test_mapping_validation_rejects_extra_names_and_malformed_ids(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "unexpected"):
             mac_wlan_mapping.validate_mapping(json.dumps({**self.mapping, "guest": "0123456789abcdef01234567"}).encode())
-        invalid = {**self.mapping, "blueberry": "550e8400-e29b-41d4-a716-446655440000"}
+        invalid = {**self.mapping, "blueberry": "not-valid-id-12345"}
         with self.assertRaisesRegex(RuntimeError, "ObjectId"):
             mac_wlan_mapping.validate_mapping(json.dumps(invalid).encode())
         duplicate_id = {"blueberry": "0123456789abcdef01234567", "blueberry-prime": "0123456789abcdef01234567"}
         with self.assertRaisesRegex(RuntimeError, "duplicate WLAN ObjectIds"):
             mac_wlan_mapping.validate_mapping(json.dumps(duplicate_id).encode())
+
+    def test_mapping_validation_accepts_uuid_ids(self) -> None:
+        uuid_map = {
+            "blueberry": "025ee20f-f052-45e7-be69-eac49a305bb4",
+            "blueberry-prime": "85f55ea7-95d2-46af-a1c4-b4f94a0c6da0",
+        }
+        self.assertEqual(mac_wlan_mapping.validate_mapping(json.dumps(uuid_map).encode()), uuid_map)
 
     @patch.object(mac_wlan_mapping.subprocess, "run")
     def test_ct_lookup_streams_source_and_returns_only_mapping(self, run) -> None:  # noqa: ANN001

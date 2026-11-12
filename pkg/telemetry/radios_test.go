@@ -9,7 +9,10 @@ func TestValidLegacyWlanID(t *testing.T) {
 	}{
 		{"6adb775a27327fe7fefdc22c", true},
 		{"6ADB775A27327FE7FEFDC22C", true},
-		{"550e8400-e29b-41d4-a716-446655440000", false},
+		{"550e8400-e29b-41d4-a716-446655440000", true},
+		{"550E8400-E29B-41D4-A716-446655440000", true},
+		{"550e8400-e29b-41d4-a716-44665544000z", false},
+		{"550e8400xe29b-41d4-a716-446655440000", false},
 		{"zzdb775a27327fe7fefdc22c", false},
 		{"6adb775a27327fe7fefdc22", false},
 	} {
