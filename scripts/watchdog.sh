@@ -117,6 +117,24 @@ recovery_blocked && exit 0
 
 [ -f "$CONFIG_FILE" ] || exit 0
 
+# Refresh WLAN mapping from upstream provider if configured
+mapping_url=$(sed -n 's/.*"wlan_mapping_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$CONFIG_FILE" 2>/dev/null || true)
+mapping_file=$(sed -n 's/.*"wlan_mapping_file"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$CONFIG_FILE" 2>/dev/null || true)
+if [ -n "$mapping_url" ] && [ -n "$mapping_file" ]; then
+    tmp_mapping="/tmp/wlan-mapping.tmp.$$"
+    if curl -s -f -m 5 "$mapping_url" -o "$tmp_mapping" 2>/dev/null && [ -s "$tmp_mapping" ]; then
+        if ! cmp -s "$tmp_mapping" "$mapping_file" 2>/dev/null; then
+            mv -f "$tmp_mapping" "$mapping_file" && chmod 600 "$mapping_file" 2>/dev/null || true
+            log_watchdog "updated $mapping_file from $mapping_url"
+        else
+            rm -f "$tmp_mapping"
+        fi
+    else
+        rm -f "$tmp_mapping"
+    fi
+fi
+
+
 read_field() {
     sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p" "$STATUS_FILE" 2>/dev/null | head -n 1
 }
@@ -272,24 +290,5 @@ fi
 # Refresh cluster status on Main AP. This is independent of bridge recovery.
 if [ -f "$INSTALL_DIR/sync_nodes.sh" ]; then
     "$INSTALL_DIR/sync_nodes.sh" status >/dev/null 2>&1 &
-fi
-
-# Refresh WLAN mapping from upstream provider if configured
-if [ -f "$CONFIG_FILE" ]; then
-    mapping_url=$(sed -n 's/.*"wlan_mapping_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$CONFIG_FILE" 2>/dev/null || true)
-    mapping_file=$(sed -n 's/.*"wlan_mapping_file"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$CONFIG_FILE" 2>/dev/null || true)
-    if [ -n "$mapping_url" ] && [ -n "$mapping_file" ]; then
-        tmp_mapping="/tmp/wlan-mapping.tmp.$$"
-        if curl -s -f -m 5 "$mapping_url" -o "$tmp_mapping" 2>/dev/null && [ -s "$tmp_mapping" ]; then
-            if ! cmp -s "$tmp_mapping" "$mapping_file" 2>/dev/null; then
-                mv -f "$tmp_mapping" "$mapping_file" && chmod 600 "$mapping_file" 2>/dev/null || true
-                log_watchdog "updated $mapping_file from $mapping_url"
-            else
-                rm -f "$tmp_mapping"
-            fi
-        else
-            rm -f "$tmp_mapping"
-        fi
-    fi
 fi
 
