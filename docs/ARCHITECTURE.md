@@ -1,6 +1,6 @@
 # Architecture & Technical Reference
 
-> **Current delivery status — 2026-11-05 PST:** Both APs run `61db1e5` (v1.2.12 dev), with fresh adopted GCM status and zero sample-stage errors. Includes command hardening (bounded timeouts, fail-closed MAC filters with atomic rollback), power-loss state durability with generational backup, radio liveness probing, and watchdog stale-lock eviction. See [the canonical live ledger](AUDIT_STATE.md).
+> **Current delivery status — 2026-11-12 PST:** Both APs run `v1.2.13` (`ce0ca58`), with fresh adopted GCM status and zero sample-stage errors. Includes modern UniFi RFC 4122 UUID WLAN mapping with automated 5-minute pull sync from CT107, provisioning boundary loop avoidance (F3), command hardening (bounded timeouts, fail-closed MAC filters with atomic rollback), power-loss state durability with generational backup, radio liveness probing, and watchdog stale-lock eviction. See [the canonical live ledger](AUDIT_STATE.md).
 
 `unifi-ap-bridge` is a standalone, dependency-free daemon and WebUI extension engineered for Asuswrt-Merlin and Broadcom-based routers. It translates raw Linux and Broadcom wireless and switch telemetry into the Ubiquiti UniFi Inform protocol (`:8080/inform`).
 
@@ -119,6 +119,24 @@ All communication with `:8080/inform` utilizes the UniFi binary wire packet form
    * Controller and persisted keys must decode to 16 bytes of hexadecimal data. Malformed responses cannot replace an existing valid identity.
    * Three consecutive HTTP 401/404 rejections permit adoption recovery. Success, transport failures, HTTP 400, and other HTTP statuses break that sequence; HTTP 400 does not reset adoption. This threshold is a recovery policy, not proof the controller forgot the device.
    * `state.json` is saved via temporary-file rename when controller responses change adoption or configuration state, and on recovery reset. Writes are not restricted to first adoption or manual settings changes.
+
+### 3.3 Provisioning Boundary & Loop Avoidance (Finding F3)
+
+A core architectural invariant is the strict operational division between UniFi controller telemetry and physical router management:
+
+1. **Telemetry & Observational Domain (Owned by UniFi Controller):**
+   * UniFi Cloud Gateway Max / Network Application owns observational topology, device classification, port link/speed detection, switch forwarding table mapping, locate LED triggering, and historic RF airtime tracking.
+   * The controller provides the central dashboard, traffic graphs, and historical network visualization.
+
+2. **Physical Radio & Network Domain (Owned by Asuswrt-Merlin & MerVLAN):**
+   * Broadcom FullMAC kernel drivers and Asuswrt NVRAM own physical radio hardware (`eth4`, `eth5`, `eth6`), RF spectrum configuration (channels, channel widths, transmit power, beamforming, beacon intervals), SSIDs, WPA2/WPA3 credentials, and AiMesh backhaul.
+   * MerVLAN (`/jffs/addons/mervlan`) owns 802.1Q VLAN trunking and virtual AP tagging.
+   * Destructive configuration directives from the controller (e.g., rewriting `/tmp/system.cfg`, re-partitioning interfaces, or flashing vendor firmware blobs) are strictly ignored and never executed on the router.
+
+3. **Controller Loop Prevention (`cfgversion` Echoing):**
+   * Whenever site settings or WLANs change in the UniFi controller, inform responses contain a `cfgversion` token.
+   * If an AP does not reflect this token back in subsequent inform payloads (`stateMgr.GetCfgVersion()`), the UniFi controller interprets the AP as out of synchronization and traps it in an infinite "Provisioning..." state loop, repeating heavy payload delivery and potentially resetting associations.
+   * The bridge daemon records incoming `cfgversion` values into `/jffs/addons/unifi-bridge/state.json` and echoes them in every inform heartbeat. This signals configuration convergence to the controller's state machine, maintaining stable `Active (GCM)` status while keeping physical router hardware completely safe.
 
 ---
 
