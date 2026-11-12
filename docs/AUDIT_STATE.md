@@ -35,15 +35,11 @@ The bridge daemon is supervised by a 5-minute cron watchdog (`watchdog.sh`).
 - **Adoption Reset:** `/jffs/scripts/unifi-bridge reset`  
   Clears `/jffs/addons/unifi-bridge/state.json` and restarts the daemon into unadopted discovery mode.
 
-### WLAN Mapping Cache Invalidation & Refresh
-The on-demand Mac helper publishes the configured cache at
-`/jffs/addons/unifi-bridge/config/wlan-mapping.json`; its controller credential
-stays on CT107. After a WLAN change, use the documented exact-SSID refresh in
-[WLAN_MAPPING_SETUP.md](../scripts/ops/WLAN_MAPPING_SETUP.md). There is no
-verified scheduled CT107 refresh. Published entries merge into the running
-last-known-good map, so removing an SSID from the file does not necessarily
-remove it from memory until a reviewed restart. Do not delete a different cache
-path or assume the daemon will query the controller itself.
+### WLAN Mapping Cache Invalidation & Automated Refresh
+The cache is stored at `/jffs/addons/unifi-bridge/config/wlan-mapping.json` (mode 0600).
+- **Automated Pull (Primary):** When `"wlan_mapping_url"` is configured in `config.json` (e.g., `http://10.100.1.107:8000/api/v1/network/aps/wlan-mapping`), `watchdog.sh` polls the endpoint every 5 minutes via cron. It compares the downloaded payload against the active cache (`cmp -s`), updating atomically via rename only when mappings change (zero flash wear when unchanged).
+- **On-Demand Push (Fallback):** The Mac helper `python3 -B scripts/ops/mac_wlan_mapping.py` remains available to manually push exact SSIDs to Main and Node without exposing controller credentials outside CT107.
+- **Merge Behavior:** Published entries merge into the running last-known-good map, so removing an SSID from the file does not necessarily remove it from memory until a reviewed restart. Do not delete a different cache path or assume the daemon will query the controller directly.
 
 ### Routine Verification Commands
 ```bash

@@ -159,6 +159,18 @@ class WatchdogTests(unittest.TestCase):
         self.assertFalse(lock.exists())
         self.assertIn("evicting stale lock", (self.tmpfs / "unifi-bridge-watchdog.log").read_text())
 
+    def test_wlan_mapping_url_sync_updates_file_when_changed(self):
+        self.process()
+        self.status.write_text('window.unifiBridgeStatus = {"pid":123,"sample_updated_at":990,"interval_sec":10,"sample_fresh":true};')
+        mapping_file = self.install / "config/wlan-mapping.json"
+        mapping_file.write_text('{"old":"123"}')
+        self.config.write_text(f'{{"enabled":true,"wlan_mapping_url":"http://test/map","wlan_mapping_file":"{mapping_file}"}}')
+        self.mock("curl", 'while [ "$#" -gt 0 ]; do [ "$1" = "-o" ] && echo \'{"blueberry":"uuid-123"}\' > "$2"; shift; done')
+        self.run_watchdog()
+        self.assertEqual(mapping_file.read_text().strip(), '{"blueberry":"uuid-123"}')
+        self.assertIn("updated", (self.tmpfs / "unifi-bridge-watchdog.log").read_text())
+
+
 
 if __name__ == "__main__":
     unittest.main()
