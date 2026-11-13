@@ -1,6 +1,6 @@
 # Architecture & Technical Reference
 
-> **Current delivery status — 2026-11-12 PST:** Both APs run `v1.2.15` (`f879a4c`), with fresh adopted GCM status and zero sample-stage errors. Includes sub-second fast roaming event follower, modern UniFi RFC 4122 UUID WLAN mapping with automated 5-minute pull sync from CT107, provisioning boundary loop avoidance (F3), command hardening (bounded timeouts, fail-closed MAC filters with atomic rollback), power-loss state durability with generational backup, radio liveness probing, and watchdog stale-lock eviction. See [the canonical live ledger](AUDIT_STATE.md).
+> **Current delivery status — 2026-11-13 PST:** Both APs run `v1.2.16`, with fresh adopted GCM status and zero sample-stage errors. Includes hardened controller trust boundary (strict GCM verification for adopted state changes), full MAC-filter transaction rollback across all touched interfaces, power-loss durable adoption state with unique tempfiles and generational backups, sub-second fast roaming syslog follower, modern UniFi RFC 4122 UUID WLAN mapping with automated 5-minute pull sync from CT107, provisioning boundary loop avoidance (F3), radio liveness probing, and watchdog stale-lock eviction. See [the canonical live ledger](AUDIT_STATE.md).
 
 `unifi-ap-bridge` is a standalone, dependency-free daemon and WebUI extension engineered for Asuswrt-Merlin and Broadcom-based routers. It translates raw Linux and Broadcom wireless and switch telemetry into the Ubiquiti UniFi Inform protocol (`:8080/inform`).
 

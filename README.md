@@ -1,7 +1,7 @@
 # unifi-ap-bridge
 
 [![CI / Release](https://github.com/agnithin/unifi-ap-bridge/actions/workflows/release.yml/badge.svg)](https://github.com/agnithin/unifi-ap-bridge/actions)
-[![Current Version](https://img.shields.io/badge/version-1.2.15-blue.svg)](version.txt)
+[![Current Version](https://img.shields.io/badge/version-1.2.16-blue.svg)](version.txt)
 [![Target](https://img.shields.io/badge/target-Asuswrt--Merlin%20%7C%20Broadcom-green.svg)](docs/ARCHITECTURE.md)
 
 A high-performance, ultra-lightweight standalone daemon and WebUI extension for **Asuswrt-Merlin** and Broadcom Linux routers that bridges wireless and switch telemetry into the **Ubiquiti UniFi Inform Protocol** (`:8080/inform`).

@@ -1,13 +1,14 @@
 # UniFi AP Bridge — Operational State & Status
 
-> **Current delivery status — 2026-11-12 PST:**
-> - **Main and Node:** Both APs actively running `v1.2.15` (Git `f879a4c`), adopted and `Active (GCM)`, with sub-second fast roaming telemetry active, fresh successful informs, and zero sample-stage errors.
+> **Current delivery status — 2026-11-13 PST:**
+> - **Main and Node:** Both APs running `v1.2.16`, adopted and `Active (GCM)`, with sub-second fast roaming telemetry active, fresh successful informs, and zero sample-stage errors.
+> - **Code Security & Reliability Audit (Nov 13, 2026):** Fixed controller trust boundary (strict GCM check on all adopted state replies), MAC-filter transaction snapshotting and reverse-order rollback across all touched interfaces, adoption persistence with unique temporary files and atomic generational backups, wire JSON limit enforcement and redirect refusal, syslog rotation and split line handling, and expanded CI race coverage.
 > - **Modern UniFi RFC 4122 UUID Support (F8):** Fully compliant with UniFi Network 11 UUID WLAN identifiers; controller UUID validation warnings permanently eliminated.
 > - **Fast Roaming Event Telemetry (Task 4):** Integrated background `SyslogFollower` tailing `/tmp/syslog.log` in tmpfs RAM. Emits sub-second wireless transitions (`wlceventd` ReAssoc, Disassoc, Deauth, and `roamast` steer) into `StationTimeline` and prompts instantaneous inform dispatch to UniFi Controller (debounced to 500ms).
 > - **Automated WLAN Mapping Sync (F8):** `watchdog.sh` polls `http://10.100.1.107:8000/api/v1/network/aps/wlan-mapping` every 5 minutes, validates, compares via `cmp -s`, and replaces cache atomically only on change (zero flash wear when unchanged).
-> - **Hardening Delivered:** Includes F1 (bounded timeouts, dynamic interface detection), F2 (filter snapshot/rollback on failure), F3 (formalized provisioning boundary & loop avoidance), F4 (watchdog stale lock eviction), F5 (non-destructive transport retries), F6 (atomic sync durability), F7 (radio liveness probe), F8 (UUID WLAN mapping + automated pull), and F9 (natural 802.11 roaming).
+> - **Hardening Delivered:** Includes A1-A8 (Nov 13 audit fixes), F1 (bounded timeouts, dynamic interface detection), F2 (filter snapshot/rollback on failure), F3 (formalized provisioning boundary & loop avoidance), F4 (watchdog stale lock eviction), F5 (non-destructive transport retries), F6 (atomic sync durability), F7 (radio liveness probe), F8 (UUID WLAN mapping + automated pull), and F9 (natural 802.11 roaming).
 > - **Controller:** Cloud Gateway Max (`10.100.1.1`). Both APs report adopted GCM status.
-> - **Historical evidence:** See the [VLAN security architecture](VLAN_SECURITY_ARCHITECTURE.md), [October audit history](archive/2026-10-28-audit-state-history.md), and [October review](audit/2026-10-29-unifi-ap-bridge-homelab-review.md).
+> - **Historical evidence:** See the [VLAN security architecture](VLAN_SECURITY_ARCHITECTURE.md), [November 13 audit report](audit/2026-11-13-code-security-and-reliability-audit.md), [October audit history](archive/2026-10-28-audit-state-history.md), and [October review](audit/2026-10-29-unifi-ap-bridge-homelab-review.md).
 
 ---
 
@@ -81,6 +82,7 @@ ssh nithin@10.100.1.10 '/jffs/addons/unifi-bridge/sync_nodes.sh status'
 - **WLAN Mapping Automation (F8):** Modern RFC 4122 UUID support in `v1.2.13`. Automated 5-minute watchdog pull from CT107 Ops Broker (`/api/v1/network/aps/wlan-mapping`) active on both APs with atomic zero-wear `cmp -s` updates.
 
 ### Session Handoff Summary
-- **Current Live Deployment:** `v1.2.15` (commit `f879a4c`), adopted and active GCM on both APs (`10.100.1.10` and `10.100.1.11`), with real-time sub-second fast roaming telemetry active.
+- **Current Live Deployment:** `v1.2.16`, adopted and active GCM on both APs (`10.100.1.10` and `10.100.1.11`), with real-time sub-second fast roaming telemetry and hardened controller exchange boundaries.
+- **Audit Findings Implemented (A1-A8):** Completed in PR #1 / `v1.2.16`.
 - **Live Cleanup Completed:** Verified all wireless interfaces on both APs have `macmode: 0` (clean unhindered Broadcom operation).
-- **All Phase 1 & Phase 2 Hardening Deployed:** Filter snapshot/rollback (F2), radio `isup` probe (F7), watchdog stale lock eviction (F4), state sync durability (F6), transport error safety (F5), UUID WLAN mapping with automated sync (F8), and formalized provisioning boundary (F3). All Go and Python tests passing 100%.
+- **All Hardening Deployed:** Filter snapshot/rollback (A1, F2), radio `isup` probe (F7), watchdog stale lock eviction (F4), state persistence durability with unique tmpfiles and generational backup (A2, F6), transport error safety and GCM gate (A3-A5, F5), syslog follower inode rotation handling (A6, Task 4), UUID WLAN mapping with automated sync (F8), and formalized provisioning boundary (F3). All Go and Python tests passing 100%.
