@@ -141,6 +141,112 @@ func (t *StationTimeline) Events() []StationEvent {
 	return append([]StationEvent(nil), t.events...)
 }
 
+// RecordInstantEvent ingests an instantaneous wireless transition event from an external event follower.
+// It updates the internal station registry and appends to the timeline history immediately.
+func (t *StationTimeline) RecordInstantEvent(ev SyslogWirelessEvent) *StationEvent {
+	if t == nil || ev.MAC == "" {
+		return nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	mac := strings.ToLower(strings.TrimSpace(ev.MAC))
+	radio, band := interfaceToBand(ev.Interface)
+	at := ev.Timestamp
+	if at.IsZero() {
+		at = time.Now()
+	}
+
+	old, wasPresent := t.stations[mac]
+
+	switch ev.Kind {
+	case EventKindDisassoc, EventKindDeauth, EventKindRoamastSteer:
+		if wasPresent {
+			delete(t.stations, mac)
+			se := StationEvent{
+				Type:             "observed_disassociation",
+				MAC:              mac,
+				ObservedAt:       at,
+				PreviousObserved: old.at,
+				Radio:            old.station.Radio,
+				Band:             stationBand(old.station.Radio),
+				PhysicalRadio:    old.physicalRadio,
+				BSSID:            old.station.BSSID,
+				ESSID:            old.station.ESSID,
+				Signal:           old.station.Signal,
+				SignalKnown:      old.station.Signal != 0,
+			}
+			if at.After(old.at) {
+				se.PollGapSeconds = int64(at.Sub(old.at).Round(time.Second) / time.Second)
+			}
+			t.events = append(t.events, se)
+			if excess := len(t.events) - t.maxEvents; excess > 0 {
+				copy(t.events, t.events[excess:])
+				t.events = t.events[:t.maxEvents]
+			}
+			return &se
+		}
+
+	case EventKindReAssoc, EventKindAssoc:
+		se := StationEvent{
+			Type:        "observed_association",
+			MAC:         mac,
+			ObservedAt:  at,
+			Radio:       radio,
+			Band:        band,
+			Signal:      ev.RSSI,
+			SignalKnown: ev.RSSIValid,
+		}
+		if wasPresent {
+			if old.station.Radio != radio || (old.physicalRadio != "" && radio != "" && old.physicalRadio != radio) {
+				se.Type = "observed_radio_change"
+				se.PreviousRadio = old.station.Radio
+				se.PreviousBand = stationBand(old.station.Radio)
+				se.PreviousPhysicalRadio = old.physicalRadio
+			}
+			se.PreviousObserved = old.at
+			if at.After(old.at) {
+				se.PollGapSeconds = int64(at.Sub(old.at).Round(time.Second) / time.Second)
+			}
+			se.BSSID = old.station.BSSID
+			se.ESSID = old.station.ESSID
+		}
+		st := old.station
+		st.MAC = mac
+		if radio != "" {
+			st.Radio = radio
+		}
+		if ev.RSSIValid {
+			st.Signal = ev.RSSI
+		}
+		t.stations[mac] = stationObservation{
+			station:       st,
+			physicalRadio: radio,
+			at:            at,
+		}
+		t.events = append(t.events, se)
+		if excess := len(t.events) - t.maxEvents; excess > 0 {
+			copy(t.events, t.events[excess:])
+			t.events = t.events[:t.maxEvents]
+		}
+		return &se
+	}
+	return nil
+}
+
+func interfaceToBand(ifname string) (radio string, band string) {
+	if strings.HasPrefix(ifname, "eth4") || strings.HasPrefix(ifname, "wl0") {
+		return "ng", "2.4GHz"
+	}
+	if strings.HasPrefix(ifname, "eth5") || strings.HasPrefix(ifname, "wl1") {
+		return "na", "5GHz"
+	}
+	if strings.HasPrefix(ifname, "eth6") || strings.HasPrefix(ifname, "wl2") {
+		return "na", "5GHz"
+	}
+	return "", ""
+}
+
 func snapshotStations(vaps []VAP, limit int) (map[string]stationObservation, bool) {
 	result := make(map[string]stationObservation)
 	duplicates := make(map[string]bool)

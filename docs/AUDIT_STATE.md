@@ -3,6 +3,7 @@
 > **Current delivery status — 2026-11-12 PST:**
 > - **Main and Node:** Both APs actively running `v1.2.14` (Git `97d94a7`), adopted and `Active (GCM)`, with fresh successful informs and zero sample-stage errors.
 > - **Modern UniFi RFC 4122 UUID Support (F8):** Fully compliant with UniFi Network 11 UUID WLAN identifiers; controller UUID validation warnings permanently eliminated.
+> - **Fast Roaming Event Telemetry (Task 4):** Integrated background `SyslogFollower` tailing `/tmp/syslog.log` in tmpfs RAM. Emits sub-second wireless transitions (`wlceventd` ReAssoc, Disassoc, Deauth, and `roamast` steer) into `StationTimeline` and prompts instantaneous inform dispatch to UniFi Controller (debounced to 500ms).
 > - **Automated WLAN Mapping Sync (F8):** `watchdog.sh` polls `http://10.100.1.107:8000/api/v1/network/aps/wlan-mapping` every 5 minutes, validates, compares via `cmp -s`, and replaces cache atomically only on change (zero flash wear when unchanged).
 > - **Hardening Delivered:** Includes F1 (bounded timeouts, dynamic interface detection), F2 (filter snapshot/rollback on failure), F3 (formalized provisioning boundary & loop avoidance), F4 (watchdog stale lock eviction), F5 (non-destructive transport retries), F6 (atomic sync durability), F7 (radio liveness probe), F8 (UUID WLAN mapping + automated pull), and F9 (natural 802.11 roaming).
 > - **Controller:** Cloud Gateway Max (`10.100.1.1`). Both APs report adopted GCM status.

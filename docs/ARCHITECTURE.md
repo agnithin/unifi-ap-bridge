@@ -225,6 +225,21 @@ Checks and installs acquire the RAM-directory update lock before download or act
 
 ## Wireless diagnostics and optional controller operations (dev source)
 
+### Sub-Second Wireless Event Follower (Syslog Tailing)
+
+In addition to the standard 10-second polling cycle, `unifi-bridge` embeds a lightweight `SyslogFollower` (`pkg/telemetry/syslog_follower.go`) that tails `/tmp/syslog.log` in RAM tmpfs.
+
+1. **Broadcom Event Parsing:**
+   * Listens for `wlceventd` state transitions (`Auth`, `Assoc`, `ReAssoc`, `Disassoc`, `Deauth_ind`) and Asuswrt `roamast` candidate steering deauths.
+   * Parses interface names (`eth4`, `eth5`, `eth6`, `wl0.1`, `wl1.1`, etc.), client MAC addresses, IEEE 802.11 reason codes, and instantaneous physical RSSI attenuation.
+2. **Instant Timeline & Inform Dispatch:**
+   * Transitions are immediately recorded into `StationTimeline` with second-resolution timestamps (`ObservedAt`).
+   * When an active station roam (`ReAssoc`), departure (`Disassoc`), or handoff occurs, the follower signals `fastRoamingTrigger`, prompting an immediate telemetry exchange (debounced to 500ms to allow client DHCP/ARP to settle).
+   * The UniFi Network Application receives the updated station table within < 1 second, updating dashboard badges, client topology maps, and push notifications without waiting for the next 10-second polling window.
+3. **Safety & Flash Wear Guards:**
+   * Follower reads strictly from RAM (`/tmp/syslog.log`), starts at EOF on boot to avoid historic replays, and handles syslog file rotation seamlessly.
+   * Rate-limited to a minimum 2-second interval between inform exchanges to prevent flooding the controller during association bursts.
+
 The Asus status publication now carries a RAM-bounded AP-local station timeline,
 per-radio passive RF trend summaries, fixed WLAN-refresh status and sanitized
 controller-command observations. Tracker state is process-local: no history is

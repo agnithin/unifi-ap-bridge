@@ -35,6 +35,8 @@ type Config struct {
 	ControllerRebootEnabled        bool              `json:"controller_reboot_enabled,omitempty"`
 	CompactRadioNames              bool              `json:"compact_radio_names,omitempty"`
 	WlanMappingFile                string            `json:"wlan_mapping_file,omitempty"`
+	SyslogPath                     string            `json:"syslog_path,omitempty"`
+	FastRoamingEnabled             *bool             `json:"fast_roaming_enabled,omitempty"`
 	Enabled                        bool              `json:"enabled"`
 	AutoGateway                    bool              `json:"auto_gateway"`
 	ControllerURL                  string            `json:"controller_url"`
@@ -81,6 +83,13 @@ func loadConfig(path string) (*Config, error) {
 	}
 	if cfg.ControllerResponseCaptureCount < 0 || cfg.ControllerResponseCaptureCount > maxControllerResponseCaptures {
 		return nil, fmt.Errorf("controller_response_capture_count must be between 0 and %d", maxControllerResponseCaptures)
+	}
+	if cfg.SyslogPath == "" {
+		cfg.SyslogPath = "/tmp/syslog.log"
+	}
+	if cfg.FastRoamingEnabled == nil {
+		enabled := true
+		cfg.FastRoamingEnabled = &enabled
 	}
 	return cfg, nil
 }
@@ -182,7 +191,8 @@ func updateWebUIStatus(host *providers.HostInfo, modelProfile models.ModelProfil
 		"cu_total_5g":         cuTotal5G,
 		"radio_stats":         radioStats,
 		"station_events":      health.StationEvents,
-		"station_event_scope": "AP-local, observed between successful polls; reasons and destination AP unknown",
+		"station_event_scope": "AP-local real-time event-driven and sampled transitions",
+		"fast_roaming":        cfg.FastRoamingEnabled != nil && *cfg.FastRoamingEnabled,
 		"passive_rf_trends":   health.RFTrends,
 		"wlan_mapping": map[string]any{
 			"file_enabled": cfg.WlanMappingFile != "",
@@ -419,6 +429,20 @@ func main() {
 	wlanMappingCache := telemetry.NewWLANMappingCache(cfg.WlanMappingFile)
 	stationTimeline := telemetry.NewStationTimeline(64, 512)
 	rfHistory := telemetry.NewPassiveRFHistory(60, 8)
+
+	fastRoamingTrigger := make(chan struct{}, 1)
+	if cfg.FastRoamingEnabled != nil && *cfg.FastRoamingEnabled {
+		follower := telemetry.NewSyslogFollower(cfg.SyslogPath, func(ev telemetry.SyslogWirelessEvent) {
+			stationTimeline.RecordInstantEvent(ev)
+			if ev.Kind == telemetry.EventKindReAssoc || ev.Kind == telemetry.EventKindDisassoc || ev.Kind == telemetry.EventKindAssoc || ev.Kind == telemetry.EventKindRoamastSteer {
+				select {
+				case fastRoamingTrigger <- struct{}{}:
+				default:
+				}
+			}
+		})
+		follower.Start(ctx)
+	}
 	lastTotalStations := 0
 	lastRadioStats := []telemetry.RadioStat(nil)
 	lastPorts := []telemetry.Port(nil)
@@ -627,6 +651,9 @@ func main() {
 		return
 	}
 
+	var lastExchangeTime time.Time
+	minFastExchangeInterval := 2 * time.Second
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -635,6 +662,25 @@ func main() {
 		case <-ticker.C:
 			if err := runExchange(); err != nil {
 				logEvent("[unifi-bridge] Heartbeat error: %v", err)
+			}
+			lastExchangeTime = time.Now()
+		case <-fastRoamingTrigger:
+			// Debounce 500ms to allow client association and DHCP/ARP handoff to settle
+			select {
+			case <-time.After(500 * time.Millisecond):
+			case <-ctx.Done():
+				return
+			}
+			// Drain accumulated triggers during debounce
+			for len(fastRoamingTrigger) > 0 {
+				<-fastRoamingTrigger
+			}
+			if time.Since(lastExchangeTime) >= minFastExchangeInterval {
+				logEvent("[unifi-bridge] Fast roaming event triggered prompt telemetry exchange")
+				if err := runExchange(); err != nil {
+					logEvent("[unifi-bridge] Heartbeat error: %v", err)
+				}
+				lastExchangeTime = time.Now()
 			}
 		}
 	}
