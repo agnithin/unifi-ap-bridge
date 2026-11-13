@@ -25,7 +25,7 @@ import (
 )
 
 var (
-	version   = "1.2.12"
+	version   = "1.2.15"
 	commit    = "none"
 	buildDate = "unknown"
 )
@@ -531,31 +531,31 @@ func main() {
 			uplinkName = uplink.Name
 		}
 		payload := telemetry.InformPayload{
-			MAC:             host.MAC,
-			IP:              host.IP,
-			Hostname:        host.Hostname,
-			Model:           modelProfile.ModelCode,
-			Version:         modelProfile.Firmware,
-			Default:         !adopted,
-			State:           map[bool]int{false: 1, true: 4}[adopted],
-			Uptime:          host.Uptime,
-			Time:            now,
-			InformURL:       cfg.ControllerURL,
-			XAuthKey:        fmt.Sprintf("%x", key),
-			DefaultKey:      !adopted,
-			CfgVersion:      stateMgr.GetCfgVersion(),
-			RadioTable:      radios,
-			RadioTableStats: telemetry.RadioStatsForInform(radioStats),
-			VAPTable:        vaps,
-			EthernetTable:   ethTable,
-			InterfaceTable:  telemetry.BuildInterfaceTable(ports, ethTable, uplink),
-			PortTable:       ports,
-			SwPortTable:     ports,
-			Uplink:          uplinkName,
-			LLDPTable:       lldpEntries,
-			SysStats:        sysStatsLegacy,
-			SystemStats:     systemStats,
-			FixedAPAvailable: true,
+			MAC:              host.MAC,
+			IP:               host.IP,
+			Hostname:         host.Hostname,
+			Model:            modelProfile.ModelCode,
+			Version:          modelProfile.Firmware,
+			Default:          !adopted,
+			State:            map[bool]int{false: 1, true: 4}[adopted],
+			Uptime:           host.Uptime,
+			Time:             now,
+			InformURL:        cfg.ControllerURL,
+			XAuthKey:         fmt.Sprintf("%x", key),
+			DefaultKey:       !adopted,
+			CfgVersion:       stateMgr.GetCfgVersion(),
+			RadioTable:       radios,
+			RadioTableStats:  telemetry.RadioStatsForInform(radioStats),
+			VAPTable:         vaps,
+			EthernetTable:    ethTable,
+			InterfaceTable:   telemetry.BuildInterfaceTable(ports, ethTable, uplink),
+			PortTable:        ports,
+			SwPortTable:      ports,
+			Uplink:           uplinkName,
+			LLDPTable:        lldpEntries,
+			SysStats:         sysStatsLegacy,
+			SystemStats:      systemStats,
+			FixedAPAvailable: false,
 			WifiCaps:         telemetry.DefaultU6IWWifiCaps,
 		}
 
@@ -591,12 +591,12 @@ func main() {
 		isRejected := health.observePost(err)
 		if err != nil {
 			if adopted && isRejected {
-				logEvent("[unifi-bridge] Warning: Controller returned repeated HTTP 401/404 rejections; preserving adoption identity and backing off")
+				logEvent("[unifi-bridge] Warning: Controller returned repeated HTTP 401/404 rejections; preserving adoption identity for subsequent retries")
 			}
 			return err
 		}
 
-		respPacket, err := inform.UnpackInform(respRaw, key, host.MAC)
+		respPacket, err := unpackControllerResponse(respRaw, key, host.MAC, adopted)
 		if err != nil {
 			return fmt.Errorf("failed to unpack controller response: %w", err)
 		}

@@ -85,7 +85,6 @@ func TestRejectMalformedAuthKeyWithoutChangingIdentity(t *testing.T) {
 	}
 }
 
-
 func TestRejectCorruptedPersistedAuthKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	if err := os.WriteFile(path, []byte(`{"schema":1,"mac":"fc:34:97:46:7b:10","authkey":"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"}`), 0600); err != nil {
@@ -93,5 +92,75 @@ func TestRejectCorruptedPersistedAuthKey(t *testing.T) {
 	}
 	if _, err := NewStateManager(path, "fc:34:97:46:7b:10"); err == nil {
 		t.Fatal("loaded invalid auth key")
+	}
+}
+
+func TestStateRecoveryValidatesEveryCandidate(t *testing.T) {
+	mac := "fc:34:97:46:7b:10"
+	good := `{"schema":1,"mac":"fc:34:97:46:7b:10","authkey":"0123456789abcdef0123456789abcdef"}`
+	for _, primary := range []string{"{", `{"schema":2}`, `{"schema":1,"mac":"fc:34:97:46:7b:10","authkey":"bad"}`} {
+		t.Run(primary, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "state.json")
+			os.WriteFile(path, []byte(primary), 0600)
+			os.WriteFile(path+".bak", []byte(good), 0600)
+			sm, err := NewStateManager(path, mac)
+			if err != nil || !sm.IsAdopted() {
+				t.Fatalf("recovery: %v", err)
+			}
+			if err := sm.Save(); err != nil {
+				t.Fatal(err)
+			}
+			backup, _ := os.ReadFile(path + ".bak")
+			if string(backup) != good {
+				t.Fatal("corrupt primary replaced valid backup")
+			}
+		})
+	}
+	for _, backup := range []string{`{"schema":1,"mac":"fc:34:97:46:7b:10","adopted":true}`, `{"schema":1,"mac":"fc:34:97:46:7b:10","authkey":"bad"}`} {
+		path := filepath.Join(t.TempDir(), "state.json")
+		os.WriteFile(path, []byte("{"), 0600)
+		os.WriteFile(path+".bak", []byte(backup), 0600)
+		if _, err := NewStateManager(path, mac); err == nil {
+			t.Fatal("accepted invalid backup")
+		}
+		os.Remove(path)
+		if _, err := NewStateManager(path, mac); err == nil {
+			t.Fatal("bootstrapped over invalid backup")
+		}
+	}
+}
+
+func TestStateSaveKeepsPrivatePreviousGeneration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	sm, err := NewStateManager(path, "fc:34:97:46:7b:10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sm.Save(); err != nil {
+		t.Fatal(err)
+	}
+	prior, _ := os.ReadFile(path)
+	os.Chmod(path, 0644)
+	// A pre-existing predictable temp symlink must never be followed.
+	victim := filepath.Join(filepath.Dir(path), "victim")
+	os.WriteFile(victim, []byte("untouched"), 0600)
+	os.Symlink(victim, path+".tmp")
+	sm.ApplyControllerResponse(map[string]any{"_type": "setparam", "authkey": "0123456789abcdef0123456789abcdef"})
+	if err := sm.Save(); err != nil {
+		t.Fatal(err)
+	}
+	backup, _ := os.ReadFile(path + ".bak")
+	if string(backup) != string(prior) {
+		t.Fatal("backup is not previous generation")
+	}
+	for _, name := range []string{path, path + ".bak"} {
+		info, err := os.Stat(name)
+		if err != nil || info.Mode().Perm() != 0600 {
+			t.Fatalf("state permissions: %v", err)
+		}
+	}
+	data, _ := os.ReadFile(victim)
+	if string(data) != "untouched" {
+		t.Fatal("followed temp symlink")
 	}
 }

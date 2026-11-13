@@ -3,15 +3,30 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/agnithin/unifi-ap-bridge/pkg/inform"
 )
+
+// Adopted sessions require authentication for every state-changing reply,
+// including reset and key rotation, before any dispatcher or state manager runs.
+func unpackControllerResponse(raw, key []byte, mac string, adopted bool) (*inform.Packet, error) {
+	packet, err := inform.UnpackInform(raw, key, mac)
+	if err != nil {
+		return nil, err
+	}
+	if adopted && packet.Mode != inform.ModeGCM {
+		return nil, errors.New("adopted controller response requires authenticated GCM")
+	}
+	return packet, nil
+}
 
 // Only authenticated replies for an already adopted, non-bootstrap identity
 // reach the opt-in dispatchers. Packet.Mode is the verified response mode,
@@ -271,77 +286,111 @@ type macFilterSnapshot struct {
 	macList []string
 }
 
-func snapshotInterfaceMacFilter(ctx context.Context, iface string, runner platformCmdRunner) macFilterSnapshot {
-	snap := macFilterSnapshot{iface: iface, mode: "0"}
-	if modeOut, err := runner(ctx, "wl", "-i", iface, "macmode"); err == nil {
-		snap.mode = strings.TrimSpace(string(modeOut))
+func readInterfaceMacList(ctx context.Context, iface string, runner platformCmdRunner) ([]string, error) {
+	out, err := runner(ctx, "wl", "-i", iface, "mac")
+	if err != nil {
+		return nil, err
 	}
-	if macOut, err := runner(ctx, "wl", "-i", iface, "mac"); err == nil {
-		lines := strings.Fields(string(macOut))
-		for _, token := range lines {
-			if norm, err := inform.NormalizeMAC(token); err == nil {
-				snap.macList = append(snap.macList, norm)
-			}
+	var macs []string
+	for _, token := range strings.Fields(string(out)) {
+		if token == "mac" {
+			continue
+		} // Broadcom wl prefixes list entries with mac.
+		norm, err := inform.NormalizeMAC(token)
+		if err != nil {
+			return nil, fmt.Errorf("invalid driver MAC list on %s", iface)
 		}
+		macs = append(macs, norm)
 	}
-	return snap
+	sort.Strings(macs)
+	return macs, nil
 }
 
-func rollbackMacFilter(ctx context.Context, snaps []macFilterSnapshot, runner platformCmdRunner) {
-	for _, snap := range snaps {
-		_, _ = runner(ctx, "wl", "-i", snap.iface, "mac", "none")
-		if len(snap.macList) > 0 && snap.mode != "0" {
-			args := append([]string{"-i", snap.iface, "mac"}, snap.macList...)
-			_, _ = runner(ctx, "wl", args...)
-			_, _ = runner(ctx, "wl", "-i", snap.iface, "macmode", snap.mode)
-		} else {
-			_, _ = runner(ctx, "wl", "-i", snap.iface, "macmode", "0")
+func snapshotInterfaceMacFilter(ctx context.Context, iface string, runner platformCmdRunner) (macFilterSnapshot, error) {
+	snap := macFilterSnapshot{iface: iface}
+	out, err := runner(ctx, "wl", "-i", iface, "macmode")
+	if err != nil {
+		return snap, err
+	}
+	snap.mode = strings.TrimSpace(string(out))
+	if snap.mode != "0" && snap.mode != "1" && snap.mode != "2" {
+		return snap, fmt.Errorf("invalid MAC mode on %s", iface)
+	}
+	snap.macList, err = readInterfaceMacList(ctx, iface, runner)
+	return snap, err
+}
+
+func writeInterfaceMacFilter(ctx context.Context, snap macFilterSnapshot, runner platformCmdRunner) error {
+	if _, err := runner(ctx, "wl", "-i", snap.iface, "mac", "none"); err != nil {
+		return err
+	}
+	if len(snap.macList) > 0 {
+		args := append([]string{"-i", snap.iface, "mac"}, snap.macList...)
+		if _, err := runner(ctx, "wl", args...); err != nil {
+			return err
 		}
 	}
+	if _, err := runner(ctx, "wl", "-i", snap.iface, "macmode", snap.mode); err != nil {
+		return err
+	}
+	actual, err := snapshotInterfaceMacFilter(ctx, snap.iface, runner)
+	if err != nil {
+		return err
+	}
+	if actual.mode != snap.mode || strings.Join(actual.macList, " ") != strings.Join(snap.macList, " ") {
+		return fmt.Errorf("MAC filter readback mismatch on %s", snap.iface)
+	}
+	return nil
+}
+
+func rollbackMacFilter(snaps []macFilterSnapshot, runner platformCmdRunner) error {
+	// The mutation deadline may have expired; restoration gets its own bounded
+	// context and includes the partially modified interface that failed.
+	ctx, cancel := context.WithTimeout(context.Background(), platformCommandTimeout)
+	defer cancel()
+	var result error
+	for i := len(snaps) - 1; i >= 0; i-- {
+		if err := writeInterfaceMacFilter(ctx, snaps[i], runner); err != nil {
+			result = errors.Join(result, fmt.Errorf("restore %s: %w", snaps[i].iface, err))
+		}
+	}
+	return result
 }
 
 func executePlatformMacFilter(ctx context.Context, ifaces []string, blockedMACs []string, runner platformCmdRunner) error {
+	if len(ifaces) == 0 {
+		return errors.New("no wireless interfaces available")
+	}
+	// Snapshot every interface before the first write; unreadable policy must
+	// never be replaced with an invented disabled-filter default.
 	snaps := make([]macFilterSnapshot, 0, len(ifaces))
 	for _, iface := range ifaces {
-		snaps = append(snaps, snapshotInterfaceMacFilter(ctx, iface, runner))
-	}
-
-	for i, iface := range ifaces {
-		expectedMode := "0"
-		if len(blockedMACs) == 0 {
-			if _, err := runner(ctx, "wl", "-i", iface, "mac", "none"); err != nil {
-				rollbackMacFilter(ctx, snaps[:i], runner)
-				return fmt.Errorf("wl mac none failed on %s: %w", iface, err)
-			}
-			if _, err := runner(ctx, "wl", "-i", iface, "macmode", "0"); err != nil {
-				rollbackMacFilter(ctx, snaps[:i], runner)
-				return fmt.Errorf("wl macmode 0 failed on %s: %w", iface, err)
-			}
-		} else {
-			expectedMode = "1"
-			_, _ = runner(ctx, "wl", "-i", iface, "mac", "none")
-			args := append([]string{"-i", iface, "mac"}, blockedMACs...)
-			if _, err := runner(ctx, "wl", args...); err != nil {
-				rollbackMacFilter(ctx, snaps[:i], runner)
-				return fmt.Errorf("wl mac set failed on %s: %w", iface, err)
-			}
-			if _, err := runner(ctx, "wl", "-i", iface, "macmode", "1"); err != nil {
-				rollbackMacFilter(ctx, snaps[:i], runner)
-				return fmt.Errorf("wl macmode 1 failed on %s: %w", iface, err)
-			}
-			for _, mac := range blockedMACs {
-				_, _ = runner(ctx, "wl", "-i", iface, "deauthenticate", mac)
-			}
-		}
-		// Readback verification: verify driver accepted expected mode
-		readback, err := runner(ctx, "wl", "-i", iface, "macmode")
+		snap, err := snapshotInterfaceMacFilter(ctx, iface, runner)
 		if err != nil {
-			rollbackMacFilter(ctx, snaps[:i], runner)
-			return fmt.Errorf("wl macmode readback failed on %s: %w", iface, err)
+			return fmt.Errorf("snapshot %s: %w", iface, err)
 		}
-		if actual := strings.TrimSpace(string(readback)); actual != expectedMode {
-			rollbackMacFilter(ctx, snaps[:i], runner)
-			return fmt.Errorf("macmode readback mismatch on %s: got %s, want %s", iface, actual, expectedMode)
+		// ASUS allow lists have different semantics and must retain ownership.
+		if snap.mode == "2" {
+			return fmt.Errorf("refusing to replace ASUS allow list on %s", iface)
+		}
+		snaps = append(snaps, snap)
+	}
+	desired := append([]string(nil), blockedMACs...)
+	sort.Strings(desired)
+	mode := "0"
+	if len(desired) > 0 {
+		mode = "1"
+	}
+	for i, iface := range ifaces {
+		target := macFilterSnapshot{iface: iface, mode: mode, macList: desired}
+		if err := writeInterfaceMacFilter(ctx, target, runner); err != nil {
+			return errors.Join(fmt.Errorf("apply MAC filter on %s: %w", iface, err), rollbackMacFilter(snaps[:i+1], runner))
+		}
+	}
+	// Disconnect clients only after all interfaces have verified the policy.
+	for _, iface := range ifaces {
+		for _, mac := range desired {
+			_, _ = runner(ctx, "wl", "-i", iface, "deauthenticate", mac)
 		}
 	}
 	return nil
@@ -352,6 +401,9 @@ func startPlatformMacFilter(blockedMACs []string) error {
 	defer cancel()
 
 	ifaces := getPlatformWirelessInterfaces()
-	return executePlatformMacFilter(ctx, ifaces, blockedMACs, defaultPlatformCmdRunner)
+	err := executePlatformMacFilter(ctx, ifaces, blockedMACs, defaultPlatformCmdRunner)
+	if err != nil {
+		logEvent("[unifi-bridge] MAC filter update failed: %v", err)
+	}
+	return err
 }
-

@@ -24,7 +24,7 @@ type exchangeHealth struct {
 	rejections         int
 }
 
-// Only repeated authentication/not-found responses permit adoption recovery.
+// Repeated authentication/not-found responses trigger a diagnostic only.
 // Bad requests, transport failures, and other HTTP results break the sequence.
 func (h *exchangeHealth) observePost(err error) bool {
 	var response *inform.HTTPError

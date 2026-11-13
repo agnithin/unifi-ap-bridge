@@ -155,9 +155,9 @@ func parseSyslogTimestamp(raw string) time.Time {
 // SyslogFollower continuously tails a syslog file in RAM tmpfs, emitting
 // real-time wireless transitions via a non-blocking callback.
 type SyslogFollower struct {
-	path      string
-	onEvent   func(SyslogWirelessEvent)
-	pollDelay time.Duration
+	path       string
+	onEvent    func(SyslogWirelessEvent)
+	pollDelay  time.Duration
 	startAtEnd bool
 
 	mu      sync.Mutex
@@ -170,10 +170,10 @@ func NewSyslogFollower(path string, onEvent func(SyslogWirelessEvent)) *SyslogFo
 		path = "/tmp/syslog.log"
 	}
 	return &SyslogFollower{
-		path:        path,
-		onEvent:     onEvent,
-		pollDelay:   250 * time.Millisecond,
-		startAtEnd:  true,
+		path:       path,
+		onEvent:    onEvent,
+		pollDelay:  250 * time.Millisecond,
+		startAtEnd: true,
 	}
 }
 
@@ -200,6 +200,8 @@ func (f *SyslogFollower) run(ctx context.Context) {
 	var file *os.File
 	var reader *bufio.Reader
 	var lastOffset int64
+	var pending string
+	var dropping bool
 	initial := true
 
 	closeFile := func() {
@@ -208,6 +210,8 @@ func (f *SyslogFollower) run(ctx context.Context) {
 			file = nil
 			reader = nil
 			lastOffset = 0
+			pending = ""
+			dropping = false
 		}
 	}
 	defer closeFile()
@@ -244,22 +248,39 @@ func (f *SyslogFollower) run(ctx context.Context) {
 			reader = bufio.NewReader(file)
 		}
 
-		line, err := reader.ReadString('\n')
+		fragment, err := reader.ReadSlice('\n')
+		lastOffset += int64(len(fragment))
+		// Keep incomplete lines across polls, with bounded memory even for a
+		// malformed log containing no newline.
+		if len(pending)+len(fragment) > 64*1024 {
+			pending = ""
+			dropping = true
+		}
+		if !dropping {
+			pending += string(fragment)
+		}
 		if err == nil {
-			lastOffset += int64(len(line))
-			if ev := ParseSyslogLine(line); ev != nil && f.onEvent != nil {
-				f.onEvent(*ev)
+			if !dropping {
+				if ev := ParseSyslogLine(pending); ev != nil && f.onEvent != nil {
+					f.onEvent(*ev)
+				}
 			}
+			pending = ""
+			dropping = false
+			continue
+		}
+		if err == bufio.ErrBufferFull {
 			continue
 		}
 
 		if err == io.EOF {
 			// At end of file: check for file rotation or truncation
 			fi, statErr := os.Stat(f.path)
-			if statErr != nil {
+			opened, openedErr := file.Stat()
+			if statErr != nil || openedErr != nil {
 				// File was removed or inaccessible
 				closeFile()
-			} else if fi.Size() < lastOffset {
+			} else if !os.SameFile(fi, opened) || fi.Size() < lastOffset {
 				// File was rotated or truncated: reopen from beginning
 				closeFile()
 			}

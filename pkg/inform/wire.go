@@ -352,11 +352,22 @@ func UnpackInform(data []byte, key []byte, expectedMAC string) (*Packet, error) 
 		rawJSON = decrypted
 	}
 
+	if len(rawJSON) > MaxJSONSize {
+		return nil, ErrJSONLimitExceeded
+	}
+
 	var payload map[string]any
 	decoder := json.NewDecoder(bytes.NewReader(rawJSON))
 	decoder.UseNumber()
 	if err := decoder.Decode(&payload); err != nil {
 		return nil, fmt.Errorf("failed to parse json payload: %w", err)
+	}
+
+	if payload == nil {
+		return nil, errors.New("inform payload must be a JSON object")
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return nil, errors.New("trailing data in inform payload")
 	}
 
 	return &Packet{
