@@ -21,6 +21,38 @@ This is a repository audit with local regression and cross-build verification. N
 
 Release CI now runs the race detector across every Go package rather than only the daemon package.
 
+## Reviewer guide and compatibility
+
+Start with the trust boundary in `cmd/unifi-bridge/controller_commands.go:unpackControllerResponse` and its call in `main.go`: the adopted-session GCM check must precede response capture, command execution, and adoption-state mutation. For example, an encrypted CBC `{"_type":"reset"}` used to reach state processing; it now returns an error for an adopted AP. Bootstrap CBC remains accepted. This requires the deployed controller to use GCM after adoption; a controller that continues using CBC will stop recording successful exchanges rather than downgrade authentication.
+
+Next review the MAC-filter transaction in `controller_commands.go`. With two interfaces, if the second interface's mode write fails after its list changed, both interfaces must be restored, including the second interface. Snapshot failures must cause zero writes. The rollback deadline is independent of the canceled mutation context, but shared by all restoration attempts; it is not a per-interface unlimited retry. ASUS allow mode (`2`) now rejects the entire transaction before any writes. Deny mode (`1`) continues to use the controller's list as the desired policy. Individual `wl` operations are not an atomic hardware transaction, and the snapshot/write interval cannot serialize unrelated ASUS driver changes.
+
+Then review `pkg/inform/state.go`. The on-disk schema remains version 1 and paths remain `state.json` / `state.json.bak`; no manual format migration is required for a valid existing identity. On the first save there may be no previous generation to back up. Later saves retain the validated prior primary, not a second copy of the new state. A corrupt primary must not replace an existing valid backup. If both generations are invalid, startup fails rather than silently creating a new adoption identity. A recovered backup can contain an older adoption key/config revision, so controller compatibility still matters. Directory-sync errors now surface as persistence failures and use the existing pending-save retry path; they do not prove power-loss durability on JFFS.
+
+Other intentional behavior changes:
+
+- Inform URLs must resolve directly: HTTP 3xx responses now fail instead of being followed. Configure the final `/inform` endpoint if an existing installation depends on a redirect.
+- JSON remains limited to 64 KiB and now must contain exactly one non-null object. Previously tolerated trailing content is rejected.
+- `fixed_ap_available` becomes false. This changes advertised capability; it does not migrate or clear saved controller client-lock preferences.
+- Syslog events are emitted only after a complete newline-terminated line. Lines larger than 64 KiB are discarded through the next newline; the follower then resumes. Rotation is detected by inode identity or truncation, and a replacement is read from its beginning.
+- There is no release version bump: the source default and badge are aligned with the existing `version.txt` value of 1.2.15. CI's linker-injected version remains authoritative for release binaries.
+
+### Regression test map
+
+| Behavior | Test entry point | Evidence / boundary |
+| --- | --- | --- |
+| Complete snapshot and restoration | `cmd/unifi-bridge/controller_commands_test.go:TestMacFilterTransactionRestoresFailingInterface` | Injects snapshot, clear, set, mode, readback and cancellation faults; checks both interfaces' original policy and no premature deauthentication. Uses an in-memory driver, not firmware. |
+| Allow-list preservation / ignored driver writes | `TestMacFilterRejectsAllowListAndSilentDriverFailure` in the same file | Rejects mode 2, unknown modes and a driver that silently ignores writes. |
+| Adopted-session authentication | `TestControllerStateRepliesRequireGCMWhenAdopted` in the same file | Uses encrypted CBC/GCM reset packets and checks bootstrap compatibility. |
+| Backup validation / safe writes | `pkg/inform/state_test.go:TestStateRecoveryValidatesEveryCandidate`, `TestStateSaveKeepsPrivatePreviousGeneration` | Exercises invalid primary/backup states, previous-generation retention, private file modes and a pre-existing predictable temp symlink. Does not simulate storage exhaustion or physical power interruption. |
+| JSON envelope bounds | `pkg/inform/wire_test.go:TestWireRejectsInvalidJSONEnvelope` | Builds encrypted malformed input independently of the public packer, which otherwise rejects malformed input first. Existing known-answer vectors cover protocol compatibility. |
+| Redirect refusal | `pkg/inform/client_test.go:TestInformPostDoesNotForwardRedirects` | Uses injected HTTP transport for 301/302/303/307/308 and verifies exactly one request. |
+| Syslog partial writes / replacement | `pkg/telemetry/syslog_follower_test.go:TestSyslogFollowerPartialLinesAndLargerRotation` | Uses actual temporary log files and a replacement larger than the original. No router syslog service is involved. |
+
+### Deployment acceptance and recovery
+
+Before production rollout, retain the installed addon bundle and a protected copy of the current adoption state. On a test AP, verify successful adopted GCM heartbeats, client connectivity, actual driver list formatting, and policy readback. Inject driver failures only in a controlled environment where loss of wireless access is recoverable. Confirm state saves on the target filesystem do not leave a persistent `StateSaveError`; exercise restart/recovery without deleting adoption credentials. Inspect MAC-filter failure logs for restoration errors. Roll back through the existing known-good addon recovery procedure if controller compatibility, connectivity, or persistence regresses; avoid factory reset/re-adoption as a first response. Hardware failure injection, power-interruption testing and controller acceptance have not been performed by this PR.
+
 ## Verification
 
 Passed locally:
