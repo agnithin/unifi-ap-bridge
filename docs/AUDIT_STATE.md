@@ -1,7 +1,7 @@
 # UniFi AP Bridge — Operational State & Status
 
 > **Current delivery status — 2026-11-12 PST:**
-> - **Main and Node:** Both APs actively running `v1.2.13` (Git `ce0ca58`), adopted and `Active (GCM)`, with fresh successful informs and zero sample-stage errors.
+> - **Main and Node:** Both APs actively running `v1.2.14` (Git `97d94a7`), adopted and `Active (GCM)`, with fresh successful informs and zero sample-stage errors.
 > - **Modern UniFi RFC 4122 UUID Support (F8):** Fully compliant with UniFi Network 11 UUID WLAN identifiers; controller UUID validation warnings permanently eliminated.
 > - **Automated WLAN Mapping Sync (F8):** `watchdog.sh` polls `http://10.100.1.107:8000/api/v1/network/aps/wlan-mapping` every 5 minutes, validates, compares via `cmp -s`, and replaces cache atomically only on change (zero flash wear when unchanged).
 > - **Hardening Delivered:** Includes F1 (bounded timeouts, dynamic interface detection), F2 (filter snapshot/rollback on failure), F3 (formalized provisioning boundary & loop avoidance), F4 (watchdog stale lock eviction), F5 (non-destructive transport retries), F6 (atomic sync durability), F7 (radio liveness probe), F8 (UUID WLAN mapping + automated pull), and F9 (natural 802.11 roaming).
@@ -80,6 +80,6 @@ ssh nithin@10.100.1.10 '/jffs/addons/unifi-bridge/sync_nodes.sh status'
 - **WLAN Mapping Automation (F8):** Modern RFC 4122 UUID support in `v1.2.13`. Automated 5-minute watchdog pull from CT107 Ops Broker (`/api/v1/network/aps/wlan-mapping`) active on both APs with atomic zero-wear `cmp -s` updates.
 
 ### Session Handoff Summary
-- **Current Live Deployment:** `v1.2.13` (commit `ce0ca58`), adopted and active GCM on both APs (`10.100.1.10` and `10.100.1.11`).
+- **Current Live Deployment:** `v1.2.14` (commit `97d94a7`), adopted and active GCM on both APs (`10.100.1.10` and `10.100.1.11`).
 - **Live Cleanup Completed:** Verified all wireless interfaces on both APs have `macmode: 0` (clean unhindered Broadcom operation).
 - **All Phase 1 & Phase 2 Hardening Deployed:** Filter snapshot/rollback (F2), radio `isup` probe (F7), watchdog stale lock eviction (F4), state sync durability (F6), transport error safety (F5), UUID WLAN mapping with automated sync (F8), and formalized provisioning boundary (F3). All Go and Python tests passing 100%.
