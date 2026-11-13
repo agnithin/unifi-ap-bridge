@@ -1,12 +1,12 @@
 # unifi-ap-bridge
 
 [![CI / Release](https://github.com/agnithin/unifi-ap-bridge/actions/workflows/release.yml/badge.svg)](https://github.com/agnithin/unifi-ap-bridge/actions)
-[![Current Version](https://img.shields.io/badge/version-1.2.12-blue.svg)](version.txt)
+[![Current Version](https://img.shields.io/badge/version-1.2.15-blue.svg)](version.txt)
 [![Target](https://img.shields.io/badge/target-Asuswrt--Merlin%20%7C%20Broadcom-green.svg)](docs/ARCHITECTURE.md)
 
 A high-performance, ultra-lightweight standalone daemon and WebUI extension for **Asuswrt-Merlin** and Broadcom Linux routers that bridges wireless and switch telemetry into the **Ubiquiti UniFi Inform Protocol** (`:8080/inform`).
 
-By emulates a **UniFi 6 In-Wall (`U6-IW`)** access point, `unifi-ap-bridge` allows non-UniFi hardware (such as the ASUS ZenWiFi XT8 cluster) to seamlessly report native wireless classification, 802.11ax connection bitrates, RF airtime utilization, physical switch port carrier states, and bridge topology directly into the **UniFi Network Application** (Cloud Gateway Ultra / Max / Enterprise).
+By emulating a **UniFi 6 In-Wall (`U6-IW`)** access point, `unifi-ap-bridge` allows non-UniFi hardware (such as the ASUS ZenWiFi XT8 cluster) to seamlessly report native wireless classification, 802.11ax connection bitrates, RF airtime utilization, physical switch port carrier states, and bridge topology directly into the **UniFi Network Application** (Cloud Gateway Ultra / Max / Enterprise).
 
 ---
 
@@ -25,11 +25,11 @@ By emulates a **UniFi 6 In-Wall (`U6-IW`)** access point, `unifi-ap-bridge` allo
 ### 3. Controller Command Execution & Safety Hardening
 * **Locate LED Blinking:** Responds to controller Locate requests by blinking the router's front panel white LED for a bounded 15-second window, restoring prior brightness automatically upon completion.
 * **Client Kick / Deauth (`kick-sta`):** Translates controller "Reconnect" clicks into immediate, bounded Broadcom deauthentication frames (`wl deauthenticate <mac>`), triggering client re-roaming.
-* **Fail-Closed MAC Filtering with Atomic Rollback (v1.2.12):** Automatically snapshots prior driver ACL state before applying controller blocklists. If driver readback fails on any interface, all previously touched radios are rolled back to their snapshot, preventing accidental network lockouts.
+* **Verified MAC Filter Updates:** Reads every interface policy before applying controller blocklists and refuses to replace ASUS allow lists. Mode and MAC-list readback must match; failures trigger a bounded restoration attempt on every touched interface. Driver failures can also prevent restoration, so this is not a network isolation guarantee.
 
 ### 4. Zero Flash Wear & Autonomous Resilience
 * **Power-Loss Durability:** Employs atomic temp-write, `fsync()`, directory sync, and generational backup files (`state.json.bak`) for persistent AES-GCM adoption keys.
-* **Non-Destructive Transport Handshake:** Transient HTTP 401/404 gateway restarts trigger exponential backoff rather than wiping adoption credentials. Cryptographic unadoption only occurs upon verified AES-GCM reset packets.
+* **Non-Destructive Transport Handshake:** Transient HTTP 401/404 responses preserve adoption credentials for subsequent exchanges. Cryptographic unadoption only occurs upon verified AES-GCM reset packets.
 * **Self-Healing Watchdog:** An autonomous 5-minute cron watchdog (`watchdog.sh`) monitors daemon freshness (`sample_fresh`) and evicts stale PID locks (>10m) automatically.
 
 ### 5. Seamless MerVLAN & AiMesh Coexistence
@@ -116,4 +116,5 @@ python3 scripts/test_sync_nodes.py
 - [Live Operational Ledger & Status](docs/AUDIT_STATE.md)
 - [System Architecture Specification](docs/ARCHITECTURE.md)
 - [Layer-2 VLAN & Security Architecture](docs/VLAN_SECURITY_ARCHITECTURE.md)
+- [Code Security & Reliability Audit (November 13, 2026)](docs/audit/2026-11-13-code-security-and-reliability-audit.md)
 - [Product & Reliability Audit (November 2026)](docs/audit/2026-11-04-unifi-ap-bridge-product-and-reliability-audit.md)

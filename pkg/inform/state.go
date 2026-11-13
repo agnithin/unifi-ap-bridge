@@ -60,99 +60,103 @@ func (sm *StateManager) Load() error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	data, err := os.ReadFile(sm.statePath)
-	if err != nil && errors.Is(err, os.ErrNotExist) {
-		bakFile := sm.statePath + ".bak"
-		if bakData, bakErr := os.ReadFile(bakFile); bakErr == nil {
-			data = bakData
-			err = nil
-		}
-	}
-	if err != nil {
-		return err
-	}
-
-	var loaded SessionState
-	if err := json.Unmarshal(data, &loaded); err != nil {
-		bakFile := sm.statePath + ".bak"
-		if bakData, bakErr := os.ReadFile(bakFile); bakErr == nil {
-			if bakUnmarshalErr := json.Unmarshal(bakData, &loaded); bakUnmarshalErr == nil && loaded.Schema == 1 && loaded.MAC == sm.mac {
-				if loaded.AuthKeyHex != "" && validAuthKey(loaded.AuthKeyHex) {
-					loaded.Adopted = true
-					loaded.Mode = ModeGCM
-				}
+	candidates := []string{sm.statePath, sm.statePath + ".bak"}
+	var primaryErr error
+	for i, path := range candidates {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			var loaded SessionState
+			loaded, err = decodeSessionState(data, sm.mac)
+			if err == nil {
 				sm.state = loaded
 				return nil
 			}
 		}
-		return ErrStateCorrupted
+		if i == 0 {
+			primaryErr = err
+		}
+		// A missing primary with a corrupt/unreadable backup must not bootstrap.
+		if i == 1 && errors.Is(primaryErr, os.ErrNotExist) && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
 	}
+	return primaryErr
+}
 
-	if loaded.Schema != 1 || loaded.MAC != sm.mac {
-		return ErrStateCorrupted
+func decodeSessionState(data []byte, mac string) (SessionState, error) {
+	var loaded SessionState
+	if json.Unmarshal(data, &loaded) != nil || loaded.Schema != 1 || loaded.MAC != mac {
+		return SessionState{}, ErrStateCorrupted
 	}
-
 	if loaded.AuthKeyHex != "" {
 		if !validAuthKey(loaded.AuthKeyHex) {
-			return ErrStateCorrupted
+			return SessionState{}, ErrStateCorrupted
 		}
 		loaded.Adopted = true
 		loaded.Mode = ModeGCM
+	} else {
+		if loaded.Adopted {
+			return SessionState{}, ErrStateCorrupted
+		}
+		loaded.Mode = ModeCBC
 	}
+	return loaded, nil
+}
 
-	sm.state = loaded
-	return nil
+// atomicStateWrite never follows an existing temporary-file symlink and always
+// replaces permissive destination files with a private, fully flushed file.
+func atomicStateWrite(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, ".inform-state-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if _, err = f.Write(data); err == nil {
+		err = f.Sync()
+	}
+	closeErr := f.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return os.Rename(f.Name(), path)
 }
 
 func (sm *StateManager) Save() error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-
 	dir := filepath.Dir(sm.statePath)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
-
 	data, err := json.MarshalIndent(sm.state, "", "  ")
 	if err != nil {
 		return err
 	}
-
-	tmpFile := sm.statePath + ".tmp"
-	f, err := os.OpenFile(tmpFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	// Retain a validated previous generation, never a corrupt primary. When
+	// recovering from backup, leave that backup intact until the primary commits.
+	prior, readErr := os.ReadFile(sm.statePath)
+	if readErr == nil {
+		if _, err := decodeSessionState(prior, sm.mac); err == nil {
+			if err := atomicStateWrite(sm.statePath+".bak", prior); err != nil {
+				return err
+			}
+		}
+	} else if !errors.Is(readErr, os.ErrNotExist) {
+		return readErr
+	}
+	if err := atomicStateWrite(sm.statePath, data); err != nil {
+		return err
+	}
+	df, err := os.Open(dir)
 	if err != nil {
 		return err
 	}
-	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmpFile)
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmpFile)
-		return err
-	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(tmpFile)
-		return err
-	}
-
-	bakFile := sm.statePath + ".bak"
-	if _, err := os.Stat(sm.statePath); err == nil {
-		_ = os.WriteFile(bakFile, data, 0600)
-	}
-
-	if err := os.Rename(tmpFile, sm.statePath); err != nil {
-		return err
-	}
-
-	if df, err := os.Open(dir); err == nil {
-		_ = df.Sync()
-		_ = df.Close()
-	}
-
-	return nil
+	defer df.Close()
+	return df.Sync()
 }
 
 func (sm *StateManager) GetKey() []byte {

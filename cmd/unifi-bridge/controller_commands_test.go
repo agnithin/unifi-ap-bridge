@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -367,5 +368,117 @@ func TestExecutePlatformMacFilterRollbackOnFailure(t *testing.T) {
 	}
 	if !hasRollbackEth4 {
 		t.Fatalf("expected rollback call for eth4, got calls: %v", calls)
+	}
+}
+
+func TestMacFilterTransactionRestoresFailingInterface(t *testing.T) {
+	for _, fault := range []string{"snapshot", "clear", "set", "mode", "readback", "timeout"} {
+		t.Run(fault, func(t *testing.T) {
+			original := map[string]macFilterSnapshot{
+				"eth4": {iface: "eth4", mode: "0", macList: []string{"00:11:22:33:44:44"}},
+				"eth5": {iface: "eth5", mode: "1", macList: []string{"00:11:22:33:44:55"}},
+			}
+			states := map[string]macFilterSnapshot{}
+			for k, v := range original {
+				states[k] = v
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			failed, mutated := false, false
+			var kicks int
+			runner := func(callCtx context.Context, name string, args ...string) ([]byte, error) {
+				if err := callCtx.Err(); err != nil {
+					return nil, err
+				}
+				iface, op := args[1], args[2]
+				st := states[iface]
+				writing := len(args) > 3
+				hit := iface == "eth5" && !failed && ((fault == "snapshot" && !writing && !mutated) ||
+					(fault == "clear" && op == "mac" && writing && args[3] == "none") ||
+					(fault == "set" && op == "mac" && writing && args[3] != "none") ||
+					(fault == "mode" && op == "macmode" && writing) ||
+					((fault == "readback" || fault == "timeout") && op == "macmode" && !writing && mutated))
+				if hit {
+					failed = true
+					if fault == "timeout" {
+						cancel()
+						return nil, context.Canceled
+					}
+					return nil, errors.New("injected failure")
+				}
+				if op == "deauthenticate" {
+					kicks++
+					return nil, nil
+				}
+				if !writing {
+					if op == "macmode" {
+						return []byte(st.mode), nil
+					}
+					return []byte(strings.Join(st.macList, " ")), nil
+				}
+				mutated = true
+				if op == "macmode" {
+					st.mode = args[3]
+				} else if args[3] == "none" {
+					st.macList = nil
+				} else {
+					st.macList = append([]string(nil), args[3:]...)
+				}
+				states[iface] = st
+				return nil, nil
+			}
+			err := executePlatformMacFilter(ctx, []string{"eth4", "eth5"}, []string{"00:11:22:33:44:66"}, runner)
+			if err == nil || !failed {
+				t.Fatal("fault was not rejected")
+			}
+			if !reflect.DeepEqual(states, original) {
+				t.Fatalf("policy not restored: %+v", states)
+			}
+			if kicks != 0 {
+				t.Fatal("clients disconnected before transaction committed")
+			}
+			if fault == "snapshot" && mutated {
+				t.Fatal("mutated without complete snapshots")
+			}
+		})
+	}
+}
+
+func TestMacFilterRejectsAllowListAndSilentDriverFailure(t *testing.T) {
+	for _, mode := range []string{"2", "unexpected", "0"} {
+		writes := 0
+		runner := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			if len(args) > 3 {
+				writes++
+				return nil, nil
+			} // silently ignore writes
+			if args[2] == "macmode" {
+				return []byte(mode), nil
+			}
+			return nil, nil
+		}
+		if err := executePlatformMacFilter(context.Background(), []string{"eth4"}, []string{"00:11:22:33:44:66"}, runner); err == nil {
+			t.Fatal("accepted unsafe mode or ignored policy")
+		}
+		if mode != "0" && writes != 0 {
+			t.Fatal("modified unreadable or ASUS allow policy")
+		}
+	}
+}
+
+func TestControllerStateRepliesRequireGCMWhenAdopted(t *testing.T) {
+	key := []byte("0123456789abcdef")
+	mac := "fc:34:97:46:7b:10"
+	for _, mode := range []inform.CipherMode{inform.ModeCBC, inform.ModeGCM} {
+		raw, err := inform.PackInform(map[string]any{"_type": "reset"}, mac, key, inform.PackOptions{Mode: mode})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := unpackControllerResponse(raw, key, mac, true); (err == nil) != (mode == inform.ModeGCM) {
+			t.Fatalf("adopted reply mode %s: %v", mode, err)
+		}
+		if _, err := unpackControllerResponse(raw, key, mac, false); err != nil {
+			t.Fatalf("bootstrap mode %s: %v", mode, err)
+		}
 	}
 }

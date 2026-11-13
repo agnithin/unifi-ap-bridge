@@ -55,8 +55,9 @@ func NewInformClient(url string, timeout time.Duration, sourceIP string) *Inform
 		Timeout:  timeout,
 		SourceIP: sourceIP,
 		httpClient: &http.Client{
-			Transport: transport,
-			Timeout:   timeout,
+			Transport:     transport,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+			Timeout:       timeout,
 		},
 	}
 }

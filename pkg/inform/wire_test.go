@@ -2,10 +2,14 @@ package inform
 
 import (
 	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -137,6 +141,26 @@ func TestWireTamperResistance(t *testing.T) {
 		corrupted[len(corrupted)-1] ^= 0x01
 		if _, err := UnpackInform(corrupted, key, ""); err == nil {
 			t.Errorf("expected error on corrupted ciphertext")
+		}
+	}
+}
+
+func TestWireRejectsInvalidJSONEnvelope(t *testing.T) {
+	for _, raw := range []string{`null`, `{} {}`, `{} garbage`, `{"x":"` + strings.Repeat("x", MaxJSONSize) + `"}`} {
+		// Build encrypted malformed input independently of PackInform's validation.
+		key := DefaultBootstrapKey[:]
+		packet, err := PackInform(map[string]any{}, "fc:34:97:46:7b:10", key, PackOptions{Mode: ModeCBC})
+		if err != nil {
+			t.Fatal(err)
+		}
+		plain := pkcs7Pad([]byte(raw), aes.BlockSize)
+		encrypted := make([]byte, len(plain))
+		block, _ := aes.NewCipher(key)
+		cipher.NewCBCEncrypter(block, packet[16:32]).CryptBlocks(encrypted, plain)
+		packet = append(packet[:HeaderSize], encrypted...)
+		binary.BigEndian.PutUint32(packet[36:40], uint32(len(encrypted)))
+		if _, err := UnpackInform(packet, key, ""); err == nil {
+			t.Fatalf("accepted malformed envelope of size %d", len(raw))
 		}
 	}
 }

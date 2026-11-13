@@ -228,3 +228,50 @@ func TestStationTimeline_RecordInstantEvent(t *testing.T) {
 		t.Errorf("expected 5GHz / na, got %s / %s", se2.Band, se2.Radio)
 	}
 }
+
+func TestSyslogFollowerPartialLinesAndLargerRotation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "syslog.log")
+	os.WriteFile(path, nil, 0600)
+	events := make(chan SyslogWirelessEvent, 10)
+	follower := NewSyslogFollower(path, func(ev SyslogWirelessEvent) { events <- ev })
+	follower.pollDelay = 5 * time.Millisecond
+	follower.startAtEnd = false
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	follower.Start(ctx)
+	appendLog := func(text string) {
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = f.WriteString(text)
+		f.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitEvent := func() {
+		select {
+		case <-events:
+		case <-time.After(time.Second):
+			t.Fatal("missing syslog event")
+		}
+	}
+	line := "Nov 12 22:27:38 wlceventd: wlceventd_proc_event(695): eth5: ReAssoc E8:C9:13:7D:11:CC, status: Successful (0), rssi:-74\n"
+	appendLog(line)
+	waitEvent() // confirms the reader opened the file
+	appendLog(line[:40])
+	time.Sleep(30 * time.Millisecond)
+	appendLog(line[40:])
+	waitEvent()
+	if err := os.Rename(path, path+".1"); err != nil {
+		t.Fatal(err)
+	}
+	// The replacement is larger than the old file: size alone cannot detect it.
+	if err := os.WriteFile(path, []byte(line+line+line), 0600); err != nil {
+		t.Fatal(err)
+	}
+	waitEvent()
+	waitEvent()
+	waitEvent()
+}
