@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/agnithin/unifi-ap-bridge/pkg/telemetry"
+	"github.com/agnithin/unifi-ap-bridge/providers"
 )
 
 func TestAsusProvider(t *testing.T) {
@@ -1361,5 +1362,61 @@ func TestGetRadios_SkipsDownInterfacesWhenIsupIsZero(t *testing.T) {
 	}
 	if len(stats) != 2 {
 		t.Fatalf("expected 2 radio stats, got %d", len(stats))
+	}
+}
+
+func TestStationRecheckReadsDriverAgainWithSampleCache(t *testing.T) {
+	const mac = "02:00:00:00:00:11"
+	reads := 0
+	p := NewAsusProvider(func(ctx context.Context, name string, args ...string) (string, error) {
+		switch args[2] {
+		case "assoclist":
+			reads++
+			if reads == 1 {
+				return "assoclist " + mac, nil
+			}
+			return "assoclist 02:00:00:00:00:22", nil
+		case "sta_info":
+			return "", errors.New("driver busy")
+		}
+		t.Fatalf("unexpected command %s %v", name, args)
+		return "", nil
+	})
+	ctx := context.WithValue(context.Background(), sampleCommandCacheKey{}, &sampleCommandCache{results: make(map[string]commandResult)})
+	stations, err := p.getStationsForIfaceContext(ctx, "eth4", "wl0", "", "", 6, "ng")
+	if err != nil || reads != 2 || len(stations) != 0 {
+		t.Fatalf("stale station retained: reads=%d, stations=%d, err=%v", reads, len(stations), err)
+	}
+}
+
+func TestWirelessSampleReusesRecentWiredAndSystemData(t *testing.T) {
+	p := NewAsusProvider(func(ctx context.Context, name string, args ...string) (string, error) {
+		if name == "nvram" && args[1] == "wl_ifnames" {
+			return "eth4", nil
+		}
+		if name == "wl" && args[2] == "isup" {
+			return "0", nil
+		}
+		if name == "wl" && args[2] == "ssid" || name == "nvram" && strings.HasPrefix(args[1], "wl0") {
+			return "", nil
+		}
+		t.Errorf("wireless refresh ran unexpected command: %s %v", name, args)
+		return "", nil
+	})
+	prior := &providers.Sample{
+		Uplink:      &telemetry.Uplink{Name: "wired"},
+		System:      &telemetry.SystemStats{Uptime: 123},
+		StageErrors: map[string]string{"lldp": "unavailable"},
+	}
+	sample, err := p.CollectWireless(context.Background(), nil, prior)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sample.System != prior.System || sample.Uplink == prior.Uplink || sample.Uplink.Name != "wired" ||
+		sample.StageErrors["lldp"] != "unavailable" || sample.DriverCommands != 5 {
+		t.Fatalf("unexpected wireless sample: %+v", sample)
+	}
+	if _, ok := sample.StageMS["ports"]; ok {
+		t.Fatal("ports incorrectly reported as refreshed")
 	}
 }

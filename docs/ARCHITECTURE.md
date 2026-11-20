@@ -117,7 +117,7 @@ All communication with `:8080/inform` utilizes the UniFi binary wire packet form
    * Device reports `default: false` and `state: 4`.
    * Telemetry is sampled at a default 10-second interval. Non-positive configured intervals normalize to 10 seconds; uptime is refreshed from the per-exchange system sample.
    * Controller and persisted keys must decode to 16 bytes of hexadecimal data. Malformed responses cannot replace an existing valid identity.
-   * Three consecutive HTTP 401/404 rejections permit adoption recovery. Success, transport failures, HTTP 400, and other HTTP statuses break that sequence; HTTP 400 does not reset adoption. This threshold is a recovery policy, not proof the controller forgot the device.
+   * Repeated HTTP 401/404 rejections are reported while the daemon retains adoption credentials. An adopted session requires GCM for controller replies.
    * `state.json` is saved via temporary-file rename when controller responses change adoption or configuration state, and on recovery reset. Writes are not restricted to first adoption or manual settings changes.
 
 ### 3.3 Provisioning Boundary & Loop Avoidance (Finding F3)

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -34,6 +35,7 @@ type Config struct {
 	ControllerResponseCaptureCount int               `json:"controller_response_capture_count,omitempty"`
 	ControllerRebootEnabled        bool              `json:"controller_reboot_enabled,omitempty"`
 	CompactRadioNames              bool              `json:"compact_radio_names,omitempty"`
+	WlanMappingURL                 string            `json:"wlan_mapping_url,omitempty"`
 	WlanMappingFile                string            `json:"wlan_mapping_file,omitempty"`
 	SyslogPath                     string            `json:"syslog_path,omitempty"`
 	FastRoamingEnabled             *bool             `json:"fast_roaming_enabled,omitempty"`
@@ -142,27 +144,31 @@ func updateWebUIStatus(host *providers.HostInfo, modelProfile models.ModelProfil
 	logMu.Unlock()
 
 	statusObj := map[string]any{
-		"running":                true,
-		"enabled":                cfg.Enabled,
-		"version":                version,
-		"branch":                 cfg.Branch,
-		"pid":                    os.Getpid(),
-		"hostname":               host.Hostname,
-		"mac":                    host.MAC,
-		"ip":                     host.IP,
-		"model":                  modelProfile.DisplayName,
-		"model_code":             modelProfile.ModelCode,
-		"compact_radio_names":    cfg.CompactRadioNames,
-		"firmware":               modelProfile.Firmware,
-		"controller_url":         cfg.ControllerURL,
-		"auto_gateway":           cfg.AutoGateway,
-		"interval_sec":           cfg.IntervalSec,
-		"adopted":                stateMgr.IsAdopted(),
-		"mode":                   string(stateMgr.GetMode()),
-		"uptime":                 host.Uptime,
-		"last_heartbeat":         health.lastSuccessString(),
-		"last_successful_inform": health.lastSuccessString(),
-		"last_attempt":           health.LastAttempt.Format("2006-01-02 15:04:05"),
+		"running":                   true,
+		"enabled":                   cfg.Enabled,
+		"version":                   version,
+		"branch":                    cfg.Branch,
+		"pid":                       os.Getpid(),
+		"hostname":                  host.Hostname,
+		"mac":                       host.MAC,
+		"ip":                        host.IP,
+		"model":                     modelProfile.DisplayName,
+		"model_code":                modelProfile.ModelCode,
+		"compact_radio_names":       cfg.CompactRadioNames,
+		"firmware":                  modelProfile.Firmware,
+		"controller_url":            cfg.ControllerURL,
+		"auto_gateway":              cfg.AutoGateway,
+		"interval_sec":              cfg.IntervalSec,
+		"adopted":                   stateMgr.IsAdopted(),
+		"mode":                      string(stateMgr.GetMode()),
+		"uptime":                    host.Uptime,
+		"last_heartbeat":            health.lastSuccessString(),
+		"last_successful_inform":    health.lastSuccessString(),
+		"last_successful_inform_at": unixOrZero(health.LastSuccess),
+		"last_inform_error":         health.LastInformError,
+		"full_sample_updated_at":    unixOrZero(health.LastFullSample),
+		"performance":               health.Performance,
+		"last_attempt":              health.LastAttempt.Format("2006-01-02 15:04:05"),
 		"controller_commands": map[string]any{
 			"reboot_enabled":   cfg.ControllerRebootEnabled,
 			"last_observation": health.CommandObservation,
@@ -217,6 +223,9 @@ func updateWebUIStatus(host *providers.HostInfo, modelProfile models.ModelProfil
 }
 
 func main() {
+	doctorFlag := flag.Bool("doctor", false, "Print read-only local bridge diagnostics")
+	refreshMappingFlag := flag.Bool("refresh-wlan-mapping", false, "Refresh and validate the configured WLAN mapping file")
+	clearAdoptionFlag := flag.Bool("clear-adoption", false, "Clear adoption generations while startup owns the lifecycle lock")
 	enabledStatusFlag := flag.Bool("is-enabled", false, "Exit 0 when enabled, 3 when disabled; no hardware access")
 	applySettingsFlag := flag.Bool("apply-settings", false, "Merge settings from stdin without starting telemetry")
 	syncSettingsFlag := flag.Bool("sync-settings", false, "Merge shared settings from stdin while preserving node-local configuration")
@@ -348,6 +357,27 @@ func main() {
 		log.Fatalf("error loading config: %v", err)
 	}
 
+	if *doctorFlag {
+		if err := printDoctor(cfg, "/tmp/var/wwwext/unifi-bridge", *configPath); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+	if *refreshMappingFlag {
+		if cfg.Enabled && cfg.WlanMappingURL != "" && cfg.WlanMappingFile != "" {
+			if err := telemetry.RefreshWLANMapping(context.Background(), cfg.WlanMappingURL, cfg.WlanMappingFile); err != nil {
+				log.Fatal(err)
+			}
+		}
+		return
+	}
+	if *clearAdoptionFlag {
+		if err := clearAdoptionUnderLock(cfg.StatePath); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
 	if *enabledStatusFlag {
 		if !cfg.Enabled {
 			os.Exit(3)
@@ -417,8 +447,7 @@ func main() {
 	logEvent("[unifi-bridge] Emulating %s (firmware: %s), reporting to %s",
 		modelProfile.DisplayName, modelProfile.Firmware, cfg.ControllerURL)
 
-	ticker := time.NewTicker(time.Duration(cfg.IntervalSec) * time.Second)
-	defer ticker.Stop()
+	interval := time.Duration(cfg.IntervalSec) * time.Second
 
 	health := &exchangeHealth{}
 	responseCapture := &controllerResponseCapture{dir: controllerResponseCaptureDir, remaining: cfg.ControllerResponseCaptureCount}
@@ -430,13 +459,13 @@ func main() {
 	stationTimeline := telemetry.NewStationTimeline(64, 512)
 	rfHistory := telemetry.NewPassiveRFHistory(60, 8)
 
-	fastRoamingTrigger := make(chan struct{}, 1)
+	fastRoamingTrigger := make(chan time.Time, 1)
 	if cfg.FastRoamingEnabled != nil && *cfg.FastRoamingEnabled {
 		follower := telemetry.NewSyslogFollower(cfg.SyslogPath, func(ev telemetry.SyslogWirelessEvent) {
 			stationTimeline.RecordInstantEvent(ev)
 			if ev.Kind == telemetry.EventKindReAssoc || ev.Kind == telemetry.EventKindDisassoc || ev.Kind == telemetry.EventKindAssoc || ev.Kind == telemetry.EventKindRoamastSteer {
 				select {
-				case fastRoamingTrigger <- struct{}{}:
+				case fastRoamingTrigger <- time.Now():
 				default:
 				}
 			}
@@ -453,11 +482,15 @@ func main() {
 	if intervalBudget := time.Duration(cfg.IntervalSec) * time.Second; intervalBudget < sampleBudget {
 		sampleBudget = intervalBudget
 	}
-	runExchange := func() (exchangeErr error) {
-		health.LastAttempt = time.Now()
+	var lastFullSample *providers.Sample
+	runExchange := func(wirelessOnly bool, eventAt time.Time) (exchangeErr error) {
+		started := time.Now()
+		health.LastAttempt = started
+		health.Performance = exchangePerformance{Kind: "full", SampleDeadlineMisses: health.Performance.SampleDeadlineMisses}
 		sampleFresh := false
 
 		defer func() {
+			health.Performance.TotalMS = time.Since(started).Milliseconds()
 			updateWebUIStatus(host, modelProfile, cfg, stateMgr, lastTotalStations, lastRadioStats, lastPorts, lastSystemStats, health, exchangeErr, sampleFresh, lastSampleAt, lastStageErrors)
 		}()
 
@@ -470,11 +503,38 @@ func main() {
 		}
 		health.WLANMappingStatus = wlanMappingCache.LastError()
 		health.WLANMappingEntries = len(mappings)
-		sample, err := provider.Collect(sampleCtx, mappings)
+		collectStart := time.Now()
+		var sample *providers.Sample
+		var err error
+		fast, supportsFast := provider.(interface {
+			CollectWireless(context.Context, map[string]string, *providers.Sample) (*providers.Sample, error)
+		})
+		if wirelessOnly && supportsFast && lastFullSample != nil && time.Since(lastFullSample.CompletedAt) <= 2*interval {
+			health.Performance.Kind = "wireless"
+			sample, err = fast.CollectWireless(sampleCtx, mappings, lastFullSample)
+		} else {
+			sample, err = provider.Collect(sampleCtx, mappings)
+			if err == nil {
+				// Keep only the reused sections, so a previous full sample
+				// does not retain station lists across subsequent refreshes.
+				lastFullSample = &providers.Sample{
+					Ports: sample.Ports, Ethernet: sample.Ethernet, Uplink: sample.Uplink,
+					LLDP: sample.LLDP, System: sample.System, LegacySystem: sample.LegacySystem,
+					CompletedAt: sample.CompletedAt, StageErrors: sample.StageErrors,
+				}
+				health.LastFullSample = sample.CompletedAt
+			}
+		}
+		health.Performance.CollectMS = time.Since(collectStart).Milliseconds()
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(sampleCtx.Err(), context.DeadlineExceeded) {
+			health.Performance.SampleDeadlineMisses++
+		}
 		sampleCancel()
 		if err != nil {
 			return fmt.Errorf("telemetry sample failed: %w", err)
 		}
+		health.Performance.DriverCommands = sample.DriverCommands
+		health.Performance.Stages = sample.StageMS
 		sampleFresh = true
 		lastSampleAt = sample.CompletedAt
 		lastStageErrors = sample.StageErrors
@@ -574,7 +634,7 @@ func main() {
 		}
 
 		if *dumpFlag {
-			b, _ := json.MarshalIndent(payload, "", "  ")
+			b, _ := marshalDiagnosticInform(payload)
 			fmt.Println(string(b))
 		}
 
@@ -584,12 +644,16 @@ func main() {
 			Compressed:    true,
 		})
 		if err != nil {
+			health.LastInformError = "Could not prepare Inform payload"
 			return fmt.Errorf("failed to pack inform packet: %w", err)
 		}
 
+		postStarted := time.Now()
 		respRaw, err := client.Post(ctx, packet)
+		health.Performance.InformMS = time.Since(postStarted).Milliseconds()
 		isRejected := health.observePost(err)
 		if err != nil {
+			health.LastInformError = "Controller request failed"
 			if adopted && isRejected {
 				logEvent("[unifi-bridge] Warning: Controller returned repeated HTTP 401/404 rejections; preserving adoption identity for subsequent retries")
 			}
@@ -598,6 +662,7 @@ func main() {
 
 		respPacket, err := unpackControllerResponse(respRaw, key, host.MAC, adopted)
 		if err != nil {
+			health.LastInformError = "Controller reply rejected"
 			return fmt.Errorf("failed to unpack controller response: %w", err)
 		}
 
@@ -617,6 +682,7 @@ func main() {
 
 		changed, err := stateMgr.ApplyControllerResponse(respPacket.Payload)
 		if err != nil {
+			health.LastInformError = "Controller state reply rejected"
 			return fmt.Errorf("failed to apply controller response: %w", err)
 		}
 		if changed {
@@ -636,6 +702,11 @@ func main() {
 		}
 
 		health.LastSuccess = time.Now()
+		health.LastInformError = ""
+		if !eventAt.IsZero() {
+			elapsed := health.LastSuccess.Sub(eventAt).Milliseconds()
+			health.Performance.RoamToInformMS = &elapsed
+		}
 		respType, _ := respPacket.Payload["_type"].(string)
 		logEvent("[unifi-bridge] Heartbeat ok (%s) | stations: %d | mode: %s",
 			respType, totalStations, stateMgr.GetMode())
@@ -643,47 +714,83 @@ func main() {
 		return nil
 	}
 
-	// First execution immediately
-	if err := runExchange(); err != nil {
-		logEvent("[unifi-bridge] Initial exchange error: %v", err)
+	// Run one full sample immediately, then measure the periodic interval
+	// from its completion so a slow exchange cannot queue another full exchange.
+	exchange := func(wirelessOnly bool, eventAt time.Time) {
+		if err := runExchange(wirelessOnly, eventAt); err != nil {
+			logEvent("[unifi-bridge] Heartbeat error: %v", err)
+		}
 	}
+	exchange(false, time.Time{})
 	if *onceFlag {
 		return
 	}
-
-	var lastExchangeTime time.Time
-	minFastExchangeInterval := 2 * time.Second
-
+	lastExchange := time.Now()
+	nextFull := lastExchange.Add(interval)
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+	var pendingRoam time.Time
+	var roamTimer *time.Timer
+	var roamDue <-chan time.Time
+	defer func() {
+		if roamTimer != nil {
+			roamTimer.Stop()
+		}
+	}()
+	const roamDebounce = 500 * time.Millisecond
+	const minRoamInterval = 2 * time.Second
 	for {
 		select {
 		case <-ctx.Done():
 			logEvent("[unifi-bridge] Shutting down daemon gracefully...")
 			return
-		case <-ticker.C:
-			if err := runExchange(); err != nil {
-				logEvent("[unifi-bridge] Heartbeat error: %v", err)
+		case <-timer.C:
+			if roamTimer != nil {
+				roamTimer.Stop()
+				roamTimer = nil
+				roamDue = nil
 			}
-			lastExchangeTime = time.Now()
-		case <-fastRoamingTrigger:
-			// Debounce 500ms to allow client association and DHCP/ARP handoff to settle
 			select {
-			case <-time.After(500 * time.Millisecond):
-			case <-ctx.Done():
-				return
-			}
-			// Drain accumulated triggers during debounce
-			for len(fastRoamingTrigger) > 0 {
-				<-fastRoamingTrigger
-			}
-			if time.Since(lastExchangeTime) >= minFastExchangeInterval {
-				logEvent("[unifi-bridge] Fast roaming event triggered prompt telemetry exchange")
-				if err := runExchange(); err != nil {
-					logEvent("[unifi-bridge] Heartbeat error: %v", err)
+			case eventAt := <-fastRoamingTrigger:
+				if pendingRoam.IsZero() {
+					pendingRoam = eventAt
 				}
-				lastExchangeTime = time.Now()
+			default:
 			}
+			exchange(false, pendingRoam)
+			pendingRoam = time.Time{}
+			lastExchange = time.Now()
+			nextFull = lastExchange.Add(interval)
+			timer.Reset(interval)
+		case eventAt := <-fastRoamingTrigger:
+			if !pendingRoam.IsZero() {
+				continue
+			}
+			pendingRoam = eventAt
+			delay, schedule := roamRefreshDelay(time.Now(), lastExchange, nextFull, roamDebounce, minRoamInterval)
+			if schedule {
+				roamTimer = time.NewTimer(delay)
+				roamDue = roamTimer.C
+			}
+		case <-roamDue:
+			roamDue = nil
+			roamTimer = nil
+			if time.Until(nextFull) <= minRoamInterval {
+				continue
+			}
+			exchange(true, pendingRoam)
+			pendingRoam = time.Time{}
+			lastExchange = time.Now()
 		}
 	}
+
+}
+
+func unixOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
 }
 
 func applyConfiguredUplinkFallback(uplink *telemetry.Uplink, cfg *Config) {

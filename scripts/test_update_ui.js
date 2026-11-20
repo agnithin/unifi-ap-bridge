@@ -72,8 +72,12 @@ assert.match(node('update_desc').textContent,/timed out/);
 clock=50000;context.checkUpdateNow();requests.at(-1).onerror();
 assert.match(node('update_desc').textContent,/Could not contact/);
 assert.equal(node('btn_check_update').disabled,false);
-clock=60000;node('select_branch').value='dev';context.doUpdateNow();
+clock=60000;node('select_branch').value='dev';context.checkUpdateNow();
+const checkedId=context.activeUpdateRequest.id;
+context.updateUpdateUI({...result,branch:'dev',status:'UPDATE_AVAILABLE',request_id:checkedId,target_commit:'a'.repeat(40)});
+context.doUpdateNow();
 const applyUpdateId=context.activeUpdateRequest.id;
+assert.match(requests.at(-1).body,new RegExp('do_checked_dev_'+applyUpdateId+'_'+checkedId));
 assert.equal(node('update_progress_box').style.display,'block');
 context.updateUpdateUI({...result,branch:'dev',operation:'apply',request_id:applyUpdateId,status:'SUCCESS'});
 assert.equal(timeouts.length,1,'only matching install success may reload');
@@ -243,3 +247,21 @@ context.updateDiagnosticsUI({radio_stats:[{name:"wifi-na-1",channel:161,bw:80,cu
 assert.equal(node("rf_diagnostics_rows").children[0].children[5].textContent,"-","unknown CCA category must not render as zero");
 assert.equal(node("rf_diagnostics_rows").children[0].children[7].textContent,"-","unknown CCA interference must render as dash");
 console.log("RF and station diagnostic rendering passed: actual width, bounded text-only rows and opt-in command status.");
+
+
+clock=1000000;
+context.snapshotRequests = {};
+const priorRequests=requests.length;
+context.loadStatus();
+context.loadStatus();
+assert.equal(requests.length,priorRequests+3,"each snapshot request must be single-flight");
+const pendingStatus=requests.slice(priorRequests).find(r=>r.url.includes("/status.js"));
+pendingStatus.responseText = 'window.unifiBridgeStatus = {"running":true,"status_updated_at":999,"sample_fresh":true,"sample_updated_at":999,"last_inform_error":"Controller request failed"};';
+pendingStatus.onload();
+assert.equal(node("health_service").textContent,"Running");
+assert.match(node("health_inform").textContent,/Controller request failed/);
+assert.match(node("health_telemetry").textContent,/Fresh/);
+context.loadStatus();
+requests.at(-1).onerror();
+assert.match(node("health_service").textContent,/Showing previous status/);
+console.log("Health refresh keeps the last snapshot and separates controller failure from service status.");

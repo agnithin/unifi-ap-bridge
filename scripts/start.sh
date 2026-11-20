@@ -156,6 +156,11 @@ else
     start_lock_owned=1
 fi
 
+reset_adoption=0
+if [ "${1:-}" = "--reset-adoption" ]; then
+    [ ! -e "$TXN_DIR" ] || { echo "Complete update recovery before resetting adoption" >&2; exit 1; }
+    reset_adoption=1
+fi
 if [ "${1:-}" = "--recover-only" ]; then
     recover_update || exit 1
     exit 0
@@ -246,6 +251,12 @@ stop_bridge() {
     return 0
 }
 
+# Reset after stopping the old writer, while holding both lifecycle locks.
+if [ "$reset_adoption" -eq 1 ]; then
+    stop_bridge || exit 1
+    UNIFI_BRIDGE_MUTATION_LOCK_HELD=1 /tmp/unifi-bridge/unifi-bridge -config "$CONFIG_FILE" -clear-adoption || exit 1
+fi
+
 # Guard boot, cluster and manual entry points after preparing the binary. The
 # daemon publishes complete disabled metadata without accessing Wi-Fi/adoption.
 if /tmp/unifi-bridge/unifi-bridge -config "$CONFIG_FILE" -is-enabled; then
@@ -304,6 +315,19 @@ fi
 stop_bridge || exit 1
 recovery_started_at=$(date +%s)
 nohup /tmp/unifi-bridge/unifi-bridge -config "$INSTALL_DIR/config/config.json" >/tmp/unifi-bridge.log 2>&1 &
+if [ "$reset_adoption" -eq 1 ]; then
+    reset_pid=$!
+    attempts=0
+    while [ "$attempts" -lt 30 ] && kill -0 "$reset_pid" 2>/dev/null; do
+        reset_status=$(cat /tmp/var/wwwext/unifi-bridge/status.js 2>/dev/null)
+        if [ "$(printf '%s' "$reset_status" | sed -n 's/.*"pid":[[:space:]]*\([0-9][0-9]*\).*/\1/p')" = "$reset_pid" ]; then
+            exit 0
+        fi
+        attempts=$((attempts + 1)); sleep 1
+    done
+    echo "Adoption files cleared, but the new daemon did not publish status" >&2
+    exit 1
+fi
 if [ "$recovering" -eq 1 ]; then
     attempts=0
     while [ "$attempts" -lt 30 ]; do

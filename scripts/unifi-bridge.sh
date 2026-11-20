@@ -6,7 +6,6 @@
 ADDON_NAME="unifi-bridge"
 INSTALL_DIR="/jffs/addons/$ADDON_NAME"
 CONFIG_FILE="$INSTALL_DIR/config/config.json"
-STATE_FILE="$INSTALL_DIR/state.json"
 LOG_FILE="/tmp/unifi-bridge.log"
 STATUS_JS="/tmp/var/wwwext/unifi-bridge/status.js"
 DAEMON_BIN="/tmp/unifi-bridge/unifi-bridge"
@@ -319,12 +318,12 @@ cmd_test() {
 }
 
 cmd_update() {
-    sub="${1:-check}"
-    branch="${2:-}"
+    [ "$#" -gt 0 ] || set -- check
     if [ -f "$INSTALL_DIR/update.sh" ]; then
-        "$INSTALL_DIR/update.sh" "$sub" "$branch"
+        "$INSTALL_DIR/update.sh" "$@"
     else
         printf "${C_RED}update.sh not found in %s${C_RESET}\n" "$INSTALL_DIR"
+        return 1
     fi
 }
 
@@ -418,11 +417,12 @@ cmd_menu() {
 cmd_reset() {
     show_header
     printf "${C_YELLOW}Resetting UniFi AP adoption identity...${C_RESET}\n"
-    rm -f "$STATE_FILE"
-    killall unifi-bridge 2>/dev/null || true
-    sleep 1
-    "$INSTALL_DIR/start.sh"
-    printf "${C_GREEN}Done! The AP will now broadcast as an unadopted device ready for adoption in the UniFi Console.${C_RESET}\n"
+    if "$INSTALL_DIR/start.sh" --reset-adoption; then
+        printf "${C_GREEN}Adoption identity cleared. See status for current adoption state.${C_RESET}\n"
+    else
+        printf "${C_RED}Reset did not complete. Check service status and logs.${C_RESET}\n" >&2
+        return 1
+    fi
 }
 
 case "${1:-}" in
@@ -440,6 +440,8 @@ case "${1:-}" in
         cmd_restart ;;
     reset|re-adopt)
         cmd_reset ;;
+    doctor)
+        "$DAEMON_BIN" -config "$CONFIG_FILE" -doctor ;;
     logs|log)
         cmd_logs ;;
     test|check)
@@ -447,10 +449,10 @@ case "${1:-}" in
     sync)
         cmd_sync ;;
     update)
-        cmd_update "${2:-check}" "${3:-}" ;;
+        shift; cmd_update "$@" ;;
     "")
         cmd_menu ;;
     *)
-        echo "Usage: $0 {status|sync|update [check|apply] [branch]|start|stop|enable|disable|restart|reset|logs|test}"
+        echo "Usage: $0 {status|sync|update [check|apply] [branch]|start|stop|enable|disable|restart|reset|doctor|logs|test}"
         exit 1 ;;
 esac

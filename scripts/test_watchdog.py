@@ -32,7 +32,7 @@ class WatchdogTests(unittest.TestCase):
                         NOW="1000", PID_FILE=str(self.pidfile), ALIVE=str(self.alive),
                         PROC_ROOT=str(self.proc), LAUNCHES=str(self.launches))
         self.mock("pidof", 'cat "$PID_FILE" 2>/dev/null || true')
-        self.mock("date", 'if [ "$1" = "+%s" ]; then echo "$NOW"; else echo test-time; fi')
+        self.mock("date", 'if [ "$1" = "+%s" ]; then echo "$NOW"; elif [ "$1" = "-r" ] && [ -n "${LOCK_MTIME:-}" ]; then echo "$LOCK_MTIME"; else echo test-time; fi')
         self.mock("sleep", 'exit 0')
         self.mock("kill", 'case "$1" in -0) [ -f "$ALIVE" ];; -TERM|-KILL) [ "${RESISTANT:-0}" = 1 ] || rm -f "$ALIVE";; esac')
         helper = self.tmpfs / "unifi-bridge/unifi-bridge"
@@ -159,17 +159,48 @@ class WatchdogTests(unittest.TestCase):
         self.assertFalse(lock.exists())
         self.assertIn("evicting stale lock", (self.tmpfs / "unifi-bridge-watchdog.log").read_text())
 
-    def test_wlan_mapping_url_sync_updates_file_when_changed(self):
-        self.process()
-        self.status.write_text('window.unifiBridgeStatus = {"pid":123,"sample_updated_at":990,"interval_sec":10,"sample_fresh":true};')
+    def test_recent_incomplete_watchdog_lock_is_left_alone_then_reclaimed(self):
+        lock = self.tmpfs / "unifi-bridge-watchdog.lock"
+        lock.mkdir()
+        self.env["LOCK_MTIME"] = "900"
+        self.run_watchdog()
+        self.assertFalse(self.launches.exists())
+        self.env["NOW"] = "1501"
+        self.run_watchdog()
+        self.assertEqual(self.launches.read_text().count("launch"), 1)
+        self.assertFalse(lock.exists())
+
+    def test_recycled_watchdog_pid_does_not_block(self):
+        self.process(start="555")
+        lock = self.tmpfs / "unifi-bridge-watchdog.lock"
+        lock.mkdir()
+        (lock / "pid").write_text("123\n")
+        (lock / "start").write_text("444\n")
+        self.run_watchdog()
+        self.assertFalse(lock.exists())
+        self.assertIn("evicting stale lock", (self.tmpfs / "unifi-bridge-watchdog.log").read_text())
+
+    def test_update_journal_reason_is_visible(self):
+        transaction = self.install / ".update-transaction"
+        transaction.mkdir()
+        (transaction / "active").write_text("ACTIVATING\n")
+        stale = self.tmpfs / "unifi-bridge-mutation.lock"
+        stale.mkdir()
+        (stale / "pid").write_text("99999\n")
+        self.run_watchdog()
+        self.assertFalse(stale.exists())
+        self.assertTrue((transaction / "active").exists())
+        self.assertIn("Update journal active", self.status.with_name("watchdog.js").read_text())
+        self.assertFalse(self.launches.exists())
+
+    def test_wlan_mapping_refresh_failure_preserves_previous_file(self):
         mapping_file = self.install / "config/wlan-mapping.json"
         mapping_file.write_text('{"old":"123"}')
-        self.config.write_text(f'{{"enabled":true,"wlan_mapping_url":"http://test/map","wlan_mapping_file":"{mapping_file}"}}')
-        self.mock("curl", 'while [ "$#" -gt 0 ]; do [ "$1" = "-o" ] && echo \'{"blueberry":"uuid-123"}\' > "$2"; shift; done')
+        self.process()
+        self.status.write_text('window.unifiBridgeStatus = {"pid":123,"sample_updated_at":990,"interval_sec":10,"sample_fresh":true};')
         self.run_watchdog()
-        self.assertEqual(mapping_file.read_text().strip(), '{"blueberry":"uuid-123"}')
-        self.assertIn("updated", (self.tmpfs / "unifi-bridge-watchdog.log").read_text())
-
+        self.assertEqual(mapping_file.read_text(), '{"old":"123"}')
+        self.assertIn("WLAN mapping refresh failed", self.status.with_name("watchdog.js").read_text())
 
 
 if __name__ == "__main__":

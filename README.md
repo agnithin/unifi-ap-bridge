@@ -75,6 +75,7 @@ To ensure complete stability and prevent router configuration corruption, `unifi
 ```bash
 # Check service status and telemetry freshness
 /jffs/scripts/unifi-bridge status
+/jffs/scripts/unifi-bridge doctor
 
 # Stop / Start / Restart daemon
 /jffs/scripts/unifi-bridge restart

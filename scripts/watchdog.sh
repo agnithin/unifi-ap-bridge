@@ -18,21 +18,6 @@ log_watchdog() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Watchdog: $*" >> "$WATCHDOG_LOG"
 }
 
-if ! mkdir "$WATCHDOG_LOCK" 2>/dev/null; then
-    owner=$(cat "$WATCHDOG_LOCK/pid" 2>/dev/null || true)
-    case "$owner" in
-        ''|*[!0-9]*) exit 0 ;;
-    esac
-    if /bin/kill -0 "$owner" 2>/dev/null; then exit 0; fi
-    stale_lock="$WATCHDOG_LOCK.stale.$$"
-    mv "$WATCHDOG_LOCK" "$stale_lock" 2>/dev/null || exit 0
-    rm -rf "$stale_lock"
-    mkdir "$WATCHDOG_LOCK" 2>/dev/null || exit 0
-fi
-echo "$$" > "$WATCHDOG_LOCK/pid"
-trap 'rm -rf "$WATCHDOG_LOCK"' EXIT
-trap 'exit 1' HUP INT TERM
-
 # Startup, settings and activation own lifecycle changes while their locks or
 # transaction journal are present. The watchdog never enters those windows.
 MUTATION_LOCK="/tmp/unifi-bridge-mutation.lock"
@@ -40,10 +25,14 @@ START_LOCK="/tmp/unifi-bridge-start.lock"
 mutation_lock_owned=0
 release_mutation_lock() {
     if [ "$mutation_lock_owned" -eq 1 ] && [ "$(cat "$MUTATION_LOCK/pid" 2>/dev/null)" = "$$" ]; then
-        rm -f "$MUTATION_LOCK/pid"; rmdir "$MUTATION_LOCK" 2>/dev/null || true
+        rm -f "$MUTATION_LOCK/pid" "$MUTATION_LOCK/start"; rmdir "$MUTATION_LOCK" 2>/dev/null || true
     fi
 }
-trap 'release_mutation_lock; rm -rf "$WATCHDOG_LOCK"' EXIT
+
+process_start() {
+    [ -r "/proc/$1/stat" ] || return 1
+    sed 's/^[^)]*) //' "/proc/$1/stat" 2>/dev/null | awk '{print $20}'
+}
 
 is_lock_stale() {
     lock_path="$1"
@@ -53,8 +42,14 @@ is_lock_stale() {
         *[0-9]*)
             case "$owner" in
                 *[!0-9]*) ;;
+                0|1) ;;
                 *)
                     if ! /bin/kill -0 "$owner" 2>/dev/null; then
+                        return 0
+                    fi
+                    recorded_start=$(cat "$lock_path/start" 2>/dev/null || true)
+                    current_start=$(process_start "$owner" 2>/dev/null || true)
+                    if [ -n "$recorded_start" ] && [ -n "$current_start" ] && [ "$recorded_start" != "$current_start" ]; then
                         return 0
                     fi
                     return 1
@@ -88,52 +83,67 @@ evict_stale_lock() {
     return 1
 }
 
+if ! (umask 077; mkdir "$WATCHDOG_LOCK") 2>/dev/null; then
+    evict_stale_lock "$WATCHDOG_LOCK" || exit 0
+    (umask 077; mkdir "$WATCHDOG_LOCK") 2>/dev/null || exit 0
+fi
+echo "$$" > "$WATCHDOG_LOCK/pid" || { rmdir "$WATCHDOG_LOCK" 2>/dev/null; exit 1; }
+watchdog_start=$(process_start "$$" 2>/dev/null || true)
+[ -z "$watchdog_start" ] || printf '%s\n' "$watchdog_start" > "$WATCHDOG_LOCK/start"
+trap 'release_mutation_lock; rm -rf "$WATCHDOG_LOCK"' EXIT
+trap 'exit 1' HUP INT TERM
+
+publish_watchdog() {
+    report_dir=${STATUS_FILE%/*}
+    [ -d "$report_dir" ] || return 0
+    report_time=$(date +%s)
+    case "$report_time" in *[!0-9]*|'') return 0 ;; esac
+    printf 'window.unifiBridgeWatchdog = {"reason":"%s","updated_at":%s};\n' "$1" "$report_time" > "$report_dir/watchdog.js.tmp" &&
+        mv -f "$report_dir/watchdog.js.tmp" "$report_dir/watchdog.js"
+}
+
 recovery_blocked() {
     evict_stale_lock "$START_LOCK"
-    [ -d "$START_LOCK" ] && return 0
-    [ -f "$INSTALL_DIR/.update-transaction/active" ] && return 0
+    [ -d "$START_LOCK" ] && { recovery_reason="Startup lock held"; return 0; }
     if [ -d "$MUTATION_LOCK" ]; then
         owner=$(cat "$MUTATION_LOCK/pid" 2>/dev/null || true)
-        [ "$mutation_lock_owned" -eq 1 ] && [ "$owner" = "$$" ] && return 1
-        evict_stale_lock "$MUTATION_LOCK"
-        [ -d "$MUTATION_LOCK" ] && return 0
+        if [ "$mutation_lock_owned" -ne 1 ] || [ "$owner" != "$$" ]; then
+            evict_stale_lock "$MUTATION_LOCK"
+            [ -d "$MUTATION_LOCK" ] && { recovery_reason="Lifecycle mutation lock held"; return 0; }
+        fi
     fi
+    [ -f "$INSTALL_DIR/.update-transaction/active" ] && { recovery_reason="Update journal active; run the startup recovery procedure"; return 0; }
     return 1
 }
 
 acquire_recovery_lock() {
-    if ! mkdir "$MUTATION_LOCK" 2>/dev/null; then
+    if ! (umask 077; mkdir "$MUTATION_LOCK") 2>/dev/null; then
         evict_stale_lock "$MUTATION_LOCK" || return 1
-        mkdir "$MUTATION_LOCK" 2>/dev/null || return 1
+        (umask 077; mkdir "$MUTATION_LOCK") 2>/dev/null || return 1
     fi
     echo "$$" > "$MUTATION_LOCK/pid" || { rmdir "$MUTATION_LOCK" 2>/dev/null || true; return 1; }
     mutation_lock_owned=1
+    [ -z "$watchdog_start" ] || printf '%s\n' "$watchdog_start" > "$MUTATION_LOCK/start"
     recovery_blocked && { release_mutation_lock; mutation_lock_owned=0; return 1; }
     export UNIFI_BRIDGE_MUTATION_LOCK_OWNER="$$"
     return 0
 }
 
-recovery_blocked && exit 0
+if recovery_blocked; then
+    publish_watchdog "$recovery_reason"
+    log_watchdog "$recovery_reason"
+    exit 0
+fi
 
 [ -f "$CONFIG_FILE" ] || exit 0
 
-# Refresh WLAN mapping from upstream provider if configured
-mapping_url=$(sed -n 's/.*"wlan_mapping_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$CONFIG_FILE" 2>/dev/null || true)
-mapping_file=$(sed -n 's/.*"wlan_mapping_file"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$CONFIG_FILE" 2>/dev/null || true)
-if [ -n "$mapping_url" ] && [ -n "$mapping_file" ]; then
-    tmp_mapping="/tmp/wlan-mapping.tmp.$$"
-    if curl -s -f -m 5 "$mapping_url" -o "$tmp_mapping" 2>/dev/null && [ -s "$tmp_mapping" ]; then
-        if ! cmp -s "$tmp_mapping" "$mapping_file" 2>/dev/null; then
-            mv -f "$tmp_mapping" "$mapping_file" && chmod 600 "$mapping_file" 2>/dev/null || true
-            log_watchdog "updated $mapping_file from $mapping_url"
-        else
-            rm -f "$tmp_mapping"
-        fi
-    else
-        rm -f "$tmp_mapping"
-    fi
+WATCHDOG_HELPER="/tmp/unifi-bridge/unifi-bridge"
+if [ -x "$WATCHDOG_HELPER" ] && ! "$WATCHDOG_HELPER" -config "$CONFIG_FILE" -refresh-wlan-mapping; then
+    publish_watchdog "WLAN mapping refresh failed; previous file retained"
+    log_watchdog "WLAN mapping refresh failed; previous file retained"
+else
+    publish_watchdog "No lifecycle recovery blocker observed"
 fi
-
 
 read_field() {
     sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p" "$STATUS_FILE" 2>/dev/null | head -n 1
@@ -141,11 +151,6 @@ read_field() {
 
 read_bool() {
     sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\([[:alpha:]]*\).*/\1/p" "$STATUS_FILE" 2>/dev/null | head -n 1
-}
-
-process_start() {
-    [ -r "/proc/$1/stat" ] || return 1
-    sed 's/^[^)]*) //' "/proc/$1/stat" 2>/dev/null | awk '{print $20}'
 }
 
 PID_LIST=$(pidof unifi-bridge 2>/dev/null || true)
@@ -195,7 +200,7 @@ if [ -n "$PID" ] && [ "$STATUS_PID" = "$PID" ] && [ "$SAMPLE_FRESH" = true ] && 
 fi
 
 restart_bridge() {
-    [ "$NOW" -ge "$NEXT_ALLOWED" ] || { log_watchdog "restart backoff active until $NEXT_ALLOWED"; return 0; }
+    [ "$NOW" -ge "$NEXT_ALLOWED" ] || { publish_watchdog "Restart backoff active"; log_watchdog "restart backoff active until $NEXT_ALLOWED"; return 0; }
     if [ "$mutation_lock_owned" -ne 1 ]; then
         acquire_recovery_lock || { log_watchdog "restart deferred because lifecycle mutation is active"; return 0; }
     fi
@@ -209,7 +214,13 @@ restart_bridge() {
     [ "$DELAY" -gt 3600 ] && DELAY=3600
     NEXT_ALLOWED=$((NOW + DELAY))
     printf '%s %s %s\n' "$FAILURES" "$NEXT_ALLOWED" "$LAST_PROGRESS" > "$WATCHDOG_STATE.tmp" && mv -f "$WATCHDOG_STATE.tmp" "$WATCHDOG_STATE"
-    if [ "$start_result" -eq 0 ]; then log_watchdog "start.sh returned success; next retry is rate-limited until $NEXT_ALLOWED"; else log_watchdog "start.sh failed ($start_result); next retry is rate-limited until $NEXT_ALLOWED"; fi
+    if [ "$start_result" -eq 0 ]; then
+        publish_watchdog "Restart requested; awaiting fresh sample"
+        log_watchdog "start.sh returned success; next retry is rate-limited until $NEXT_ALLOWED"
+    else
+        publish_watchdog "Restart failed; automatic retry is rate-limited"
+        log_watchdog "start.sh failed ($start_result); next retry is rate-limited until $NEXT_ALLOWED"
+    fi
     return 0
 }
 

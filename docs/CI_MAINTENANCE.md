@@ -27,3 +27,6 @@ remaining legacy firmware commands and BusyBox applet constraints are reviewed
 in smaller steps. Expand ShellCheck file coverage as each script's intentional
 word splitting and target-firmware command support are verified; do not blanket
 disable rules or assume the host shell's applets match firmware.
+
+
+Pull requests run `verify.yml` with read-only repository access. The push-triggered release workflow calls the same checks and grants write access only to its publishing job. The checks cover the daemon, lifecycle scripts, browser behavior, and the independent Linux Wi-Fi probe.

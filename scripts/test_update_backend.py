@@ -26,7 +26,15 @@ class UpdateBackendTests(unittest.TestCase):
         (self.install / "config/config.json").write_text('{"branch": "dev"}')
         (self.status / "status.js").write_text('window.unifiBridgeStatus = {\n  "branch": "dev"\n};\n')
         curl = self.bin / "curl"
-        curl.write_text('#!/bin/sh\ncase "$*" in *latest*) printf "Location: https://example.test/v1.2.1\\r\\n";; *version.txt*) echo 1.2.3;; esac\n')
+        self.env.update(DEV_SHA="a" * 40, MAIN_SHA="b" * 40)
+        curl.write_text("""#!/bin/sh
+case "$*" in
+    *releases/latest*) printf '{"tag_name":"v1.2.1"}\n' ;;
+    *commits/v1.2.1*) printf '{"sha":"%s"}\n' "$MAIN_SHA" ;;
+    *releases?per_page=10*) printf '{"tag_name":"dev-%s"}\n' "$DEV_SHA" ;;
+    *version.txt*) echo 1.2.3 ;;
+esac
+""")
         curl.chmod(0o755)
 
     def check(self, branch):
@@ -52,11 +60,29 @@ class UpdateBackendTests(unittest.TestCase):
         self.assertIn("v1.2.3 (dev)", result["message"])
         self.assertIn("v1.2.1 (main)", result["message"])
 
-    def test_same_version_dev_check(self):
+    def test_same_version_dev_check_requires_matching_commit(self):
+        result = self.check("dev")
+        self.assertEqual(result["status"], "UPDATE_AVAILABLE")
+        self.assertEqual(result["target_commit"], self.env["DEV_SHA"])
+        (self.status / "status.js").write_text(
+            f'window.unifiBridgeStatus = {{ "commit": "{self.env["DEV_SHA"]}" }};')
         result = self.check("dev")
         self.assertEqual(result["status"], "UP_TO_DATE")
         self.assertEqual(result["remote_version"], "1.2.3")
         self.assertFalse(result["installed_newer"])
+
+    def test_apply_uses_commit_from_matching_check(self):
+        self.check("dev")
+        source = (ROOT / "scripts/update.sh").read_text().split("cmd_apply() {", 1)[0]
+        source = source.replace('INSTALL_DIR="/jffs/addons/$ADDON_NAME"', 'INSTALL_DIR="' + str(self.install) + '"')
+        source = source.replace('/tmp/var/wwwext/$ADDON_NAME', str(self.status))
+        fixture = self.root / "apply_checked.sh"
+        fixture.write_text(source + '\ncmd_apply() { printf "%s\\n" "$@"; }\ncmd_apply_checked dev 555 "$1"\n')
+        result = subprocess.run(["sh", str(fixture), "123456"], env=self.env, capture_output=True, text=True, check=True)
+        self.assertEqual(result.stdout.splitlines(), ["dev", "555", self.env["DEV_SHA"], "operator"])
+        stale = subprocess.run(["sh", str(fixture), "other-id"], env=self.env, capture_output=True, text=True)
+        self.assertNotEqual(stale.returncode, 0)
+        self.assertEqual(stale.stdout, "")
 
     def test_failure_retains_request_identity(self):
         (self.bin / "curl").write_text('#!/bin/sh\nexit 1\n')

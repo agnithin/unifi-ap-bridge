@@ -16,7 +16,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
 COMMIT = "a" * 40
-PINNED_UPDATER_SHA = "828729e2f2813b8671fa647a7c081b15951e06292ed3e2923334b67346710153"
+PINNED_UPDATER_SHA = "ff9f85ca0de3cf64f2f615e6253eb5870a999feebb7c5e9eff7dd2867565a379"
 MEMBERS = [
     "apply_config.sh", "bundle.json", "install.sh", "start.sh", "sync_nodes.sh",
     "unifi-bridge-armv7", "unifi-bridge.asp", "unifi-bridge.sh", "update.sh",
@@ -792,9 +792,9 @@ sys.exit(rc)
         start = source.index("should_propagate_update() {")
         end = source.index("\n}", start) + 2
         function = source[start:end]
-        for operation, expected in (("cluster_update", 1), ("apply", 0)):
+        for operation, local_only, expected in (("cluster_update", "0", 1), ("apply", "0", 0), ("apply", "1", 1)):
             result = subprocess.run(["sh", "-c", function + '\nshould_propagate_update', "test"],
-                env=dict(self.env, operation=operation), capture_output=True, timeout=2)
+                env=dict(self.env, operation=operation, local_only=local_only), capture_output=True, timeout=2)
             self.assertEqual(result.returncode, expected, operation)
 
     def test_apply_exact_main_requires_matching_stable_commit(self):

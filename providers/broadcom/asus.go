@@ -86,8 +86,9 @@ type commandResult struct {
 	err    error
 }
 type sampleCommandCache struct {
-	mu      sync.Mutex
-	results map[string]commandResult
+	mu       sync.Mutex
+	results  map[string]commandResult
+	commands int
 }
 
 type AsusProvider struct {
@@ -172,8 +173,19 @@ func (p *AsusProvider) resetStationSampleIncomplete() bool {
 }
 
 func (p *AsusProvider) Collect(ctx context.Context, mapping map[string]string) (*providers.Sample, error) {
+	return p.collect(ctx, mapping, nil)
+}
+
+// CollectWireless refreshes the wireless portion of a recent complete sample.
+// Wired and system samples preserve their original cadence and counter baselines.
+func (p *AsusProvider) CollectWireless(ctx context.Context, mapping map[string]string, prior *providers.Sample) (*providers.Sample, error) {
+	return p.collect(ctx, mapping, prior)
+}
+
+func (p *AsusProvider) collect(ctx context.Context, mapping map[string]string, prior *providers.Sample) (*providers.Sample, error) {
 	p.resetStationSampleIncomplete()
-	ctx = context.WithValue(ctx, sampleCommandCacheKey{}, &sampleCommandCache{results: make(map[string]commandResult)})
+	cache := &sampleCommandCache{results: make(map[string]commandResult)}
+	ctx = context.WithValue(ctx, sampleCommandCacheKey{}, cache)
 	ctx = context.WithValue(ctx, sampleFileCacheKey{}, &sampleFileCache{values: make(map[string][]byte), errors: make(map[string]error)})
 	ctx = context.WithValue(ctx, sampleParentCacheKey{}, &sampleParentCache{})
 	ctx = context.WithValue(ctx, sampleCarrierCacheKey{}, &sampleCarrierCache{values: make(map[string]struct {
@@ -181,6 +193,13 @@ func (p *AsusProvider) Collect(ctx context.Context, mapping map[string]string) (
 		known bool
 	})})
 	started := time.Now()
+	stageStarted := started
+	stageMS := make(map[string]int64, 7)
+	finishStage := func(name string) {
+		now := time.Now()
+		stageMS[name] = now.Sub(stageStarted).Milliseconds()
+		stageStarted = now
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -188,13 +207,15 @@ func (p *AsusProvider) Collect(ctx context.Context, mapping map[string]string) (
 	if err != nil {
 		return nil, fmt.Errorf("collect radios: %w", err)
 	}
+	finishStage("radios")
 	vaps, err := p.GetVAPsContext(ctx, mapping)
 	if err != nil {
 		return nil, fmt.Errorf("collect vaps: %w", err)
 	}
 	p.applyRetryInterval(vaps, started)
 	p.vapCounterState.Observe(vaps, started)
-	sample := &providers.Sample{Radios: radios, VAPs: vaps, StartedAt: started, StageErrors: make(map[string]string)}
+	sample := &providers.Sample{Radios: radios, VAPs: vaps, StartedAt: started, StageErrors: make(map[string]string), StageMS: stageMS}
+	finishStage("stations")
 	if p.resetStationSampleIncomplete() {
 		sample.StageErrors["stations"] = "incomplete station details"
 	}
@@ -220,18 +241,37 @@ func (p *AsusProvider) Collect(ctx context.Context, mapping map[string]string) (
 			return nil, fatal
 		}
 	}
+	finishStage("radio_stats")
+	if prior != nil {
+		sample.Ports, sample.Ethernet, sample.LLDP = prior.Ports, prior.Ethernet, prior.LLDP
+		if prior.Uplink != nil {
+			uplink := *prior.Uplink
+			sample.Uplink = &uplink
+		}
+		sample.System, sample.LegacySystem = prior.System, prior.LegacySystem
+		for _, stage := range []string{"ports", "lldp", "system"} {
+			if msg := prior.StageErrors[stage]; msg != "" {
+				sample.StageErrors[stage] = msg
+			}
+		}
+		sample.CompletedAt = time.Now()
+		sample.DriverCommands = cache.commands
+		return sample, ctx.Err()
+	}
 	if sample.Ports, sample.Ethernet, sample.Uplink, err = p.GetPortTableContext(ctx); err != nil {
 		if fatal := setStageError("ports", err); fatal != nil {
 			return nil, fatal
 		}
 		sample.Ports, sample.Ethernet, sample.Uplink = nil, nil, nil
 	}
+	finishStage("ports")
 	if sample.LLDP, err = p.GetLLDPTableContext(ctx); err != nil {
 		if fatal := setStageError("lldp", err); fatal != nil {
 			return nil, fatal
 		}
 		sample.LLDP = nil
 	}
+	finishStage("lldp")
 	if sample.System, sample.LegacySystem, err = p.GetSystemStatsContext(ctx); err != nil {
 		if fatal := setStageError("system", err); fatal != nil {
 			return nil, fatal
@@ -243,11 +283,14 @@ func (p *AsusProvider) Collect(ctx context.Context, mapping map[string]string) (
 	}
 	// Enrich local diagnostics only after every required sample stage has
 	// completed, so optional driver commands cannot starve core telemetry.
+	finishStage("system")
 	p.enrichCCAInterferenceContext(ctx, sample.RadioStats)
+	finishStage("optional_rf")
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	sample.CompletedAt = time.Now()
+	sample.DriverCommands = cache.commands
 	return sample, nil
 }
 
@@ -302,16 +345,23 @@ func (p *AsusProvider) nvramGet(key string) string {
 }
 
 func (p *AsusProvider) runCommand(ctx context.Context, name string, args ...string) (string, error) {
+	return p.runCommandWithCache(ctx, true, name, args...)
+}
+
+func (p *AsusProvider) runCommandWithCache(ctx context.Context, reuse bool, name string, args ...string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	if cache, ok := ctx.Value(sampleCommandCacheKey{}).(*sampleCommandCache); ok {
+	if cache, ok := ctx.Value(sampleCommandCacheKey{}).(*sampleCommandCache); ok && cache != nil {
 		key := name + "\x00" + strings.Join(args, "\x00")
 		cache.mu.Lock()
 		result, found := cache.results[key]
 		cache.mu.Unlock()
-		if found {
+		if reuse && found {
 			return result.output, result.err
+		}
+		if name == "wl" {
+			cache.commands++
 		}
 		cmdCtx, cancel := context.WithTimeout(ctx, commandTimeout)
 		out, err := p.runner(cmdCtx, name, args...)
@@ -756,6 +806,21 @@ func isStationDepartedOutput(err error, output string) bool {
 		strings.Contains(out, "not found")
 }
 
+// An invalid driver response cannot establish that a station departed.
+func associationContains(raw, mac string) (present, valid bool) {
+	for _, field := range strings.Fields(raw) {
+		if field == "assoclist" {
+			continue
+		}
+		normalized, err := inform.NormalizeMAC(field)
+		if err != nil {
+			return false, false
+		}
+		present = present || normalized == mac
+	}
+	return present, true
+}
+
 func (p *AsusProvider) getStationsForIfaceContext(ctx context.Context, iface, vapName, bssid, ssid string, channel int, band string) ([]telemetry.Station, error) {
 	stations := []telemetry.Station{}
 	assocRaw, err := p.wlCmdContext(ctx, iface, "assoclist")
@@ -807,8 +872,8 @@ func (p *AsusProvider) getStationsForIfaceContext(ctx context.Context, iface, va
 				continue
 			}
 			// Bounded recheck: confirm if client is still in assoclist
-			recheckRaw, recheckErr := p.wlCmdContext(ctx, iface, "assoclist")
-			if recheckErr == nil && !strings.Contains(recheckRaw, rawMAC) {
+			recheckRaw, recheckErr := p.runCommandWithCache(ctx, false, "wl", "-i", iface, "assoclist")
+			if present, valid := associationContains(recheckRaw, normMAC); recheckErr == nil && valid && !present {
 				// Confirmed departed on assoclist recheck
 				continue
 			}
