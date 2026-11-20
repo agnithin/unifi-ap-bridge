@@ -36,11 +36,31 @@ The bridge daemon is supervised by a 5-minute cron watchdog (`watchdog.sh`).
 - **Enable & Start:** `/jffs/scripts/unifi-bridge enable`  
   Sets `"enabled": true` in configuration and launches the daemon.
 - **Adoption Reset:** `/jffs/scripts/unifi-bridge reset`  
-  Clears `/jffs/addons/unifi-bridge/state.json` and restarts the daemon into unadopted discovery mode.
+  Stops the old daemon under the lifecycle locks and removes both generations at the configured state path. An enabled install waits for status from the new daemon. A disabled install stays disabled. Recover any active update transaction before resetting.
+
+### Diagnose a degraded AP
+
+Run `/jffs/scripts/unifi-bridge doctor` for the build, service snapshot age, last successful Inform, state persistence, mapping file age, and watchdog status. It reads local status and file metadata without contacting the controller. The WebUI shows service, telemetry, controller and adoption separately. A failed refresh retains the previous snapshot with an age label. If the watchdog reports an active update journal, verify no updater is active and use the installed `start.sh` recovery path. Keep the journal and snapshot intact if recovery fails.
+
+The WebUI diagnostics show the most recent collection time and driver command count. The local status also records stage timings, Inform request duration, cumulative sample deadline misses, last full sample time, and roam-trigger receipt to successful Inform latency when applicable. Compare these across idle, normal and busy client counts on each AP before changing defaults. Wireless-only samples refresh stations and radio metrics. They reuse wired topology and system readings from the last full sample for at most two configured intervals. Full exchanges run periodically and take precedence when already due.
+
+### Stage a cluster release
+
+1. Run `/jffs/scripts/unifi-bridge update check dev` (or `main`). Inspect `/jffs/addons/unifi-bridge/update.sh status` for the target commit. A WebUI install uses the exact checked commit. If the check was superseded or the stable release changed, check again.
+2. On the main AP, run `/jffs/scripts/unifi-bridge update apply-local TRACK COMMIT`, substituting the selected track and the full 40-character commit. This installs and verifies the bundle locally and skips automatic propagation.
+3. Check `doctor`, fresh authenticated Inform and client connectivity on that AP. From a separate Linux probe client running NetworkManager, use:
+
+   ```sh
+   python3 scripts/ops/wifi_health_probe.py --interface wlan0 \
+     --dns-server 192.0.2.53 --dns-name example.com --bssid 02:00:00:00:00:01
+   ```
+
+   Substitute the client interface, a DNS server and name reachable over that Wi-Fi, and the target AP's BSSID. Dependencies are Python 3, `iw`, `nmcli`, `ip` and `dig`. The probe checks the current association, an active IPv4 DHCP address and a DNS answer over the Wi-Fi route. It emits per-check JSON and exits nonzero on failure. Run it from an existing scheduler or monitoring system to collect outages and recoveries.
+4. After local acceptance, run `/jffs/addons/unifi-bridge/sync_nodes.sh update TRACK COMMIT` from the main AP and verify each node. Review the rollout and recovery state before retrying a failed update.
 
 ### WLAN Mapping Cache Invalidation & Automated Refresh
 The cache is stored at `/jffs/addons/unifi-bridge/config/wlan-mapping.json` (mode 0600).
-- **Automated Pull (Primary):** When `"wlan_mapping_url"` is configured in `config.json` (e.g., `http://10.100.1.107:8000/api/v1/network/aps/wlan-mapping`), `watchdog.sh` polls the endpoint every 5 minutes via cron. It compares the downloaded payload against the active cache (`cmp -s`), updating atomically via rename only when mappings change (zero flash wear when unchanged).
+- **Automated Pull (Primary):** When `"wlan_mapping_url"` is configured in `config.json` (e.g., `http://10.100.1.107:8000/api/v1/network/aps/wlan-mapping`), `watchdog.sh` polls the endpoint every 5 minutes via cron. It bounds the download, validates the SSID and WLAN-ID schema, then atomically replaces the file. An identical private file is reused. A rejected download leaves the last valid on-disk file available after a restart.
 - **On-Demand Push (Fallback):** The Mac helper `python3 -B scripts/ops/mac_wlan_mapping.py` remains available to manually push exact SSIDs to Main and Node without exposing controller credentials outside CT107.
 - **Merge Behavior:** Published entries merge into the running last-known-good map, so removing an SSID from the file does not necessarily remove it from memory until a reviewed restart. Do not delete a different cache path or assume the daemon will query the controller directly.
 

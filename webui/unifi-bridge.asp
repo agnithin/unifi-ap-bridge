@@ -161,6 +161,8 @@ var updatePollingTimer = null;
 var currentBranch = "main";
 var installedVersion = "";
 var activeUpdateRequest = null;
+var checkedCandidate = null;
+var snapshotRequests = {};
 var activeActionRequest = null;
 var actionPollingTimer = null;
 
@@ -319,7 +321,10 @@ function startUpdateRequest(operation, branch) {
   activeUpdateRequest = request;
   document.getElementById("btn_check_update").disabled = true;
   document.getElementById("btn_do_update").style.display = "none";
-  document.form.action_script.value = "start_unifi_bridge_" + (operation === "check" ? "check_update_" : "do_update_") + branch + "_" + request.id;
+  if (operation === "check") checkedCandidate = null;
+  document.form.action_script.value = operation === "check"
+    ? "start_unifi_bridge_check_update_" + branch + "_" + request.id
+    : "start_unifi_bridge_do_checked_" + branch + "_" + request.id + "_" + checkedCandidate.id;
   document.form.action_mode.value = "apply";
   document.form.action_wait.value = "0";
   document.form.current_page.value = "";
@@ -555,6 +560,7 @@ function updateDiagnosticsUI(st) {
 function updateUI(st) {
   if (!st) return;
   lastStatusData = st;
+  renderBridgeHealth(st);
   updateDiagnosticsUI(st);
   renderUnifiedPortsTable(lastClusterData, st);
 
@@ -763,6 +769,7 @@ function renderSatelliteNodesTelemetry(cl) {
 function updateClusterUI(cl) {
   if (!cl || !cl.nodes) return;
   lastClusterData = cl;
+  document.getElementById("cluster_snapshot_age").textContent = "Cluster snapshot " + relativeAge(cl.updated_at);
   var tbody = document.getElementById("cluster_nodes_tbody");
   if (!tbody) return;
 
@@ -776,7 +783,7 @@ function updateClusterUI(cl) {
 
   for (var i = 0; i < cl.nodes.length; i++) {
     var n = cl.nodes[i];
-    var isLocal = n.role.indexOf("Main") !== -1;
+    var isLocal = String(n.role || "").indexOf("Main") !== -1;
     var state = clusterState(n);
     var isSync = state === "verified" || state === "local";
     if (!isSync) allSync = false;
@@ -793,7 +800,7 @@ function updateClusterUI(cl) {
 
     var statusBadge = n.enabled === false && n.running === false
       ? '<span style="font-size:10px;color:#bdc3c7;">DISABLED</span>'
-      : (n.status === "RUNNING"
+      : (n.service_alive === true || n.status === "RUNNING"
         ? '<span class="badge_online" style="font-size:10px;">RUNNING</span>'
         : '<span class="badge_offline" style="font-size:10px;">STOPPED</span>');
 
@@ -841,10 +848,15 @@ function updateClusterUI(cl) {
     }
 
     var informPart = "";
+    if (typeof n.sample_age_sec === "number" && n.sample_age_sec >= 0) {
+      informPart += ' · Telemetry ' + (n.sample_fresh === true ? 'fresh' : 'stale') + ' at check (' + Math.floor(n.sample_age_sec) + 's old)';
+    }
+    if (n.inform_failed === true) informPart += ' · Controller error';
+    if (n.service_alive === true && n.freshness !== 'fresh') informPart += ' · Service status stale';
     if (n.last_successful_inform) {
       var infParts = String(n.last_successful_inform).split(" ");
       var infTime = infParts.length > 1 ? infParts[1] : infParts[0];
-      informPart = ' <span style="font-size:10px; color:#bdc3c7;" title="' + escapeHTML(n.last_successful_inform) + '">Inform: ' + escapeHTML(infTime) + '</span>';
+      informPart += ' <span style="font-size:10px; color:#bdc3c7;" title="' + escapeHTML(n.last_successful_inform) + '">Inform: ' + escapeHTML(infTime) + '</span>';
     }
 
     var tempPart = (n.temp && n.temp !== "-") ? ' <span style="font-size:10px; color:#f39c12;">(' + escapeHTML(n.temp) + ')</span>' : "";
@@ -914,11 +926,16 @@ function updateUpdateUI(u) {
   }
   if (u.message) desc.textContent = u.message + (u.last_check ? " (Checked: " + u.last_check + ")" : "");
 
+  if (u.target_commit && /^[a-f0-9]{40}$/.test(u.target_commit) && u.remote_version && u.remote_version !== "-") {
+    remVal.textContent += " · " + u.target_commit.slice(0, 12);
+  }
   if (u.status === "UPDATE_AVAILABLE") {
+    checkedCandidate = /^[a-f0-9]{40}$/.test(u.target_commit || "") && /^[0-9]{1,24}$/.test(u.request_id || "")
+      ? {id: String(u.request_id), branch: u.branch, commit: u.target_commit} : null;
     badge.className = "badge_online";
     badge.style.backgroundColor = "#e67e22";
     badge.textContent = "UPDATE AVAILABLE";
-    btnDo.style.display = "inline-block";
+    btnDo.style.display = checkedCandidate ? "inline-block" : "none";
     btnDo.value = "Install " + displayVersion(u.remote_version) + " (" + u.branch + ")";
     pBox.style.display = "none";
   } else if (u.status === "UP_TO_DATE") {
@@ -939,6 +956,7 @@ function updateUpdateUI(u) {
     badge.textContent = "UPDATING...";
     btnDo.style.display = "none";
     pBox.style.display = "block";
+    pBox.textContent = u.message || "Installing checked build…";
   } else if (u.status === "SUCCESS") {
     badge.className = "badge_online";
     badge.style.backgroundColor = "#27ae60";
@@ -955,7 +973,7 @@ function updateUpdateUI(u) {
   } else if (u.status === "ERROR") {
     badge.className = "badge_offline";
     badge.style.backgroundColor = "#c0392b";
-    badge.textContent = "CHECK FAILED";
+    badge.textContent = u.stage === "rolled_back" ? "ROLLED BACK" : u.stage === "recovery_required" ? "RECOVERY REQUIRED" : (u.operation === "check" ? "CHECK FAILED" : "UPDATE FAILED");
     btnDo.style.display = "none";
     pBox.style.display = "none";
   }
@@ -963,15 +981,7 @@ function updateUpdateUI(u) {
 }
 
 function loadUpdateStatus() {
-  var s = document.createElement("script");
-  s.src = "/ext/unifi-bridge/update_status.js?_=" + Date.now();
-  s.onload = function() {
-    if (window.unifiBridgeUpdate) {
-      updateUpdateUI(window.unifiBridgeUpdate);
-    }
-    try { document.head.removeChild(s); } catch(e){}
-  };
-  document.head.appendChild(s);
+  loadSnapshot("update_status.js", "unifiBridgeUpdate", updateUpdateUI);
 }
 
 function checkUpdateNow() {
@@ -988,7 +998,11 @@ function checkUpdateNow() {
 
 function doUpdateNow() {
   var selectedBranch = document.getElementById("select_branch").value;
-  if (!confirm("Install the latest UniFi AP Bridge build from the " + selectedBranch + " track across the cluster?\n\nThis restarts the bridge daemon.")) return;
+  if (!checkedCandidate || checkedCandidate.branch !== selectedBranch) {
+    document.getElementById("update_desc").textContent = "Check this track before installing.";
+    return;
+  }
+  if (!confirm("Install checked build " + checkedCandidate.commit.slice(0, 12) + " from " + selectedBranch + "? This restarts the bridge.")) return;
   document.getElementById("update_progress_box").style.display = "block";
   var badge = document.getElementById("update_badge");
   badge.className = "badge_online";
@@ -1002,44 +1016,76 @@ function onTrackChanged() {
   checkUpdateNow();
 }
 
-function loadCluster(done) {
-  var s = document.createElement("script");
-  s.src = "/ext/unifi-bridge/cluster.js?_=" + Date.now();
-  s.onload = function() {
-    if (window.unifiBridgeCluster) {
-      updateClusterUI(window.unifiBridgeCluster);
-      if (done) done(window.unifiBridgeCluster);
-    } else if (done) {
-      done(null);
+function loadSnapshot(file, variable, onData, onFailure) {
+  if (snapshotRequests[file]) return;
+  var request = new XMLHttpRequest();
+  snapshotRequests[file] = request;
+  request.open("GET", "/ext/unifi-bridge/" + file + "?_=" + Date.now(), true);
+  request.timeout = 5000;
+  function finish(ok) {
+    if (snapshotRequests[file] !== request) return;
+    delete snapshotRequests[file];
+    if (ok && request.status === 200) {
+      var prefix = "window." + variable + " = ";
+      var body = (request.responseText || "").trim();
+      if (body.indexOf(prefix) === 0 && body.slice(-1) === ";") {
+        var value;
+        try { value = JSON.parse(body.slice(prefix.length, -1)); } catch (e) {}
+        if (value && typeof value === "object") { onData(value); return; }
+      }
     }
-    try { document.head.removeChild(s); } catch(e){}
-  };
-  document.head.appendChild(s);
+    if (onFailure) onFailure();
+  }
+  request.onload = function() { finish(true); };
+  request.onerror = request.ontimeout = function() { finish(false); };
+  request.send();
+}
+
+function relativeAge(timestamp) {
+  var age = Math.floor(Date.now() / 1000 - Number(timestamp));
+  if (!(Number(timestamp) > 0) || !Number.isFinite(age) || age < -30) return "unknown age";
+  age = Math.max(age, 0);
+  return age < 60 ? age + "s ago" : Math.floor(age / 60) + "m ago";
+}
+
+function renderBridgeHealth(st) {
+  var fresh = statusIsFresh(st);
+  document.getElementById("health_service").textContent = st.enabled === false ? "Disabled" : !fresh ? "Status stale" : st.running ? "Running" : "Stopped";
+  var telemetry = st.sample_fresh === true && fresh ? "Fresh" : "Stale";
+  if (telemetry === "Fresh" && st.sample_stage_errors && Object.keys(st.sample_stage_errors).length) telemetry = "Partial";
+  document.getElementById("health_telemetry").textContent = telemetry + " · " + relativeAge(st.sample_updated_at);
+  document.getElementById("health_inform").textContent = (st.last_inform_error || (st.last_successful_inform_at ? "Last success" : "Awaiting Inform")) +
+    (st.last_successful_inform_at ? " · " + relativeAge(st.last_successful_inform_at) : "");
+  document.getElementById("health_storage").textContent = st.state_save_error ? "Adoption save failed · retry pending" : st.pending_state_save ? "Adoption save pending" : st.adopted ? "Adopted" : "Unadopted";
+  var perf = st.performance;
+  if (perf) {
+    var label = perf.kind === "wireless" ? "Wireless refresh" : "Full sample";
+    document.getElementById("health_performance").textContent = label + ": " + displayMetric(perf.collect_ms) +
+      " ms, " + displayMetric(perf.driver_commands) + " driver calls · full sample " + relativeAge(st.full_sample_updated_at);
+  }
 }
 
 function loadStatus() {
-  loadCluster();
-  var s = document.createElement("script");
-  s.src = "/ext/unifi-bridge/status.js?_=" + Date.now();
-  s.onload = function() {
-    if (window.unifiBridgeStatus) {
-      updateUI(window.unifiBridgeStatus);
-    }
-    try { document.head.removeChild(s); } catch(e){}
-  };
-  s.onerror = function() {
+  loadSnapshot("cluster.js", "unifiBridgeCluster", updateClusterUI, function() {
+    document.getElementById("cluster_snapshot_age").textContent = lastClusterData ? "Cluster refresh failed · previous snapshot " + relativeAge(lastClusterData.updated_at) : "Cluster snapshot unavailable";
+  });
+  loadSnapshot("watchdog.js", "unifiBridgeWatchdog", function(w) {
+    document.getElementById("health_recovery").textContent = (w.reason || "Unknown") + " · " + relativeAge(w.updated_at);
+  }, function() {
+    document.getElementById("health_recovery").textContent = "Watchdog status unavailable";
+  });
+  loadSnapshot("status.js", "unifiBridgeStatus", updateUI, function() {
     var badge = document.getElementById("bridge_badge");
-    if (badge) {
-      badge.className = "badge_offline";
-      badge.textContent = "OFFLINE";
-    }
-  };
-  document.head.appendChild(s);
+    badge.className = "badge_offline";
+    badge.textContent = "REFRESH FAILED";
+    document.getElementById("health_service").textContent = lastStatusData ?
+      "Showing previous status · " + relativeAge(lastStatusData.status_updated_at) : "Status unavailable";
+  });
 }
 
 function toggleAutoRefresh(cb) {
   if (cb.checked) {
-    if (!autoRefreshTimer) autoRefreshTimer = setInterval(loadStatus, 15000);
+    if (!autoRefreshTimer) autoRefreshTimer = setInterval(function() { if (!document.hidden) loadStatus(); }, 15000);
   } else {
     if (autoRefreshTimer) {
       clearInterval(autoRefreshTimer);
@@ -1179,6 +1225,15 @@ function initial(){
                     <div style="margin:10px 0 10px 5px;" class="splitLine"></div>
                     <div class="formfontdesc">Emulate a native UniFi 6 Access Point on Asuswrt-Merlin, feeding client associations, Wi-Fi 6 telemetry, and live signal metrics directly into your UniFi Network Controller.</div>
 
+                    <div class="stat_card_container" aria-label="Bridge health">
+                      <div class="stat_card"><div class="stat_label">Service</div><div id="health_service">Checking…</div></div>
+                      <div class="stat_card"><div class="stat_label">Telemetry</div><div id="health_telemetry">Checking…</div></div>
+                      <div class="stat_card"><div class="stat_label">Controller</div><div id="health_inform">Checking…</div></div>
+                      <div class="stat_card"><div class="stat_label">Adoption</div><div id="health_storage">Checking…</div></div>
+                    </div>
+                    <p id="health_recovery" role="status"></p>
+                    <p id="cluster_snapshot_age"></p>
+
                     <!-- Metric Cards -->
                     <div class="stat_card_container">
                       <div class="stat_card">
@@ -1214,6 +1269,7 @@ function initial(){
                         <thead><tr><th>Observed at</th><th>Change</th><th>Client</th><th>SSID</th><th>Radio</th><th>Signal</th><th>Poll gap</th></tr></thead>
                         <tbody id="station_event_rows"></tbody>
                       </table>
+                      <p id="health_performance"></p>
                       <p id="wlan_mapping_status" style="color:#bdc3c7; font-size:11px;"></p>
                       <p id="controller_command_status" style="color:#bdc3c7; font-size:11px;"></p>
                     </details>

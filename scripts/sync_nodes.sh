@@ -48,6 +48,17 @@ cluster_ssh() (
     exit "$result"
 )
 
+# Keep health details independent of update/config verification results.
+telemetry_health_fields() {
+    health_raw="$1"
+    health_age=$(printf '%s' "$health_raw" | sed -n 's/.*"sample_age_sec":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)
+    health_fresh=false
+    printf '%s' "$health_raw" | grep -Eq '"sample_fresh"[[:space:]]*:[[:space:]]*true' && health_fresh=true
+    health_inform_failed=false
+    printf '%s' "$health_raw" | grep -Eq '"last_inform_error"[[:space:]]*:[[:space:]]*"[^"]+"' && health_inform_failed=true
+    printf '"sample_age_sec":%s,"sample_fresh":%s,"inform_failed":%s' "${health_age:-null}" "$health_fresh" "$health_inform_failed"
+}
+
 # Status freshness is measured on the node's own clock; no inter-node skew.
 status_is_fresh() {
     case "$1:$2:$3" in *[!0-9:]*|:*|*::*|*:) return 1 ;; esac
@@ -320,6 +331,7 @@ main_hb_json=$(json_escape "$main_heartbeat")
 main_name_json=$(json_escape "$MAIN_NAME")
 main_ip_json=$(json_escape "$MAIN_IP")
 main_pid_json=$( [ -n "$main_pid" ] && json_escape "$main_pid" | sed 's/.*/"&"/' || printf 'null' )
+main_health_fields=$(telemetry_health_fields "$(cat "$main_status_js" 2>/dev/null)")
 nodes_json="["
 nodes_json="${nodes_json}
     {
@@ -334,6 +346,7 @@ nodes_json="${nodes_json}
       \"enabled\": ${main_enabled},
       \"running\": ${main_running},
       \"status_updated_at\": ${main_updated_json},
+      ${main_health_fields},
       \"freshness\": \"${main_freshness}\",
       \"last_successful_inform\": ${main_inform_json},
       \"operation_id\": \"${OPERATION_ID}\",
@@ -376,6 +389,8 @@ for node_ip in $NODE_IPS; do
     node_updated=""
     node_inform=""
     node_freshness="unknown"
+    node_health_fields='"sample_age_sec":null,"sample_fresh":false,"inform_failed":false'
+    node_service_alive=null
     node_stage="not_dispatched"
     node_outcome="unknown"
     dispatch_result="not_attempted"
@@ -472,6 +487,12 @@ REMOTE
             else
                 node_freshness="stale"
                 sync_status="Stale or Stopped"
+            fi
+            node_health_fields=$(telemetry_health_fields "$remote_status")
+            node_service_alive=false
+            if [ "$r_run" = true ] && [ -n "$r_live_pid" ] && [ "$node_pid" = "$r_live_pid" ] &&
+               [ "$r_exe" = "/tmp/unifi-bridge/unifi-bridge" ]; then
+                node_service_alive=true
             fi
             if [ "$r_run" = "true" ] && [ -n "$r_live_pid" ] && [ "$node_pid" = "$r_live_pid" ] &&
                [ "$r_exe" = "/tmp/unifi-bridge/unifi-bridge" ] && [ "$node_freshness" = "fresh" ] &&
@@ -608,6 +629,8 @@ REMOTE
       \"enabled\": ${node_enabled_json},
       \"running\": ${node_running_json},
       \"status_updated_at\": ${node_updated_json},
+      ${node_health_fields},
+      \"service_alive\": ${node_service_alive},
       \"freshness\": \"${node_freshness}\",
       \"last_successful_inform\": ${node_inform_json},
       \"operation_id\": \"${OPERATION_ID}\",
@@ -644,6 +667,7 @@ nodes_json="${nodes_json}
 cluster_tmp="$CLUSTER_JS.tmp.$$"
 cat << EOF > "$cluster_tmp"
 window.unifiBridgeCluster = {
+  "updated_at": $(date +%s),
   "last_sync": "${NOW}",
   "nodes": ${nodes_json}
 };

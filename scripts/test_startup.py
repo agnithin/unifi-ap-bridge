@@ -30,6 +30,19 @@ class StartupTests(unittest.TestCase):
         self.assertFalse(list(self.root.glob("**/unifi-bridge-start.lock")),"a nested start lock leaked")
         self.assertFalse(lock.exists(),"start lock leaked: "+str(list(lock.iterdir()) if lock.exists() else "missing"))
         self.assertFalse((self.root/"tmp/unifi-bridge-mutation.lock").exists(),"mutation lock leaked")
+    def test_reset_respects_update_journal(self):
+        transaction = self.install / ".update-transaction"
+        transaction.mkdir()
+        (transaction / "active").write_text("ACTIVATING\n")
+        state = self.install / "state.json"
+        state.write_text("original")
+        result = subprocess.run(["sh", str(self.script), "--reset-adoption"], env=self.env,
+                                capture_output=True, text=True, timeout=5)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Complete update recovery", result.stderr)
+        self.assertEqual(state.read_text(), "original")
+        self.assertFalse(self.launches.exists())
+
     def test_start_refuses_busy_mutation_lock_without_stealing(self):
         lock=self.root/"tmp/unifi-bridge-mutation.lock";lock.mkdir();(lock/"pid").write_text("424242\n")
         self.env["UNIFI_BRIDGE_MUTATION_WAIT_SECONDS"]="0"

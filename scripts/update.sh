@@ -168,6 +168,9 @@ window.unifiBridgeUpdate = {
   "request_id": "${request_id:-}",
   "installed_newer": ${installed_newer:-false},
   "current_version": "${cur_ver}",
+  "current_commit": "${installed_commit:-}",
+  "target_commit": "${resolved_commit:-}",
+  "stage": "${update_stage:-}",
   "remote_version": "${rem_ver}",
   "message": "${msg}",
   "last_check": "${now}"
@@ -464,8 +467,10 @@ restore_prior_entry() {
 
 rollback_and_verify() {
     reason="$1"
+    update_stage="rollback"
     rollback_started_at=$(date +%s)
-    write_update_status "ERROR" "$branch" "$local_ver" "${remote_ver:-}" "$reason; attempting verified rollback"
+    write_update_status "UPDATING" "$branch" "$local_ver" "${remote_ver:-}" "$reason; attempting verified rollback"
+    update_stage="recovery_required"
     if ! restore_transaction; then
         write_update_status "ERROR" "$branch" "$local_ver" "${remote_ver:-}" "$reason; ROLLBACK FAILED: prior addon assets could not be restored; journal retained"
         return 1
@@ -606,6 +611,70 @@ verify_live() {
     return 1
 }
 
+valid_commit() {
+    case "$1" in *[!0-9a-f]*|'') return 1 ;; esac
+    [ "${#1}" -eq 40 ]
+}
+
+get_installed_commit() {
+    if [ -x /tmp/unifi-bridge/unifi-bridge ]; then
+        /tmp/unifi-bridge/unifi-bridge -version | sed -n 's/.*commit: \([0-9a-f]\{40\}\),.*/\1/p'
+    else
+        sed -n 's/.*"commit":[[:space:]]*"\([0-9a-f]\{40\}\)".*/\1/p' "$STATUS_JS" 2>/dev/null | head -n 1
+    fi
+}
+
+resolve_release() {
+    resolved_commit=""
+    release_tag=""
+    expected_version=""
+    if [ "$branch" = "dev" ]; then
+        if [ -n "$exact_commit" ]; then
+            resolved_commit="$exact_commit"
+            release_tag="dev-${resolved_commit}"
+        else
+            # Prefer the newest successfully published immutable dev release
+            release_tag=$(curl -fsSL --connect-timeout 8 --max-time 20 \
+                -H 'Accept: application/vnd.github+json' \
+                'https://api.github.com/repos/agnithin/unifi-ap-bridge/releases?per_page=10' 2>/dev/null |
+                sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\(dev-[0-9a-f]\{40\}\)".*/\1/p' | head -n 1)
+            if [ -n "$release_tag" ]; then
+                resolved_commit="${release_tag#dev-}"
+            else
+                [ "$operation" != check ] || return 1
+                # Fallback to dev branch HEAD for direct CLI apply
+                resolved_commit=$(curl -fsSL --connect-timeout 8 --max-time 20 \
+                    -H 'Accept: application/vnd.github+json' \
+                    'https://api.github.com/repos/agnithin/unifi-ap-bridge/commits/dev' 2>/dev/null |
+                    awk -F'"' '/"sha"[[:space:]]*:/ { print $4; exit }')
+                release_tag="dev-${resolved_commit}"
+            fi
+        fi
+        case "$resolved_commit" in *[!0-9a-f]*|'') resolved_commit="" ;; esac
+        [ "${#resolved_commit}" -eq 40 ] || resolved_commit=""
+        expected_version=$(curl -fsSL --connect-timeout 8 --max-time 20 \
+            "${REPO_RAW}/${resolved_commit}/version.txt" 2>/dev/null | tr -d ' \t\r\n')
+    else
+        release_tag=$(curl -fsSL --connect-timeout 8 --max-time 20 \
+            -H 'Accept: application/vnd.github+json' \
+            'https://api.github.com/repos/agnithin/unifi-ap-bridge/releases/latest' 2>/dev/null |
+            sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+        case "$release_tag" in v[0-9]*) ;; *) return 1 ;; esac
+        case "$release_tag" in *[!A-Za-z0-9._-]*) return 1 ;; esac
+        resolved_commit=$(curl -fsSL --connect-timeout 8 --max-time 20 \
+            -H 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/agnithin/unifi-ap-bridge/commits/${release_tag}" 2>/dev/null |
+            awk -F'"' '/"sha"[[:space:]]*:/ { print $4; exit }')
+        expected_version=${release_tag#v}
+        if [ -n "$exact_commit" ] && [ "$resolved_commit" != "$exact_commit" ]; then
+            return 1
+        fi
+    fi
+    valid_commit "$resolved_commit" || { resolved_commit=""; return 1; }
+    case "$release_tag" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
+    case "$expected_version" in ''|*[!A-Za-z0-9._+-]*) return 1 ;; esac
+}
+
 cmd_check() {
     operation="check"
     request_id="${2:-}"
@@ -613,58 +682,53 @@ cmd_check() {
     branch=$(get_branch "${1:-}")
     case "$branch" in main|dev) ;; *) echo "Invalid release track" >&2; return 1 ;; esac
     local_ver=$(get_local_version)
-    echo "Checking for updates on branch '${branch}' (current version: ${local_ver})..."
-
-    write_update_status "CHECKING" "$branch" "$local_ver" "-" "Checking GitHub repository..."
-
-    raw_ver=""
-    if [ "$branch" = "main" ]; then
-        # Query latest official release tag via redirect (instant, zero rate limit)
-        rel_tag=$(curl -sI --connect-timeout 4 --max-time 6 "${REPO_RELEASES}/latest" 2>/dev/null | grep -i '^Location:' | awk -F'/' '{print $NF}' | tr -d ' \t\r\n' || true)
-        if [ -n "$rel_tag" ]; then
-            raw_ver="$rel_tag"
-        fi
-    fi
-
-    if [ -z "$raw_ver" ]; then
-        raw_ver=$(curl -fsSL --connect-timeout 5 --max-time 10 "${REPO_RAW}/${branch}/version.txt" 2>/dev/null | tr -d ' \t\r\n' || true)
-    fi
-
-    if [ -z "$raw_ver" ]; then
-        echo "Error: Failed to fetch version info from GitHub"
-        write_update_status "ERROR" "$branch" "$local_ver" "-" "Unable to reach GitHub to check version"
+    installed_commit=$(get_installed_commit)
+    exact_commit=""
+    update_stage="resolve"
+    write_update_status "CHECKING" "$branch" "$local_ver" "-" "Finding a published release"
+    if ! resolve_release; then
+        write_update_status "ERROR" "$branch" "$local_ver" "-" "Unable to resolve a published release"
         return 1
     fi
-
-    # Strip leading 'v' if present for normalized comparison
-    clean_local=$(echo "$local_ver" | sed 's/^v//')
-    clean_remote=$(echo "$raw_ver" | sed 's/^v//')
-
-    local_ver="$clean_local"
-    raw_ver="$clean_remote"
     installed_track=$(get_installed_branch)
-    version_cmp "$clean_local" "$clean_remote"
+    update_stage="checked"
+    version_cmp "$local_ver" "$expected_version"
     cmp_res=$?
-
-    if [ "$cmp_res" -eq 0 ]; then
-        echo "UniFi AP Bridge is up to date (version: ${raw_ver}, branch: ${branch})"
-        write_update_status "UP_TO_DATE" "$branch" "$local_ver" "$raw_ver" "Installed v${local_ver} (${installed_track}) matches latest v${raw_ver} (${branch})"
-    elif [ "$cmp_res" -eq 1 ]; then
-        echo "Installed version (${local_ver}) is newer than remote (${raw_ver}) on branch '${branch}'"
+    if [ "$installed_commit" = "$resolved_commit" ]; then
+        write_update_status "UP_TO_DATE" "$branch" "$local_ver" "$expected_version" "Installed build matches the published release"
+    elif [ "$branch" = "main" ] && [ "$cmp_res" -eq 1 ]; then
         installed_newer=true
-        write_update_status "UP_TO_DATE" "$branch" "$local_ver" "$raw_ver" "Installed v${local_ver} (${installed_track}) is newer than latest v${raw_ver} (${branch})"
+        write_update_status "UP_TO_DATE" "$branch" "$local_ver" "$expected_version" "Installed v${local_ver} (${installed_track}) is newer than latest v${expected_version} (${branch})"
     else
-        echo "New version available: ${raw_ver} (installed: ${local_ver})"
-        write_update_status "UPDATE_AVAILABLE" "$branch" "$local_ver" "$raw_ver" "Latest v${raw_ver} (${branch}) is newer than installed v${local_ver} (${installed_track})"
+        write_update_status "UPDATE_AVAILABLE" "$branch" "$local_ver" "$expected_version" "Published build differs from the installed build"
     fi
-    return 0
+}
+
+cmd_apply_checked() {
+    check_id="$3"
+    resolved_commit=""
+    update_stage="resolve"
+    cached=$(cat "$UPDATE_JS" 2>/dev/null)
+    exact=$(printf '%s\n' "$cached" | sed -n 's/.*"target_commit": "\([0-9a-f]\{40\}\)".*/\1/p')
+    if ! valid_commit "$exact" ||
+       ! printf '%s\n' "$cached" | grep -Fq '"status": "UPDATE_AVAILABLE"' ||
+       ! printf '%s\n' "$cached" | grep -Fq "\"branch\": \"$1\"" ||
+       ! printf '%s\n' "$cached" | grep -Fq "\"request_id\": \"$check_id\""; then
+        operation=apply; request_id="$2"
+        write_update_status "ERROR" "$1" "$(get_local_version)" "-" "Checked release is no longer available in status; check again before installing"
+        return 1
+    fi
+    cmd_apply "$1" "$2" "$exact" operator
 }
 
 cmd_apply() {
     operation="apply"
     request_id="${2:-}"
     exact_commit="${3:-}"
-    [ -z "$exact_commit" ] || operation="cluster_update"
+    [ -z "$exact_commit" ] || [ "${4:-}" = operator ] || operation="cluster_update"
+    local_only=${5:-0}
+    installed_commit=$(get_installed_commit)
+    update_stage="resolve"
     installed_newer=false
     branch=$(get_branch "${1:-}")
     case "$branch" in main|dev) ;; *) echo "Invalid release track" >&2; return 1 ;; esac
@@ -699,52 +763,12 @@ cmd_apply() {
         write_update_status "ERROR" "$branch" "$local_ver" "-" "Requested exact source commit is invalid; installed files were not changed"
         rm -rf "$tmp_dir"; return 1
     fi
-    if [ "$branch" = "dev" ]; then
-        if [ -n "$exact_commit" ]; then
-            resolved_commit="$exact_commit"
-            release_tag="dev-${resolved_commit}"
-        else
-            # Prefer the newest successfully published immutable dev release
-            release_tag=$(curl -fsSL --connect-timeout 8 --max-time 20 \
-                -H 'Accept: application/vnd.github+json' \
-                'https://api.github.com/repos/agnithin/unifi-ap-bridge/releases?per_page=10' 2>/dev/null |
-                sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\(dev-[0-9a-f]\{40\}\)".*/\1/p' | head -n 1)
-            if [ -n "$release_tag" ]; then
-                resolved_commit="${release_tag#dev-}"
-            else
-                # Fallback to dev branch HEAD if release listing is unavailable
-                resolved_commit=$(curl -fsSL --connect-timeout 8 --max-time 20 \
-                    -H 'Accept: application/vnd.github+json' \
-                    'https://api.github.com/repos/agnithin/unifi-ap-bridge/commits/dev' 2>/dev/null |
-                    awk -F'"' '/"sha"[[:space:]]*:/ { print $4; exit }')
-                release_tag="dev-${resolved_commit}"
-            fi
-        fi
-        case "$resolved_commit" in *[!0-9a-f]*|'') resolved_commit="" ;; esac
-        [ "${#resolved_commit}" -eq 40 ] || resolved_commit=""
-        expected_version=$(curl -fsSL --connect-timeout 8 --max-time 20 \
-            "${REPO_RAW}/${resolved_commit}/version.txt" 2>/dev/null | tr -d ' \t\r\n')
-    else
-        release_tag=$(curl -fsSL --connect-timeout 8 --max-time 20 \
-            -H 'Accept: application/vnd.github+json' \
-            'https://api.github.com/repos/agnithin/unifi-ap-bridge/releases/latest' 2>/dev/null |
-            sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
-        resolved_commit=$(curl -fsSL --connect-timeout 8 --max-time 20 \
-            -H 'Accept: application/vnd.github+json' \
-            "https://api.github.com/repos/agnithin/unifi-ap-bridge/commits/${release_tag}" 2>/dev/null |
-            awk -F'"' '/"sha"[[:space:]]*:/ { print $4; exit }')
-        expected_version=${release_tag#v}
-        if [ -n "$exact_commit" ] && [ "$resolved_commit" != "$exact_commit" ]; then
-            write_update_status "ERROR" "$branch" "$local_ver" "-" "Stable release no longer names the requested source commit; installed files were not changed"
-            rm -rf "$tmp_dir"; return 1
-        fi
+    if ! resolve_release; then
+        write_update_status "ERROR" "$branch" "$local_ver" "-" "Could not resolve the requested immutable release; installed files were not changed"
+        rm -rf "$tmp_dir"; return 1
     fi
-    case "$resolved_commit" in *[!0-9a-f]*|'') resolved_commit="" ;; esac
-    [ "${#resolved_commit}" -eq 40 ] || resolved_commit=""
-    case "$release_tag" in ''|*[!A-Za-z0-9._-]*)
-        write_update_status "ERROR" "$branch" "$local_ver" "-" "Could not resolve a valid immutable release; installed files were not changed"
-        rm -rf "$tmp_dir"; return 1 ;;
-    esac
+    update_stage="download"
+    write_update_status "UPDATING" "$branch" "$local_ver" "$expected_version" "Downloading checked release bundle"
     release_url="${REPO_RELEASES}/download/${release_tag}"
     bundle_name="unifi-bridge-addon-${resolved_commit}-${ARCH_SUFFIX}.tar.gz"
     bundle_archive="${tmp_dir}/${bundle_name}"
@@ -859,6 +883,9 @@ watchdog.sh"
         rm -rf "$tmp_dir"; return 1
     fi
 
+    update_stage="activate"
+    write_update_status "UPDATING" "$branch" "$local_ver" "$remote_ver" "Installing verified addon assets"
+
     # 3. Install the recovery entry point first, then every asset through a
     # same-filesystem temporary file and rename. Mutable config/state/keys are
     # outside the managed generation and are never rewritten by this update.
@@ -919,6 +946,8 @@ watchdog.sh"
     # 4. Restart the local daemon and validate this exact invocation.
     echo "[*] Restarting UniFi AP Bridge daemon..."
     started_at=$(date +%s)
+    update_stage="verify"
+    write_update_status "UPDATING" "$branch" "$local_ver" "$remote_ver" "Starting candidate and verifying fresh Inform"
     if ! UNIFI_BRIDGE_START_LOCK_OWNER="$$" UNIFI_BRIDGE_MUTATION_LOCK_OWNER="$$" "$INSTALL_DIR/start.sh"; then
         rollback_and_verify "Candidate bridge startup failed"; rm -rf "$tmp_dir"; return 1
     fi
@@ -951,11 +980,18 @@ watchdog.sh"
         rollback_and_verify "Could not persist accepted transaction state"; rm -rf "$tmp_dir"; return 1
     }
     clear_transaction || {
+        update_stage="recovery_required"
         write_update_status "ERROR" "$branch" "$local_ver" "$remote_ver" "Candidate verified but transaction cleanup failed; inspect $TXN_DIR"
         rm -rf "$tmp_dir"; return 1
     }
 
-    write_update_status "SUCCESS" "$branch" "$remote_ver" "$remote_ver" "Local addon updated to ${remote_ver} (${branch}); cluster rollout is reported separately"
+    update_stage="complete"
+    installed_commit="$resolved_commit"
+    if [ "$local_only" -eq 1 ]; then
+        write_update_status "SUCCESS" "$branch" "$remote_ver" "$remote_ver" "Local addon updated to ${remote_ver} (${branch}); staged rollout stopped after this AP"
+    else
+        write_update_status "SUCCESS" "$branch" "$remote_ver" "$remote_ver" "Local addon updated to ${remote_ver} (${branch}); cluster rollout is reported separately"
+    fi
 
     # Release every local lock before contacting nodes. The sync process takes
     # an immutable identity snapshot, then each receiver enters its own updater.
@@ -991,7 +1027,7 @@ cmd_status() {
 }
 
 should_propagate_update() {
-    [ "${operation:-}" = "apply" ]
+    [ "${operation:-}" = "apply" ] && [ "${local_only:-0}" -eq 0 ]
 }
 
 case "${1:-}" in
@@ -1003,6 +1039,16 @@ case "${1:-}" in
         acquire_update_lock || exit 1
         cmd_apply "${2:-}" "${3:-}"
         ;;
+    apply-checked)
+        case "${2:-}" in main|dev) ;; *) exit 1 ;; esac
+        case "${3:-}:${4:-}" in *[!0-9:]*|:*|*:) exit 1 ;; esac
+        acquire_update_lock || exit 1
+        cmd_apply_checked "$2" "$3" "$4"
+        ;;
+    apply-local)
+        acquire_update_lock || exit 1
+        cmd_apply "${2:-}" "${4:-}" "${3:-}" operator 1
+        ;;
     apply-exact)
         acquire_update_lock || exit 1
         cmd_apply "${2:-}" "${4:-}" "${3:-}"
@@ -1011,7 +1057,7 @@ case "${1:-}" in
         cmd_status
         ;;
     *)
-        echo "Usage: $0 {check [branch]|apply [branch]|apply-exact [branch commit request_id]|status}"
+        echo "Usage: $0 {check [branch]|apply [branch]|apply-local [branch commit]|apply-exact [branch commit request_id]|status}"
         exit 1
         ;;
 esac

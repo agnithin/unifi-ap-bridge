@@ -29,18 +29,20 @@ type TelemetryProvider interface {
 // Sample is one bounded provider read. Optional sections are nil when their
 // read failed; callers must not turn those failures into fresh zero values.
 type Sample struct {
-	Radios       []telemetry.Radio
-	VAPs         []telemetry.VAP
-	RadioStats   []telemetry.RadioStat
-	Ports        []telemetry.Port
-	Ethernet     []telemetry.EthernetPort
-	Uplink       *telemetry.Uplink
-	LLDP         []telemetry.LLDPEntry
-	System       *telemetry.SystemStats
-	LegacySystem *telemetry.SysStats
-	StartedAt    time.Time
-	CompletedAt  time.Time
-	StageErrors  map[string]string
+	Radios         []telemetry.Radio
+	VAPs           []telemetry.VAP
+	RadioStats     []telemetry.RadioStat
+	Ports          []telemetry.Port
+	Ethernet       []telemetry.EthernetPort
+	Uplink         *telemetry.Uplink
+	LLDP           []telemetry.LLDPEntry
+	System         *telemetry.SystemStats
+	LegacySystem   *telemetry.SysStats
+	StartedAt      time.Time
+	CompletedAt    time.Time
+	StageErrors    map[string]string
+	StageMS        map[string]int64
+	DriverCommands int
 }
 
 // ContextTelemetryProvider exposes a single serial, cancelable collection.

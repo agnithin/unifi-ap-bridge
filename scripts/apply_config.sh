@@ -98,6 +98,18 @@ case "${2:-}" in
         fi
         exit 0
         ;;
+    *do_checked_*)
+        action_suffix=${2##*do_checked_}
+        BRANCH=${action_suffix%%_*}
+        ids=${action_suffix#*_}
+        REQUEST_ID=${ids%%_*}
+        check_id=${ids#*_}
+        case "$BRANCH" in main|dev) ;; *) exit 1 ;; esac
+        case "$REQUEST_ID:$check_id" in *[!0-9:]*|:*|*:) exit 1 ;; esac
+        [ "$ids" != "$check_id" ] && [ "${#REQUEST_ID}" -le 24 ] && [ "${#check_id}" -le 24 ] || exit 1
+        "$INSTALL_DIR/update.sh" apply-checked "$BRANCH" "$REQUEST_ID" "$check_id" >/tmp/unifi-bridge-update.log 2>&1 &
+        exit 0
+        ;;
     *do_update*)
         parse_update_action do_update "${2:-}"
 
