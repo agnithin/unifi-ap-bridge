@@ -16,7 +16,7 @@ import (
 // A failed refresh leaves the last valid file available after a restart.
 func RefreshWLANMapping(ctx context.Context, endpoint, path string) error {
 	client := http.Client{
-		Timeout:       5 * time.Second,
+		Timeout:       15 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		Transport:     &http.Transport{DisableKeepAlives: true},
 	}

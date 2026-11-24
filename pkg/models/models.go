@@ -22,7 +22,7 @@ var Catalog = map[string]ModelProfile{
 	"U6M": {
 		ModelCode:   "U6M",
 		DisplayName: "UniFi 6 Mesh",
-		Firmware:    "6.8.2.15592",
+		Firmware:    "8.8.14.20179",
 		PortCount:   1,
 		HasSwitch:   false,
 		Radios: []RadioSpec{
@@ -33,7 +33,7 @@ var Catalog = map[string]ModelProfile{
 	"U6P": {
 		ModelCode:   "U6P",
 		DisplayName: "UniFi 6 Pro",
-		Firmware:    "6.8.2.15592",
+		Firmware:    "8.8.14.20179",
 		PortCount:   1,
 		HasSwitch:   false,
 		Radios: []RadioSpec{
@@ -44,7 +44,7 @@ var Catalog = map[string]ModelProfile{
 	"U6L": {
 		ModelCode:   "U6L",
 		DisplayName: "UniFi 6 Lite",
-		Firmware:    "6.8.2.15592",
+		Firmware:    "8.8.14.20179",
 		PortCount:   1,
 		HasSwitch:   false,
 		Radios: []RadioSpec{
@@ -55,7 +55,7 @@ var Catalog = map[string]ModelProfile{
 	"U6IW": {
 		ModelCode:   "U6IW",
 		DisplayName: "UniFi 6 In-Wall",
-		Firmware:    "6.8.2.15592",
+		Firmware:    "8.8.14.20179",
 		PortCount:   4,
 		HasSwitch:   true,
 		Radios: []RadioSpec{
@@ -66,7 +66,7 @@ var Catalog = map[string]ModelProfile{
 	"U6-IW": {
 		ModelCode:   "U6IW",
 		DisplayName: "UniFi 6 In-Wall",
-		Firmware:    "6.8.2.15592",
+		Firmware:    "8.8.14.20179",
 		PortCount:   4,
 		HasSwitch:   true,
 		Radios: []RadioSpec{
@@ -77,7 +77,7 @@ var Catalog = map[string]ModelProfile{
 	"U6EntIW": {
 		ModelCode:   "U6EntIW",
 		DisplayName: "UniFi 6 Enterprise In-Wall",
-		Firmware:    "6.8.2.15592",
+		Firmware:    "8.8.14.20179",
 		PortCount:   4,
 		HasSwitch:   true,
 		Radios: []RadioSpec{

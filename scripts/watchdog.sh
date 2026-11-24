@@ -138,9 +138,14 @@ fi
 [ -f "$CONFIG_FILE" ] || exit 0
 
 WATCHDOG_HELPER="/tmp/unifi-bridge/unifi-bridge"
-if [ -x "$WATCHDOG_HELPER" ] && ! "$WATCHDOG_HELPER" -config "$CONFIG_FILE" -refresh-wlan-mapping; then
-    publish_watchdog "WLAN mapping refresh failed; previous file retained"
-    log_watchdog "WLAN mapping refresh failed; previous file retained"
+if [ -x "$WATCHDOG_HELPER" ]; then
+    mapping_err=$("$WATCHDOG_HELPER" -config "$CONFIG_FILE" -refresh-wlan-mapping 2>&1)
+    if [ $? -ne 0 ]; then
+        publish_watchdog "WLAN mapping refresh failed; previous file retained"
+        log_watchdog "WLAN mapping refresh failed; previous file retained ($mapping_err)"
+    else
+        publish_watchdog "No lifecycle recovery blocker observed"
+    fi
 else
     publish_watchdog "No lifecycle recovery blocker observed"
 fi
